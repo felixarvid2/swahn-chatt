@@ -147,6 +147,8 @@ dependencies {
 
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
+    implementation(libs.androidx.room.paging)
+    implementation(libs.androidx.paging.compose)
     ksp(libs.androidx.room.compiler)
     implementation(libs.androidx.sqlite.ktx)
     implementation(libs.sqlcipher.android)
@@ -171,6 +173,7 @@ dependencies {
     testImplementation(platform(libs.androidx.compose.bom))
     testImplementation(libs.androidx.compose.ui.test.junit4)
     testImplementation(libs.androidx.room.testing)
+    testImplementation(libs.androidx.paging.testing)
     testImplementation(libs.androidx.work.testing)
 }
 

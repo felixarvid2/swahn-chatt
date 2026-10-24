@@ -10,6 +10,8 @@ import se.familychat.core.model.User
 import java.time.Instant
 import java.time.ZoneId
 import java.util.Base64
+import androidx.paging.PagingData
+import androidx.paging.insertSeparators
 
 /** Everything [buildChatRows] needs besides the messages. */
 class ChatRowContext(
@@ -69,20 +71,17 @@ private fun LocalAttachment.toUi(pending: Boolean, ctx: ChatRowContext): Attachm
     return AttachmentUi(id, attachmentKindOf(kind), mime, name, size, width, height, durationMs, decodeThumbnail(thumbnail), transfer)
 }
 
-private fun StoredMessage.toUi(ctx: ChatRowContext, byId: Map<String, StoredMessage>): MessageUi {
+private fun StoredMessage.toUi(ctx: ChatRowContext, replyTarget: StoredMessage?): MessageUi {
     val outgoingMine = outgoing
     val name = ctx.users[senderUserId]?.displayName
-    val reply = replyTo?.let { rid ->
-        val target = byId[rid] ?: ctx.referenced[rid]
-        target?.let {
-            ReplyUi(
-                messageId = it.id,
-                senderName = if (it.senderUserId == ctx.myUserId) null else ctx.users[it.senderUserId]?.displayName ?: ctx.unknownName,
-                text = if (it.deleted) null else it.text,
-                attachmentKind = it.attachments.firstOrNull()?.let { a -> attachmentKindOf(a.kind) },
-                deleted = it.deleted,
-            )
-        }
+    val reply = replyTarget?.let {
+        ReplyUi(
+            messageId = it.id,
+            senderName = if (it.senderUserId == ctx.myUserId) null else ctx.users[it.senderUserId]?.displayName ?: ctx.unknownName,
+            text = if (it.deleted) null else it.text,
+            attachmentKind = it.attachments.firstOrNull()?.let { a -> attachmentKindOf(a.kind) },
+            deleted = it.deleted,
+        )
     }
     return MessageUi(
         id = id, outgoing = outgoingMine,
@@ -100,12 +99,70 @@ private fun StoredMessage.toUi(ctx: ChatRowContext, byId: Map<String, StoredMess
         failed = outgoingMine && status == MessageStatus.FAILED,
         canEdit = outgoingMine && !deleted && status != MessageStatus.FAILED && !text.isNullOrBlank(),
         canDelete = outgoingMine && !deleted,
+        senderId = senderUserId,
+        speaker = if (outgoingMine) null else name ?: ctx.unknownName,
     )
 }
 
 /**
+ * One stored message as a list row: a notice for system events, else a message bubble. [replyTarget] is the message it
+ * quotes (anywhere in the conversation, not only on screen). [ChatRow.Message.firstOfRun] is left at its default; see
+ * [isFirstOfRun].
+ */
+fun StoredMessage.toChatRow(ctx: ChatRowContext, replyTarget: StoredMessage? = null): ChatRow {
+    val event = systemEvent
+    if (event == null) return ChatRow.Message(toUi(ctx, replyTarget))
+    val time = serverTs ?: clientTs
+    val (userId, deviceName, kind) = when (event) {
+        is SystemEvent.NewDevice ->
+            Triple(event.userId, event.deviceName, if (event.needsApproval) SystemKind.NEW_DEVICE_BLOCKED else SystemKind.NEW_DEVICE)
+        is SystemEvent.IdentityChanged -> Triple(event.userId, null, SystemKind.IDENTITY_CHANGED)
+        is SystemEvent.MemberAdded -> Triple(event.userId, null, SystemKind.MEMBER_ADDED)
+        is SystemEvent.MemberRemoved -> Triple(event.userId, null, SystemKind.MEMBER_REMOVED)
+    }
+    return ChatRow.System(id, kind, userId, ctx.users[userId]?.displayName ?: ctx.unknownName, deviceName, time, own = userId == ctx.myUserId)
+}
+
+private fun ChatRow.timeOrNull(): Long? = when (this) {
+    is ChatRow.Message -> message.time
+    is ChatRow.System -> time
+    else -> null
+}
+
+private fun dayStart(time: Long, zone: ZoneId): Long =
+    Instant.ofEpochMilli(time).atZone(zone).toLocalDate().atStartOfDay(zone).toInstant().toEpochMilli()
+
+/**
+ * The date separator that belongs between two neighbouring rows of a list that is ordered NEWEST first (the paged list,
+ * which a reversed `LazyColumn` shows oldest-first): [newer] is the row nearer the bottom. A separator for the day of
+ * [newer] goes above its first message, i.e. when [older] is from another day or when there is no older row at all.
+ */
+fun dateSeparatorBetween(newer: ChatRow?, older: ChatRow?, zone: ZoneId): ChatRow.DateHeader? {
+    val day = newer?.timeOrNull()?.let { dayStart(it, zone) } ?: return null
+    val olderDay = older?.timeOrNull()?.let { dayStart(it, zone) }
+    return if (olderDay != day) ChatRow.DateHeader(day) else null
+}
+
+/** True if [row] starts a run of messages by one sender; [older] is the row directly above it (null: top of the list). */
+fun isFirstOfRun(row: ChatRow.Message, older: ChatRow?): Boolean =
+    older !is ChatRow.Message || older.message.senderId != row.message.senderId
+
+/**
+ * Adds date separators and, if [firstUnreadId] is set, the "unread" divider to a page stream of rows ordered newest
+ * first. The oldest separator only appears once the start of the conversation was loaded (default terminal behaviour).
+ */
+fun PagingData<ChatRow>.withSeparators(zone: ZoneId, firstUnreadId: String?): PagingData<ChatRow> {
+    val dated = insertSeparators<ChatRow, ChatRow> { newer, older -> dateSeparatorBetween(newer, older, zone) }
+    if (firstUnreadId == null) return dated
+    return dated.insertSeparators<ChatRow, ChatRow> { newer, _ ->
+        if (newer is ChatRow.Message && newer.message.id == firstUnreadId) ChatRow.UnreadDivider else null
+    }
+}
+
+/**
  * Turns the stored messages (oldest first) into list rows: date separators between days, system notices, and a flag on the
- * first message of a run by the same sender (where a group shows the sender's name).
+ * first message of a run by the same sender (where a group shows the sender's name). The conversation screen builds the
+ * same rows page by page (see [toChatRow], [withSeparators], [isFirstOfRun]); this is the one-shot form.
  */
 fun buildChatRows(messages: List<StoredMessage>, ctx: ChatRowContext): List<ChatRow> {
     val byId = messages.associateBy { it.id }
@@ -113,31 +170,20 @@ fun buildChatRows(messages: List<StoredMessage>, ctx: ChatRowContext): List<Chat
     var lastDay: Long? = null
     var previousSender: String? = null
     for (m in messages) {
-        val time = m.serverTs ?: m.clientTs
-        val day = Instant.ofEpochMilli(time).atZone(ctx.zone).toLocalDate().atStartOfDay(ctx.zone).toInstant().toEpochMilli()
+        val day = dayStart(m.serverTs ?: m.clientTs, ctx.zone)
         if (day != lastDay) {
             rows += ChatRow.DateHeader(day)
             lastDay = day
             previousSender = null
         }
-        val event = m.systemEvent
-        if (event != null) {
+        val row = m.toChatRow(ctx, m.replyTo?.let { byId[it] ?: ctx.referenced[it] })
+        if (row is ChatRow.Message) {
+            rows += row.copy(firstOfRun = m.senderUserId != previousSender)
+            previousSender = m.senderUserId
+        } else {
+            rows += row
             previousSender = null
-            val (userId, deviceName, kind) = when (event) {
-                is SystemEvent.NewDevice ->
-                    Triple(event.userId, event.deviceName, if (event.needsApproval) SystemKind.NEW_DEVICE_BLOCKED else SystemKind.NEW_DEVICE)
-                is SystemEvent.IdentityChanged -> Triple(event.userId, null, SystemKind.IDENTITY_CHANGED)
-                is SystemEvent.MemberAdded -> Triple(event.userId, null, SystemKind.MEMBER_ADDED)
-                is SystemEvent.MemberRemoved -> Triple(event.userId, null, SystemKind.MEMBER_REMOVED)
-            }
-            rows += ChatRow.System(
-                m.id, kind, userId, ctx.users[userId]?.displayName ?: ctx.unknownName, deviceName, time, own = userId == ctx.myUserId,
-            )
-            continue
         }
-        val sender = m.senderUserId
-        rows += ChatRow.Message(m.toUi(ctx, byId), firstOfRun = sender != previousSender)
-        previousSender = sender
     }
     return rows
 }

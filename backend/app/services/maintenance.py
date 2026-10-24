@@ -1,4 +1,5 @@
-"""Periodic housekeeping: expired sessions and invitations, orphaned attachments."""
+"""Periodic housekeeping: expired sessions and invitations, delivered envelopes, old audit rows, orphaned
+attachments."""
 
 import logging
 
@@ -7,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app import clock
 from app.config import Settings
-from app.models import Invitation, SessionToken
+from app.models import AuditEvent, Invitation, MessageEnvelope, SessionToken
 from app.models import Session as AuthSession
 from app.services.attachments import collect_garbage
 
@@ -37,8 +38,24 @@ def prune(db: Session, settings: Settings) -> dict[str, int]:
             | (Invitation.revoked_at < now - 30 * DAY_MS)
         )
     ).rowcount
+    # A delivered envelope is ciphertext nobody needs again (the recipient has it). Undelivered ones stay: they
+    # are the only copy a device that was offline for months can still fetch.
+    envelopes = db.execute(
+        delete(MessageEnvelope).where(
+            MessageEnvelope.delivered_at < now - settings.envelope_retention_days * DAY_MS,
+        )
+    ).rowcount
+    audit_events = db.execute(
+        delete(AuditEvent).where(AuditEvent.at < now - settings.audit_retention_days * DAY_MS)
+    ).rowcount
     db.commit()
     attachments = collect_garbage(db, settings)
-    result = {"sessions": sessions, "invitations": invites, "attachments": attachments}
+    result = {
+        "sessions": sessions,
+        "invitations": invites,
+        "envelopes": envelopes,
+        "audit_events": audit_events,
+        "attachments": attachments,
+    }
     log.info("maintenance %s", result)
     return result

@@ -7,12 +7,15 @@ import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
+import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import se.familychat.app.data.AppPrefs
+import se.familychat.app.data.VoiceSpeed
 import se.familychat.app.ui.components.PlaybackUi
 import java.io.File
 import javax.inject.Inject
@@ -20,12 +23,15 @@ import javax.inject.Singleton
 
 /** Plays one voice message at a time with Media3. All calls on the main thread. */
 @Singleton
-class VoicePlayer @Inject constructor(@ApplicationContext private val context: Context) {
+class VoicePlayer @Inject constructor(
+    @ApplicationContext private val context: Context,
+    private val prefs: AppPrefs,
+) {
     private val handler = Handler(Looper.getMainLooper())
     private var player: ExoPlayer? = null
     private var currentId: String? = null
 
-    private val _state = MutableStateFlow(PlaybackUi())
+    private val _state = MutableStateFlow(PlaybackUi(speed = prefs.voiceSpeed.value))
     val state: StateFlow<PlaybackUi> = _state.asStateFlow()
 
     private val ticker = object : Runnable {
@@ -40,6 +46,7 @@ class VoicePlayer @Inject constructor(@ApplicationContext private val context: C
             AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_SPEECH).build(),
             true,
         )
+        p.playbackParameters = PlaybackParameters(prefs.voiceSpeed.value)
         p.addListener(object : Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 publish()
@@ -64,9 +71,10 @@ class VoicePlayer @Inject constructor(@ApplicationContext private val context: C
     private fun publish() {
         val p = player
         val id = currentId
-        _state.value = if (p == null || id == null) PlaybackUi() else PlaybackUi(
+        val speed = prefs.voiceSpeed.value
+        _state.value = if (p == null || id == null) PlaybackUi(speed = speed) else PlaybackUi(
             attachmentId = id, playing = p.isPlaying, positionMs = p.currentPosition.coerceAtLeast(0),
-            durationMs = p.duration.takeIf { it != C.TIME_UNSET } ?: 0,
+            durationMs = p.duration.takeIf { it != C.TIME_UNSET } ?: 0, speed = speed,
         )
     }
 
@@ -82,6 +90,14 @@ class VoicePlayer @Inject constructor(@ApplicationContext private val context: C
         p.setMediaItem(MediaItem.fromUri(android.net.Uri.fromFile(file)))
         p.prepare()
         p.play()
+        publish()
+    }
+
+    /** 1x -> 1.5x -> 2x -> 1x, for the playing voice message and every later one; remembered across launches. */
+    fun cycleSpeed() {
+        val next = VoiceSpeed.next(prefs.voiceSpeed.value)
+        prefs.setVoiceSpeed(next)
+        player?.playbackParameters = PlaybackParameters(next)
         publish()
     }
 

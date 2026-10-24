@@ -117,7 +117,7 @@ async def ws_endpoint(ws: WebSocket):
                 log.warning("websocket task failed: %s", type(t.exception()).__name__)
         if killer in done:
             with contextlib.suppress(Exception):
-                await ws.close(code=conn.close_code)
+                await ws.close(code=conn.close_code, reason=conn.close_reason)
     except WebSocketDisconnect:
         pass
     except Exception:

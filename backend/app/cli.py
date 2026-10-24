@@ -62,7 +62,7 @@ def cmd_remove_user(args, settings: Settings) -> int:
     from sqlalchemy import func
 
     from app.models import User
-    from app.services import accounts
+    from app.services import accounts, audit
 
     factory = _open(settings)
     with factory() as db:
@@ -77,8 +77,26 @@ def cmd_remove_user(args, settings: Settings) -> int:
             print("refusing to remove the only administrator (use --force)", file=sys.stderr)
             return 1
         accounts.disable_user(db, user)
+        audit.record(db, "user_removed", target_user=user.id, was_admin=user.is_admin, via="cli")
         db.commit()
     print(f"removed {args.username}: sessions revoked, devices deleted, removed from conversations")
+    return 0
+
+
+def cmd_audit(args, settings: Settings) -> int:
+    from app.services import audit
+
+    factory = _open(settings)
+    with factory() as db:
+        events = audit.list_events(db, None, args.limit)
+    for e in reversed(events):  # oldest first, so the newest line is the last one
+        when = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(e.at / 1000))
+        parts = [f"actor={e.actor_user_id or '-'}", f"target_user={e.target_user_id or '-'}"]
+        if e.target_id:
+            parts.append(f"target={e.target_id}")
+        parts.append(f"ip={e.ip or '-'}")
+        details = " ".join(f"{k}={v}" for k, v in sorted((e.details or {}).items()))
+        print(f"{when} UTC  #{e.id:<6} {e.action:<20} {' '.join(parts)}" + (f"  {details}" if details else ""))
     return 0
 
 
@@ -178,6 +196,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--force", action="store_true", help="allow removing the only administrator")
     p.set_defaults(func=cmd_remove_user)
 
+    p = sub.add_parser("audit", help="print the newest audit log entries (oldest first)")
+    p.add_argument("--limit", type=int, default=50, help="how many entries (1..1000, default 50)")
+    p.set_defaults(func=cmd_audit)
+
     p = sub.add_parser("backup", help="write a timestamped .tar.gz (consistent DB copy + attachments + manifest)")
     p.add_argument("out_dir")
     p.set_defaults(func=cmd_backup)
@@ -197,6 +219,9 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if getattr(args, "hours", 72) < 1 or getattr(args, "hours", 72) > 720:
         print("--hours must be 1..720", file=sys.stderr)
+        return 2
+    if getattr(args, "command", "") == "audit" and not 1 <= args.limit <= 1000:
+        print("--limit must be 1..1000", file=sys.stderr)
         return 2
     try:
         return args.func(args, _settings())

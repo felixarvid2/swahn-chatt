@@ -2,11 +2,11 @@ from fastapi import APIRouter, Depends, Response
 from sqlalchemy.orm import Session
 
 from app.config import Settings
-from app.deps import Principal, get_db, get_principal, get_read_db, get_settings_dep
+from app.deps import Principal, get_db, get_ip, get_principal, get_read_db, get_settings_dep
 from app.errors import conflict, invalid, not_found
 from app.models import Device
 from app.schemas import DeviceOut, PushRegistration
-from app.services import accounts
+from app.services import accounts, audit
 from app.services.push import endpoint_allowed, parse_hosts
 from app.services.views import device_out_db
 
@@ -50,10 +50,13 @@ def clear_push(p: Principal = Depends(get_principal), db: Session = Depends(get_
 
 
 @router.delete("/{device_id}", status_code=204)
-def delete_device(device_id: str, p: Principal = Depends(get_principal), db: Session = Depends(get_db)):
+def delete_device(
+    device_id: str, p: Principal = Depends(get_principal), addr: str = Depends(get_ip), db: Session = Depends(get_db)
+):
     device = db.get(Device, device_id)
     if device is None or device.user_id != p.user_id or device.revoked_at is not None:
         raise not_found("device not found")
     accounts.revoke_device(db, device_id)
+    audit.record(db, "device_revoked", actor=p.user_id, target_user=p.user_id, target=device_id, ip=addr, by="self")
     db.commit()
     return Response(status_code=204)

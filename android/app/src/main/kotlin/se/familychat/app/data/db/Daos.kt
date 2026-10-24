@@ -1,5 +1,6 @@
 package se.familychat.app.data.db
 
+import androidx.paging.PagingSource
 import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
@@ -50,6 +51,11 @@ interface StoreDao {
     @Query("DELETE FROM conversations WHERE id = :id") suspend fun deleteConversation(id: String)
     @Query("DELETE FROM messages WHERE conversationId = :id") suspend fun deleteMessagesOf(id: String)
     @Query("DELETE FROM outbox WHERE conversationId = :id") suspend fun deleteOutboxOf(id: String)
+
+    // --- drafts ---------------------------------------------------------------------------------------------------
+    @Query("SELECT text FROM drafts WHERE conversationId = :id") suspend fun draft(id: String): String?
+    @Upsert suspend fun putDraft(d: DraftEntity)
+    @Query("DELETE FROM drafts WHERE conversationId = :id") suspend fun deleteDraft(id: String)
 
     @Query(
         "SELECT COUNT(*) FROM messages m WHERE m.conversationId = :id AND m.outgoing = 0 AND m.deleted = 0 " +
@@ -166,6 +172,15 @@ data class ConversationOverviewRow(
     val unread: Int,
 )
 
+/** Newest message of a conversation (id, who wrote it), for "stay at the bottom" decisions. */
+data class LatestMessageRow(val id: String, val outgoing: Boolean)
+
+/** Text of a conversation's draft (conversation list previews). */
+data class DraftRow(val conversationId: String, val text: String)
+
+/** What the header needs to know about a pinned remote identity (never the key itself). */
+data class IdentityRow(val deviceId: String, val userId: String, val verified: Boolean, val approved: Boolean)
+
 /** Reactive queries for the UI (Flows re-emit when the tables change). */
 @Dao
 interface UiDao {
@@ -193,6 +208,61 @@ interface UiDao {
             "ORDER BY COALESCE(seq, $MAX_LONG), clientTs, id",
     )
     fun observeMessages(conversationId: String, limit: Int): Flow<List<MessageEntity>>
+
+    /**
+     * All messages of a conversation, newest first, as a Paging source (offset based: Room re-creates the source whenever
+     * the `messages` table changes). The order is the one of [observeMessages], reversed.
+     */
+    @Query(
+        "SELECT * FROM messages WHERE conversationId = :conversationId " +
+            "ORDER BY COALESCE(seq, $MAX_LONG) DESC, clientTs DESC, id DESC",
+    )
+    fun pagedMessages(conversationId: String): PagingSource<Int, MessageEntity>
+
+    @Query(
+        "SELECT id, outgoing FROM messages WHERE conversationId = :conversationId " +
+            "ORDER BY COALESCE(seq, $MAX_LONG) DESC, clientTs DESC, id DESC LIMIT 1",
+    )
+    fun observeLatest(conversationId: String): Flow<LatestMessageRow?>
+
+    /** The highest server sequence number among the messages from others; the conversation is read up to there. */
+    @Query("SELECT MAX(seq) FROM messages WHERE conversationId = :conversationId AND outgoing = 0")
+    fun observeNewestIncomingSeq(conversationId: String): Flow<Long?>
+
+    @Query("SELECT COALESCE(MAX(seq), 0) FROM messages WHERE conversationId = :conversationId")
+    suspend fun maxSeq(conversationId: String): Long
+
+    /** Incoming messages with a server sequence above [afterSeq] (what arrived while the user read further up). */
+    @Query(
+        "SELECT COUNT(*) FROM messages WHERE conversationId = :conversationId AND outgoing = 0 AND deleted = 0 " +
+            "AND systemType IS NULL AND COALESCE(seq, 0) > :afterSeq",
+    )
+    fun observeIncomingAfter(conversationId: String, afterSeq: Long): Flow<Int>
+
+    /** The oldest unread incoming message (same notion of "unread" as the list's counter). */
+    @Query(
+        "SELECT id FROM messages WHERE conversationId = :conversationId AND outgoing = 0 AND deleted = 0 " +
+            "AND systemType IS NULL AND COALESCE(seq, 0) > :readSeq ORDER BY seq, clientTs, id LIMIT 1",
+    )
+    suspend fun firstUnreadId(conversationId: String, readSeq: Long): String?
+
+    /** How many messages are newer than [messageId] (its offset in [pagedMessages]), or null if it does not exist. */
+    @Query(
+        "SELECT COUNT(*) FROM messages m, messages t WHERE t.id = :messageId AND t.conversationId = :conversationId " +
+            "AND m.conversationId = :conversationId AND (COALESCE(m.seq, $MAX_LONG) > COALESCE(t.seq, $MAX_LONG) " +
+            "OR (COALESCE(m.seq, $MAX_LONG) = COALESCE(t.seq, $MAX_LONG) AND (m.clientTs > t.clientTs " +
+            "OR (m.clientTs = t.clientTs AND m.id > t.id))))",
+    )
+    suspend fun newerThan(conversationId: String, messageId: String): Int
+
+    @Query("SELECT conversationId, text FROM drafts") fun observeDrafts(): Flow<List<DraftRow>>
+
+    @Query("SELECT deviceId, userId, verified, approved FROM signal_identities")
+    fun observeIdentities(): Flow<List<IdentityRow>>
+
+    /** Meta keys of unresolved identity conflicts (`identity_conflict:<device uuid>`, see `DeviceDirectory`). */
+    @Query("SELECT `key` FROM meta WHERE `key` LIKE 'identity\\_conflict:%' ESCAPE '\\'")
+    fun observeIdentityConflicts(): Flow<List<String>>
 
     /** The last real message (not a system notice) of a conversation. */
     @Query(

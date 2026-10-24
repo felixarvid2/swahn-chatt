@@ -100,6 +100,7 @@ class RoomLocalStore(
     override suspend fun removeConversation(id: String) = atomic {
         dao.deleteMessagesOf(id)
         dao.deleteOutboxOf(id)
+        dao.deleteDraft(id)
         dao.deleteMembers(id)
         dao.deleteConversation(id)
     }

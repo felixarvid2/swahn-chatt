@@ -7,14 +7,23 @@ from sqlalchemy.orm import Session
 
 from app import clock
 from app.config import Settings
-from app.deps import Principal, get_db, get_limiter, get_principal, get_rate_ip, get_read_db, get_settings_dep
+from app.deps import (
+    Principal,
+    get_db,
+    get_ip,
+    get_limiter,
+    get_principal,
+    get_rate_ip,
+    get_read_db,
+    get_settings_dep,
+)
 from app.errors import ApiError, unauthorized
 from app.models import Device, Invitation, SessionToken, User
 from app.models import Session as AuthSession
 from app.ratelimit import RateLimiter
 from app.schemas import AuthResponse, LoginRequest, RedeemRequest, RefreshRequest
 from app.security import hash_invite_code, hash_password, hash_token, verify_password
-from app.services import accounts
+from app.services import accounts, audit
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -45,6 +54,7 @@ def _record_failure(limiter: RateLimiter, username: str) -> None:
 @router.post("/invite/redeem", status_code=201, response_model=AuthResponse)
 def redeem(
     body: RedeemRequest,
+    addr: str = Depends(get_ip),
     ip: str = Depends(get_rate_ip),
     limiter: RateLimiter = Depends(get_limiter),
     settings: Settings = Depends(get_settings_dep),
@@ -90,6 +100,9 @@ def redeem(
     device = accounts.create_device(db, user.id, body.device_name, settings.max_devices_per_user)
     result = accounts.start_session(db, settings, user, device)
     accounts.broadcast_user_updated(db, user)
+    audit.record(db, "invitation_redeemed", actor=user.id, target_user=user.id, target=inv_id, ip=addr, is_admin=is_admin)
+    if is_admin:
+        audit.record(db, "admin_granted", target_user=user.id, target=inv_id, ip=addr, via="invitation")
     db.commit()
     return result
 
@@ -98,9 +111,18 @@ def _usable_invite(now: int) -> tuple:
     return (Invitation.used_at.is_(None), Invitation.revoked_at.is_(None), Invitation.expires_at > now)
 
 
+def _audit_login_failure(db: Session, addr: str, user_id: str | None, username: str | None) -> None:
+    """Own transaction (the request fails anyway). The name of an account that does not exist is never stored."""
+    audit.record(
+        db, "login_failure", target_user=user_id, ip=addr, username=username if user_id else audit.UNKNOWN_USER
+    )
+    db.commit()
+
+
 @router.post("/login", response_model=AuthResponse)
 def login(
     body: LoginRequest,
+    addr: str = Depends(get_ip),
     ip: str = Depends(get_rate_ip),
     limiter: RateLimiter = Depends(get_limiter),
     settings: Settings = Depends(get_settings_dep),
@@ -118,14 +140,17 @@ def login(
     ok = verify_password(settings, stored, body.password)
     if not ok or found is None:
         _record_failure(limiter, body.username)
+        _audit_login_failure(db, addr, found.id if found else None, body.username if found else None)
         raise unauthorized("invalid username or password", "invalid_credentials")
     # Now take the write lock and make sure the account did not change while the hash was being checked.
     user = db.scalar(select(User).where(User.id == found.id, User.disabled_at.is_(None)))
     if user is None or user.password_hash != stored:
         db.rollback()
+        _audit_login_failure(db, addr, found.id, body.username)
         raise unauthorized("invalid username or password", "invalid_credentials")
     device = accounts.create_device(db, user.id, body.device_name, settings.max_devices_per_user)
     result = accounts.start_session(db, settings, user, device)
+    audit.record(db, "login_success", actor=user.id, target_user=user.id, target=device.id, ip=addr)
     db.commit()
     return result
 
@@ -133,6 +158,7 @@ def login(
 @router.post("/refresh", response_model=AuthResponse)
 def refresh(
     body: RefreshRequest,
+    addr: str = Depends(get_ip),
     ip: str = Depends(get_rate_ip),
     limiter: RateLimiter = Depends(get_limiter),
     settings: Settings = Depends(get_settings_dep),
@@ -151,6 +177,9 @@ def refresh(
             # Any token this session issued before its current one came back: assume theft, kill the session
             # and its device (however many times the thief rotated in between).
             accounts.revoke_device(db, reused.device_id)
+            audit.record(
+                db, "refresh_token_reuse", target_user=reused.user_id, target=reused.device_id, ip=addr, session=reused.id
+            )
             db.commit()
             raise unauthorized("refresh token was already used; session revoked", "token_reused")
         raise unauthorized("invalid refresh token", "invalid_token")
@@ -171,7 +200,8 @@ def refresh(
 
 
 @router.post("/logout", status_code=204)
-def logout(p: Principal = Depends(get_principal), db: Session = Depends(get_db)):
+def logout(p: Principal = Depends(get_principal), addr: str = Depends(get_ip), db: Session = Depends(get_db)):
     accounts.revoke_device(db, p.device_id)
+    audit.record(db, "device_revoked", actor=p.user_id, target_user=p.user_id, target=p.device_id, ip=addr, by="logout")
     db.commit()
     return Response(status_code=204)

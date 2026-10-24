@@ -3,13 +3,13 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import Settings
-from app.deps import Principal, get_db, get_limiter, get_principal, get_read_db, get_settings_dep
+from app.deps import Principal, get_db, get_ip, get_limiter, get_principal, get_read_db, get_settings_dep
 from app.errors import ApiError, conflict, invalid, not_found
 from app.models import Attachment, Device, User
 from app.ratelimit import RateLimiter
 from app.schemas import DeviceOut, PasswordChange, ProfileUpdate, UserOut
 from app.security import hash_password, verify_password
-from app.services import accounts
+from app.services import accounts, audit
 from app.services.views import devices_out_db, user_out
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -52,6 +52,7 @@ def change_password(
     p: Principal = Depends(get_principal),
     settings: Settings = Depends(get_settings_dep),
     limiter: RateLimiter = Depends(get_limiter),
+    addr: str = Depends(get_ip),
     rdb: Session = Depends(get_read_db),
     db: Session = Depends(get_db),
 ):
@@ -67,6 +68,7 @@ def change_password(
         raise conflict("the password was changed concurrently; try again")
     user.password_hash = new_hash
     accounts.revoke_other_sessions(db, p.user_id, p.device_id)
+    audit.record(db, "password_changed", actor=p.user_id, target_user=p.user_id, ip=addr)
     db.commit()
     return Response(status_code=204)
 

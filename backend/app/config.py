@@ -48,6 +48,11 @@ class Settings(BaseSettings):
     argon2_memory_kb: int = Field(65536, ge=8)
     argon2_parallelism: int = Field(4, ge=1)
     background_tasks: bool = True
+    # Housekeeping (hourly job): delivered ciphertext is useless after delivery; audit rows are kept this long.
+    envelope_retention_days: int = Field(30, ge=1)
+    audit_retention_days: int = Field(180, ge=1)
+    # /readyz answers 503 "low_disk" when the data volume has less free space than this (0 disables the check).
+    min_free_disk_mb: int = Field(200, ge=0)
 
     @model_validator(mode="after")
     def _finish(self) -> "Settings":

@@ -10,6 +10,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from app import __version__
 from app.config import Settings, get_settings
 from app.db import make_engine, make_read_session_factory, make_session_factory
 from app.errors import ApiError, install_error_handlers
@@ -37,6 +38,7 @@ log = logging.getLogger("familychat")
 
 JSON_BODY_LIMIT = 8 * 1024 * 1024
 MAINTENANCE_INTERVAL_S = 3600
+MAINTENANCE_STOP_TIMEOUT_S = 30.0
 
 
 UPLOAD_PATH = "/api/v1/attachments"
@@ -125,22 +127,34 @@ def create_app(settings: Settings | None = None, push_transport=None) -> FastAPI
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         push.start()
-        task = asyncio.create_task(_maintenance_loop(app)) if settings.background_tasks else None
+        stop = asyncio.Event()
+        task = asyncio.create_task(_maintenance_loop(app, stop)) if settings.background_tasks else None
         log.info("familychat started env=%s", settings.env)
         try:
             yield
         finally:
+            # Each step is isolated: a failure must not leave the push thread running or the engine open.
+            try:
+                await hub.close_all(1001, "server restarting")  # clients reconnect at once
+            except Exception:
+                log.exception("closing websockets failed")
+            stop.set()
             if task:
-                task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await task
-            push.stop()
-            engine.dispose()
+                try:
+                    await asyncio.wait_for(task, MAINTENANCE_STOP_TIMEOUT_S)  # lets a running prune finish
+                except (TimeoutError, asyncio.CancelledError):
+                    log.warning("maintenance did not stop in time; cancelled")
+                except Exception:
+                    log.exception("maintenance task failed while stopping")
+            try:
+                push.stop()
+            finally:
+                engine.dispose()
 
     docs = settings.docs_enabled
     app = FastAPI(
         title="FamilyChat",
-        version="1.0.0",
+        version=__version__,
         lifespan=lifespan,
         docs_url="/api/v1/docs" if docs else None,
         openapi_url="/api/v1/openapi.json" if docs else None,
@@ -153,6 +167,7 @@ def create_app(settings: Settings | None = None, push_transport=None) -> FastAPI
     app.state.hub = hub
     app.state.limiter = limiter
     app.state.push = push
+    app.state.started_at = time.monotonic()
 
     install_error_handlers(app)
     app.add_middleware(BodyLimitMiddleware)
@@ -187,15 +202,16 @@ def create_app(settings: Settings | None = None, push_transport=None) -> FastAPI
     return app
 
 
-async def _maintenance_loop(app: FastAPI) -> None:
+async def _maintenance_loop(app: FastAPI, stop: asyncio.Event) -> None:
     def run() -> None:
         with app.state.session_factory() as db:
             prune(db, app.state.settings)
         app.state.limiter.cleanup()
 
-    while True:
+    while not stop.is_set():
         try:
             await asyncio.to_thread(run)
         except Exception:
             log.exception("maintenance failed")
-        await asyncio.sleep(MAINTENANCE_INTERVAL_S)
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(stop.wait(), MAINTENANCE_INTERVAL_S)

@@ -179,6 +179,49 @@ class InvitationOut(BaseModel):
     revoked_at: int | None
 
 
+class AdminUserOut(BaseModel):
+    id: str
+    username: str
+    display_name: str
+    is_admin: bool
+    created_at: int
+    disabled_at: int | None
+    last_seen_at: int | None  # newest last_seen_at over all of the user's devices
+    active_devices: int
+    attachment_bytes: int
+
+
+class MigrationInfo(BaseModel):
+    head: str  # newest revision this code ships
+    current: str | None  # revision the database is at
+
+
+class AdminStats(BaseModel):
+    users: int
+    active_devices: int
+    conversations: int
+    messages: int
+    undelivered_envelopes: int
+    attachments: int
+    db_bytes: int | None  # None unless the database is a SQLite file
+    attachments_bytes: int
+    disk_free_bytes: int
+    version: str
+    migration: MigrationInfo
+    uptime_seconds: int
+
+
+class AuditEventOut(BaseModel):
+    id: int
+    at: int
+    actor_user_id: str | None
+    action: str
+    target_user_id: str | None
+    target_id: str | None
+    ip: str | None
+    details: dict
+
+
 class KeyStatus(BaseModel):
     one_time_prekeys: int
     one_time_pq_prekeys: int

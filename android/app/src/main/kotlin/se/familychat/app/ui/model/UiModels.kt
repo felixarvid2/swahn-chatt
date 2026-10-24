@@ -26,6 +26,8 @@ data class ConversationItemUi(
     val lastActivity: Long?,
     val unread: Int,
     val typing: Boolean = false,
+    /** Unsent composer text; when set the list shows "Utkast: ..." instead of the last message. */
+    val draft: String? = null,
 )
 
 enum class AttachmentKindUi { IMAGE, VIDEO, VOICE, FILE }
@@ -96,6 +98,10 @@ data class MessageUi(
     val failed: Boolean,
     val canEdit: Boolean,
     val canDelete: Boolean,
+    /** Who wrote it (user id); consecutive messages of one sender form a run. */
+    val senderId: String = "",
+    /** The sender's display name for screen readers, also in direct conversations; null for own messages. */
+    val speaker: String? = null,
 )
 
 enum class SystemKind {
@@ -115,8 +121,14 @@ sealed interface ChatRow {
         override val key get() = "d$dayStart"
     }
 
-    data class Message(val message: MessageUi, val firstOfRun: Boolean) : ChatRow {
+    /** [firstOfRun] is final only in lists built by [buildChatRows]; paged lists decide it per row (see [isFirstOfRun]). */
+    data class Message(val message: MessageUi, val firstOfRun: Boolean = true) : ChatRow {
         override val key get() = message.id
+    }
+
+    /** "Olästa meddelanden": sits directly above the first message that was unread when the conversation was opened. */
+    data object UnreadDivider : ChatRow {
+        override val key get() = "unread-divider"
     }
 
     data class System(
@@ -145,3 +157,22 @@ data class MemberUi(
 
 @Immutable
 data class UserUi(val id: String, val name: String, val username: String, val avatar: AvatarUi)
+
+/** What the header says about the other members' safety numbers. */
+enum class SafetyState {
+    /** Nothing to show: not everything is verified, and nothing is waiting for a decision. */
+    NONE,
+
+    /** Every device of every other member is verified. */
+    VERIFIED,
+
+    /** An identity change (or a new device next to verified ones) waits for the user's decision. */
+    WARNING,
+}
+
+/** [reviewUserId] is whose safety screen to open for a [SafetyState.WARNING]. */
+@Immutable
+data class SafetyUi(val state: SafetyState = SafetyState.NONE, val reviewUserId: String? = null)
+
+/** What the connection banner says; [HIDDEN] while everything works. */
+enum class ConnectionUi { HIDDEN, CONNECTING, OFFLINE }

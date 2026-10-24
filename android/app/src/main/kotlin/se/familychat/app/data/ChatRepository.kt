@@ -6,7 +6,11 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import se.familychat.app.data.db.AppDatabase
+import androidx.paging.PagingSource
 import se.familychat.app.data.db.ConversationEntity
+import se.familychat.app.data.db.DraftEntity
+import se.familychat.app.data.db.LatestMessageRow
+import se.familychat.app.data.db.MessageEntity
 import se.familychat.app.data.db.MemberEntity
 import se.familychat.app.data.db.UserEntity
 import se.familychat.app.data.db.toModel
@@ -14,6 +18,7 @@ import se.familychat.app.ui.model.AvatarUi
 import se.familychat.app.ui.model.ConversationItemUi
 import se.familychat.app.ui.model.MemberUi
 import se.familychat.app.ui.model.PreviewKind
+import se.familychat.app.ui.model.SafetyUi
 import se.familychat.app.ui.model.UserUi
 import se.familychat.app.ui.model.delivery
 import se.familychat.core.client.FamilyChatEngine
@@ -36,7 +41,11 @@ class ChatRepository @Inject constructor(
 
     /** The conversation list with titles, previews and unread counts, newest activity first. */
     fun conversationItems(unknownName: String): Flow<List<ConversationItemUi>> =
-        combine(ui.observeOverview(), ui.observeMembers(), ui.observeUsers(), engine.account, engine.typing) { overview, members, users, account, typing ->
+        combine(
+            combine(ui.observeOverview(), ui.observeMembers(), ui.observeUsers(), ::Triple),
+            engine.account, engine.typing, ui.observeDrafts(),
+        ) { (overview, members, users), account, typing, drafts ->
+            val draftBy = drafts.associate { it.conversationId to it.text }
             val userById = users.associateBy { it.id }
             val membersBy = members.groupBy { it.conversationId }
             overview.map { row ->
@@ -54,6 +63,7 @@ class ChatRepository @Inject constructor(
                         previewDelivery = last?.delivery() ?: se.familychat.app.ui.model.DeliveryUi.NONE,
                         lastActivity = last?.let { it.serverTs ?: it.clientTs } ?: row.lastMessageAt ?: row.updatedAt,
                         unread = row.unread, typing = typing[row.id]?.isNotEmpty() == true,
+                        draft = draftBy[row.id]?.takeIf { it.isNotBlank() },
                     )
                 }
             }
@@ -76,6 +86,46 @@ class ChatRepository @Inject constructor(
 
     fun messages(conversationId: String, limit: Int): Flow<List<StoredMessage>> =
         ui.observeMessages(conversationId, limit).map { list -> list.map { it.toModel() } }
+
+    /** The messages of a conversation, newest first, in pages (the conversation screen's list). */
+    fun pagedMessages(conversationId: String): PagingSource<Int, MessageEntity> = ui.pagedMessages(conversationId)
+
+    fun latestMessage(conversationId: String): Flow<LatestMessageRow?> = ui.observeLatest(conversationId).distinctUntilChanged()
+
+    /** Highest sequence number among the messages from others (null: none yet); the read mark follows it. */
+    fun newestIncomingSeq(conversationId: String): Flow<Long?> = ui.observeNewestIncomingSeq(conversationId).distinctUntilChanged()
+
+    suspend fun maxSeq(conversationId: String): Long = ui.maxSeq(conversationId)
+
+    fun incomingAfter(conversationId: String, afterSeq: Long): Flow<Int> = ui.observeIncomingAfter(conversationId, afterSeq)
+
+    suspend fun firstUnreadId(conversationId: String, readSeq: Long): String? = ui.firstUnreadId(conversationId, readSeq)
+
+    /** Offset of a message in [pagedMessages] (how many are newer), or null if it is not in the conversation. */
+    suspend fun offsetOf(conversationId: String, messageId: String): Int? =
+        if (db.storeDao().message(messageId)?.conversationId == conversationId) ui.newerThan(conversationId, messageId) else null
+
+    // --- drafts ---------------------------------------------------------------------------------------------------
+
+    suspend fun draft(conversationId: String): String? = db.storeDao().draft(conversationId)
+
+    /** Stores the unsent text; blank text removes the draft. */
+    suspend fun saveDraft(conversationId: String, text: String) {
+        val dao = db.storeDao()
+        if (text.isBlank()) dao.deleteDraft(conversationId) else dao.putDraft(DraftEntity(conversationId, text, System.currentTimeMillis()))
+    }
+
+    // --- safety numbers -------------------------------------------------------------------------------------------
+
+    /** Whether the other members' devices are all verified, or an identity change waits for the user's decision. */
+    fun safety(conversationId: String): Flow<SafetyUi> =
+        combine(
+            ui.observeMembers(), ui.observeDevices(), ui.observeIdentities(), ui.observeIdentityConflicts(), engine.account,
+        ) { members, devices, identities, conflicts, account ->
+            val me = account?.userId ?: return@combine SafetyUi()
+            val others = members.filter { it.conversationId == conversationId && it.userId != me }.mapTo(HashSet()) { it.userId }
+            computeSafety(me, others, devices, identities, conflicts.mapTo(HashSet()) { it.removePrefix(CONFLICT_PREFIX) })
+        }.distinctUntilChanged()
 
     /** Members of a conversation with their user records. */
     fun members(conversationId: String): Flow<List<MemberUi>> =

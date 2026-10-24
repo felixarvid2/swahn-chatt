@@ -133,6 +133,17 @@ data class OutboxEntity(
     val createdAt: Long,
 )
 
+/**
+ * The unsent composer text of a conversation (added in database version 2). A separate table, not a column of
+ * `conversations`: the sync rewrites conversation rows and must never touch what the user is typing.
+ */
+@Entity(tableName = "drafts")
+data class DraftEntity(
+    @PrimaryKey val conversationId: String,
+    val text: String,
+    val updatedAt: Long,
+)
+
 // --- libsignal state (ProtocolStorage) ---------------------------------------------------------------------------
 
 @Entity(tableName = "signal_identity")

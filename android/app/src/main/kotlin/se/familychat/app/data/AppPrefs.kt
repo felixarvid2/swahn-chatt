@@ -11,6 +11,18 @@ import javax.inject.Singleton
 
 enum class ThemeMode { SYSTEM, LIGHT, DARK }
 
+/** The speeds the voice bubble toggles through. */
+object VoiceSpeed {
+    const val NORMAL = 1f
+    val STEPS = listOf(NORMAL, 1.5f, 2f)
+
+    /** [speed] if it is one of the steps, else normal speed (a damaged preference file must not leave a voice unplayable). */
+    fun of(speed: Float): Float = STEPS.firstOrNull { it == speed } ?: NORMAL
+
+    /** 1 -> 1.5 -> 2 -> 1. */
+    fun next(speed: Float): Float = STEPS[(STEPS.indexOf(of(speed)) + 1) % STEPS.size]
+}
+
 /**
  * Non-secret settings (server address typed before login, theme, push bookkeeping). Everything secret lives in the
  * encrypted database. Reads never throw: a damaged preference file just yields the defaults.
@@ -39,6 +51,17 @@ class AppPrefs @Inject constructor(@ApplicationContext context: Context) {
         prefs.edit().putString(KEY_THEME, mode.name).apply()
     }
 
+    private val _voiceSpeed = MutableStateFlow(VoiceSpeed.of(prefs.getFloat(KEY_VOICE_SPEED, VoiceSpeed.NORMAL)))
+
+    /** Playback speed of voice messages (1, 1.5 or 2), the same for all of them. */
+    val voiceSpeed: StateFlow<Float> = _voiceSpeed.asStateFlow()
+
+    fun setVoiceSpeed(speed: Float) {
+        val s = VoiceSpeed.of(speed)
+        _voiceSpeed.value = s
+        prefs.edit().putFloat(KEY_VOICE_SPEED, s).apply()
+    }
+
     /** The endpoint the distributor gave us. */
     var pushEndpoint: String?
         get() = prefs.getString(KEY_PUSH_ENDPOINT, null)
@@ -65,6 +88,7 @@ class AppPrefs @Inject constructor(@ApplicationContext context: Context) {
     private companion object {
         const val KEY_SERVER = "server_url"
         const val KEY_THEME = "theme"
+        const val KEY_VOICE_SPEED = "voice_speed"
         const val KEY_PUSH_ENDPOINT = "push_endpoint"
         const val KEY_PUSH_UPLOADED = "push_endpoint_uploaded"
         const val KEY_KEY_CHECK = "last_key_check"

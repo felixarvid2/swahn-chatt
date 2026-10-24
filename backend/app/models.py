@@ -208,3 +208,18 @@ class Counter(Base):
     __tablename__ = "counters"
     name: Mapped[str] = mapped_column(String(40), primary_key=True)
     value: Mapped[int] = mapped_column(BigInteger, default=0)
+
+
+class AuditEvent(Base):
+    """Security-relevant actions (see docs/SECURITY.md). `details` never holds secrets, codes or tokens."""
+
+    __tablename__ = "audit_events"
+    __table_args__ = ({"sqlite_autoincrement": True},)  # ids are never reused: they are the paging cursor
+    id: Mapped[int] = mapped_column(BigIntPK, primary_key=True, autoincrement=True)
+    at: Mapped[int] = mapped_column(BigInteger, index=True)
+    actor_user_id: Mapped[str | None] = mapped_column(String(36), nullable=True)  # NULL = CLI or nobody (yet)
+    action: Mapped[str] = mapped_column(String(40))
+    target_user_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    target_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    details: Mapped[dict] = mapped_column(SAJSON, default=dict)
