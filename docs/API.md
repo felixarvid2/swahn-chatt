@@ -58,7 +58,7 @@ content (see SECURITY.md, "Content is bound to its context").
 | Method | Path | Result |
 |---|---|---|
 | GET | `/healthz` | `200 {"status":"ok"}` (process alive) |
-| GET | `/readyz` | `200 {"status":"ready"}` when the database answers, else `503` |
+| GET | `/readyz` | `200 {"status":"ready","migration":"<head>"}` when the database answers, is at the migration head this server ships, and the data volume has enough free space. Otherwise `503 {"status":"unavailable","code":...}` with `database_unavailable`, `migration_mismatch` (plus `migration` and `expected`) or `low_disk` (plus `free_disk_mb` and `min_free_disk_mb`; threshold `FAMILYCHAT_MIN_FREE_DISK_MB`, default 200, `0` turns the check off) |
 
 ## Authentication
 
@@ -98,10 +98,14 @@ Display name: 1–64 characters. Device name: 1–64 characters.
 | GET | `/admin/invitations` | – | `200 [{id, note, is_admin, expires_at, created_at, used_at, used_by, revoked_at}]` |
 | DELETE | `/admin/invitations/{id}` | – | `204` |
 | DELETE | `/admin/users/{user_id}` | – | `204`. Disables the account, revokes all sessions and devices, removes the user from all conversations. An admin cannot remove themselves (`409`) |
+| GET | `/admin/users` | – | `200 [{id, username, display_name, is_admin, created_at, disabled_at, last_seen_at, active_devices, attachment_bytes}]`, oldest account first, removed accounts included (`disabled_at` set). `last_seen_at` is the newest over all the user's devices (`null` if none), `attachment_bytes` the storage the user has uploaded |
+| DELETE | `/admin/users/{user_id}/devices/{device_id}` | – | `204`. Lost phone: revokes that device with the same effects as the owner doing it (keys and queued data deleted, sessions revoked, `devices_changed` events sent, its WebSocket closed with `4401`). `404` if the device is not an active device of that user; `409` for the admin's own current device (use logout) |
+| GET | `/admin/stats` | – | `200 {users, active_devices, conversations, messages, undelivered_envelopes, attachments, db_bytes, attachments_bytes, disk_free_bytes, version, migration: {head, current}, uptime_seconds}`. `users` counts active accounts; `undelivered_envelopes` only those for active devices; `db_bytes` is the SQLite file with its WAL (`null` for other databases); `disk_free_bytes` is free space on the data volume |
+| GET | `/admin/audit?before_id=&limit=` | – | `200 [{id, at, actor_user_id, action, target_user_id, target_id, ip, details}]`, newest first. `limit` 1..200 (default 50); pass the smallest `id` of a page as `before_id` for the next (older) page. See "Audit log" in `SECURITY.md` for the actions |
 
 Bootstrap and server-side administration use the CLI (see `docs/RASPBERRY_PI_SETUP.md`):
 `python -m app.cli create-invite --admin`, `create-invite`, `list-users`, `remove-user <username>`,
-`backup <dir>`, `restore <archive>`, `seed-dev`.
+`audit [--limit N]`, `backup <dir>`, `restore <archive>`, `seed-dev`.
 
 ## Users and devices
 
@@ -234,6 +238,8 @@ can be returned again until it is acknowledged.
 
 Authenticate with `Authorization: Bearer <token>` (or `?access_token=` where headers are impossible).
 An invalid or expired token closes the socket with code `4401`; the client refreshes and reconnects.
+When the server shuts down or restarts it closes every socket with code `1001` ("server restarting"): reconnect
+right away (with the usual backoff if the server is not back yet), then `GET /sync`.
 
 Server → client:
 - `{"type": "hello", "cursor": 123}` — latest event seq for this device; sync if newer than local cursor.

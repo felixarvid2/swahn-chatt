@@ -160,6 +160,23 @@ Risks of libsignal that we accept and mitigate:
   redacted by a logging filter on uvicorn's loggers; the Authorization header is preferred. Request logs never
   contain query strings.
 - Every conversation, message and attachment route checks membership; non-members get `404`.
+- **Audit log:** the table `audit_events` records who did what to whom and from which address (`at`, actor,
+  `action`, target user, target id, `ip`, small `details`). Actions: `invitation_created`, `invitation_revoked`,
+  `invitation_redeemed`, `admin_granted` (an account created from an administrator invitation; there is no
+  other way to change the role), `login_success`, `login_failure`, `password_changed`, `refresh_token_reuse`,
+  `device_revoked` (`details.by`: `self`, `admin` or `logout`) and `user_removed` (API or CLI). It is written in the
+  same transaction as the action; failed logins commit on their own. **Never stored:** passwords, invitation codes,
+  tokens or token hashes; for a failed login on a username that does not exist the log says only `unknown user`
+  (the name that was typed is not kept), for an existing account it records the account. Only administrators can
+  read it (`GET /admin/audit`, or `python -m app.cli audit` on the server). Rows older than
+  `FAMILYCHAT_AUDIT_RETENTION_DAYS` (default 180) are deleted by the hourly maintenance job. The log lives in the
+  server's database: whoever controls the server can alter it, so it is a record for the family, not tamper-proof
+  evidence.
+- **Retention:** the hourly maintenance job deletes message envelopes (the ciphertext copies) that were delivered
+  more than `FAMILYCHAT_ENVELOPE_RETENTION_DAYS` (default 30) days ago; once a device has fetched its copy the
+  server has no use for it. Undelivered envelopes of active devices are kept for as long as the device is
+  active, and revoking a device deletes its queued ones at once. Expired sessions and invitations are
+  pruned as before.
 - Attachments are stored under random UUID names outside any web root; client file names are never used on
   disk. Uploads are streamed with size limits and quotas; avatars are type-checked by magic bytes. The stored path
   of an attachment is validated (`xx/<uuid>` of that attachment, resolved inside the attachments directory) before

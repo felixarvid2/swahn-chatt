@@ -19,7 +19,7 @@ Admin CLI (run from `backend/`, same `FAMILYCHAT_*` environment as the server):
 
 ```bash
 FAMILYCHAT_ENV=development python -m app.cli create-invite --admin   # last stdout line = the code
-python -m app.cli list-users | remove-user <name> | backup <dir> | restore <archive> [--force]
+python -m app.cli list-users | remove-user <name> | audit [--limit N] | backup <dir> | restore <archive> [--force]
 FAMILYCHAT_ENV=development python -m app.cli seed-dev [--password P]  # alice, bob, carol + chats
 ```
 

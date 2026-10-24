@@ -288,9 +288,33 @@ Test your restore once, before you need it.
 docker compose logs -f backend          # JSON lines; tokens, passwords and message bodies are never logged
 docker compose logs --since 1h backend | grep -i error
 curl -s http://127.0.0.1:8000/healthz   # process alive
-curl -s http://127.0.0.1:8000/readyz    # database answers (503 otherwise)
+curl -s http://127.0.0.1:8000/readyz    # ready only if the database answers, is migrated and the disk has room
 docker compose ps                       # health status from the container healthcheck
 ```
+
+### Monitoring
+
+`/readyz` answers `503` with a `code` when something needs your attention: `migration_mismatch` (the database is
+not at the version this image expects: run the upgrade steps in section 8), `low_disk` (less than
+`FAMILYCHAT_MIN_FREE_DISK_MB`, default 200, free on the data volume: free space or enlarge the disk before
+SQLite fails writes) or `database_unavailable`. Point an uptime monitor at it. `/healthz` only says the process
+is alive.
+
+Administrators get the numbers from `GET /api/v1/admin/stats` (needs an admin access token, so use the admin's
+phone or a tool that can log in): counts of users, devices, conversations, messages, undelivered envelopes and
+attachments, the size of the database and the attachments folder, free disk space, the server version and
+migration, and uptime. `GET /api/v1/admin/users` shows each person's last activity, device count and
+storage use; `GET /api/v1/admin/audit` or the command below shows the security log.
+
+```bash
+docker compose exec backend python -m app.cli audit --limit 50   # logins, invitations, device and user changes
+```
+
+A lost or stolen phone: an administrator revokes it with `DELETE /api/v1/admin/users/{user_id}/devices/{device_id}`
+(the owner can do the same from another device). Delivered messages are deleted from the server after
+`FAMILYCHAT_ENVELOPE_RETENTION_DAYS` (30) days and audit entries after `FAMILYCHAT_AUDIT_RETENTION_DAYS` (180);
+both run in the hourly maintenance job. When the server restarts, open apps are disconnected with code 1001 and
+reconnect by themselves.
 
 Logs rotate automatically (10 MB x 5 files per service). All services use `restart: unless-stopped`, Docker starts
 at boot and `tailscale serve --bg` is remembered by Tailscale, so after `sudo reboot` everything comes back by

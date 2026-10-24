@@ -121,3 +121,17 @@ def test_0002_backfills_token_history_and_downgrades(tmp_path):
     assert con.execute("SELECT previous_token_hash FROM sessions WHERE id='s1'").fetchone() == ("prev",)
     assert "session_tokens" not in tables(tmp_path / "familychat.db")
     con.close()
+
+
+def test_0003_adds_and_drops_the_audit_table(tmp_path):
+    s = make_settings(tmp_path)
+    cfg = alembic_config(s.database_url)
+    command.upgrade(cfg, "0002")
+    assert "audit_events" not in tables(tmp_path / "familychat.db")
+    command.upgrade(cfg, "head")
+    con = sqlite3.connect(tmp_path / "familychat.db")
+    con.execute("INSERT INTO audit_events (at, action, details) VALUES (1, 'x', '{}')")
+    con.commit()
+    con.close()
+    command.downgrade(cfg, "0002")
+    assert "audit_events" not in tables(tmp_path / "familychat.db")

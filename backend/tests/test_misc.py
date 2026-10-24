@@ -112,7 +112,9 @@ def test_every_documented_route_exists(client):
     documented = {
         ("post", "/auth/invite/redeem"), ("post", "/auth/login"), ("post", "/auth/refresh"), ("post", "/auth/logout"),
         ("post", "/admin/invitations"), ("get", "/admin/invitations"), ("delete", "/admin/invitations/{invitation_id}"),
-        ("delete", "/admin/users/{user_id}"), ("get", "/users"), ("get", "/users/me"), ("patch", "/users/me"),
+        ("delete", "/admin/users/{user_id}"), ("get", "/admin/users"), ("get", "/admin/stats"),
+        ("get", "/admin/audit"), ("delete", "/admin/users/{user_id}/devices/{device_id}"),
+        ("get", "/users"), ("get", "/users/me"), ("patch", "/users/me"),
         ("put", "/users/me/password"), ("get", "/users/{user_id}/devices"), ("get", "/devices/me"),
         ("put", "/devices/me/push"), ("delete", "/devices/me/push"), ("delete", "/devices/{device_id}"),
         ("put", "/keys"), ("get", "/keys/status"), ("get", "/keys/{user_id}"), ("get", "/conversations"),

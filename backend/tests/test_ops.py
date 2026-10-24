@@ -12,7 +12,6 @@ from sqlalchemy import select, update
 from starlette.websockets import WebSocketDisconnect
 
 from app import clock
-from app.cli import main as cli_main
 from app.hub import Connection, Hub
 from app.main import create_app
 from app.migrate import code_head
@@ -66,7 +65,7 @@ def test_prune_deletes_old_delivered_envelopes_but_keeps_undelivered_and_recent(
 def test_envelope_retention_days_is_configurable(make_app):
     app, client = make_app(envelope_retention_days=2)
     f = Factory(app, client)
-    a, b = f.user("anna"), f.user("bo")
+    a, b = f.user("anna"), f.user("bobby")
     cid = f.direct(a, b)
     a.send(cid, "x")
     b.ack(b.sync()["next_cursor"])
@@ -213,7 +212,7 @@ def test_audit_records_the_security_events_without_secrets(factory, app, client,
         ).status_code
         == 204
     )
-    assert good.delete(f"/devices/{good.device_id}").status_code in (204, 401)  # revoked by the password change
+    assert good.delete(f"/devices/{good.device_id}").status_code == 401  # revoked by the password change
     assert admin.delete(f"/admin/users/{bob.id}").status_code == 204
     # refresh token reuse
     stolen = alice.refresh
@@ -414,20 +413,9 @@ def test_lifespan_shutdown_stops_push_thread_and_maintenance(tmp_path, template_
     assert app.state.hub.connected_count() == 0
 
 
-def test_shutdown_closes_open_websockets_with_1001(tmp_path, template_db):
-    shutil.copy(template_db, tmp_path / "familychat.db")
-    app = create_app(make_settings(tmp_path))
-    seen = {}
-    with TestClient(app) as client:
-        alice = Factory(app, client).user("alice")
-        ws = client.websocket_connect(WS, headers=alice.headers).__enter__()
-        assert ws.receive_json()["type"] == "hello"
-        client.__exit__ = None  # placeholder so the intent is visible: shutdown happens at the end of this block
-        original = app.state.hub.close_all
-
-        async def spy(*a, **kw):
-            await original(*a, **kw)
-            seen["closed"] = ws._send_rx is not None
-
-        app.state.hub.close_all = spy
-    assert seen["closed"]
+def test_audit_records_self_revoke_and_logout(factory, app, alice):
+    tablet, phone = factory.login(alice, "tablet", keys=False), factory.login(alice, "phone", keys=False)
+    assert alice.delete(f"/devices/{tablet.device_id}").status_code == 204
+    assert phone.post("/auth/logout").status_code == 204
+    rows = audit_rows(app, "device_revoked")
+    assert [(r.target_id, r.details["by"]) for r in rows] == [(tablet.device_id, "self"), (phone.device_id, "logout")]

@@ -61,6 +61,7 @@
 | `attachments` | id, uploader_id, purpose, content_type, size, sha256, storage_path, created_at |
 | `events` | seq (PK autoincrement = sync cursor), device_id, type, conversation_id, payload (JSON), created_at |
 | `delivery_receipts` | message_id, user_id, delivered_at (one per recipient user, drives the `delivered` receipt) |
+| `audit_events` | id (autoincrement), at, actor_user_id, action, target_user_id, target_id, ip, details (JSON; never secrets) |
 | `counters` | name, value (used for monotonic message `seq`, works on SQLite and PostgreSQL) |
 
 Event fan-out: when something happens (message, membership change, read receipt…) the service writes one row
