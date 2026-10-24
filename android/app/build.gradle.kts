@@ -28,10 +28,16 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+        // libsignal-android requires core library desugaring (java.time etc. on older Android versions)
+        isCoreLibraryDesugaringEnabled = true
     }
     buildFeatures { compose = true }
 
     packaging {
+        jniLibs {
+            // test-only natives of libsignal (fake servers); never needed at runtime
+            excludes += setOf("**/libsignal_jni_testing.so")
+        }
         resources {
             // libsignal-client (a transitive dependency of libsignal-android) carries its desktop
             // natives (~400 MB) as Java resources; they must not end up in the APK.
@@ -50,6 +56,8 @@ dependencies {
     // Android builds of the libraries :core:* only compile against.
     implementation(libs.libsignal.android)
     implementation(libs.tink.android)
+
+    coreLibraryDesugaring(libs.desugar.jdk.libs)
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)

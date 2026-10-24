@@ -103,7 +103,7 @@ class ApiClient private constructor(
                 .client(http)
                 .addConverterFactory(FamilyChatJson.asConverterFactory("application/json; charset=UTF-8".toMediaType()))
                 .build()
-            return ApiClient(url, RetrofitFamilyChatApi(retrofit.create(RawApi::class.java)), tokens, refresher, http, sessionFlow)
+            return ApiClient(url, RetrofitFamilyChatApi(retrofit.create(RawApi::class.java)) { tokens.getTokens() == null }, tokens, refresher, http, sessionFlow)
         }
     }
 }

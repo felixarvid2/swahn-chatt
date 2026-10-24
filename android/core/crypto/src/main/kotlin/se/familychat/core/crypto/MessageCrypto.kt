@@ -146,7 +146,13 @@ class MessageCrypto(private val store: PersistentSignalProtocolStore) {
                         presentedIdentity = msg.identityKey.serialize()
                         cipher.decrypt(msg)
                     }
-                    EnvelopeType.WHISPER -> cipher.decrypt(SignalMessage(body))
+                    EnvelopeType.WHISPER -> {
+                        // libsignal reports a missing session as "decryption failed"; tell the two cases apart here.
+                        if (!store.hasSessionRecord(senderUserId, senderDeviceNumber)) {
+                            throw NoSessionException(senderUserId, senderDeviceNumber)
+                        }
+                        cipher.decrypt(SignalMessage(body))
+                    }
                     else -> throw InvalidCiphertextException("Unknown envelope type '$envelopeType'")
                 }
             } catch (e: CryptoException) {

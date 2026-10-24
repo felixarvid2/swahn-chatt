@@ -71,7 +71,7 @@ class RealtimeClientTest {
     )
 
     @Test
-    fun `connects with bearer header, delivers frames and sends typing and ping`() = runBlocking {
+    fun `connects with bearer header, delivers frames and sends typing and ping`() = runBlocking<Unit> {
         server.enqueue(accept())
         val rt = client()
         val hello = firstFrame<ServerFrame.Hello>(rt)
@@ -96,7 +96,7 @@ class RealtimeClientTest {
     }
 
     @Test
-    fun `reconnects after the server drops the socket and hello arrives again`() = runBlocking {
+    fun `reconnects after the server drops the socket and hello arrives again`() = runBlocking<Unit> {
         server.enqueue(accept()); server.enqueue(accept())
         val rt = client()
         val hellos = java.util.concurrent.atomic.AtomicInteger()
@@ -112,7 +112,7 @@ class RealtimeClientTest {
     }
 
     @Test
-    fun `reconnects when the server is down and comes back (failure path with backoff)`() = runBlocking {
+    fun `reconnects when the server is down and comes back (failure path with backoff)`() = runBlocking<Unit> {
         server.enqueue(MockResponse().setResponseCode(503))
         server.enqueue(MockResponse().setResponseCode(503))
         server.enqueue(accept())
@@ -125,7 +125,7 @@ class RealtimeClientTest {
     }
 
     @Test
-    fun `close code 4401 refreshes the token and reconnects with the new one`() = runBlocking {
+    fun `close code 4401 refreshes the token and reconnects with the new one`() = runBlocking<Unit> {
         server.enqueue(MockResponse().withWebSocketUpgrade(object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 webSocket.close(4401, "expired")
@@ -144,7 +144,7 @@ class RealtimeClientTest {
     }
 
     @Test
-    fun `http 401 on upgrade also refreshes`() = runBlocking {
+    fun `http 401 on upgrade also refreshes`() = runBlocking<Unit> {
         server.enqueue(MockResponse().setResponseCode(401).setBody("""{"code":"token_expired","message":"e"}"""))
         server.enqueue(accept())
         val rt = client { _ -> tokens.saveTokens(Tokens("t2", "r2")); true }
@@ -157,7 +157,7 @@ class RealtimeClientTest {
     }
 
     @Test
-    fun `stops for good when the session ended`() = runBlocking {
+    fun `stops for good when the session ended`() = runBlocking<Unit> {
         server.enqueue(MockResponse().setResponseCode(401))
         val rt = client { _ -> tokens.onLoggedOut(LogoutReason.SESSION_REVOKED); false }
         rt.start()
@@ -168,7 +168,7 @@ class RealtimeClientTest {
     }
 
     @Test
-    fun `stop closes the connection and prevents reconnects`() = runBlocking {
+    fun `stop closes the connection and prevents reconnects`() = runBlocking<Unit> {
         server.enqueue(accept())
         val rt = client()
         val hello = firstFrame<ServerFrame.Hello>(rt)

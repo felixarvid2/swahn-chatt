@@ -1,6 +1,6 @@
 package se.familychat.core.model
 
-import kotlinx.serialization.decodeFromJsonElement
+import kotlinx.serialization.json.decodeFromJsonElement
 
 /** A sync [Event] with its `data` decoded according to its `type`. */
 sealed interface ParsedEvent {

@@ -101,7 +101,9 @@ class MessageCryptoTest {
         // ciphertexts for different devices differ
         assertFalse(toBob.body == toAlice2.body)
 
-        // bob answers to both of alice's devices (sessions from bob's side are created from the received prekey msgs)
+        // bob answers to both of alice's devices: he has a session with alice.1 from the prekey message he received and
+        // builds one with alice.2 from her bundle
+        connect(bob, alice2, server)
         val reply = Content(text = "hello alice")
         val back = bob.crypto.encryptContent(reply, listOf(alice.recipient, Recipient("alice", 2, alice2.deviceId)))
         for ((dev, env) in listOf(alice to back[0], alice2 to back[1])) {

@@ -85,7 +85,7 @@ class TwoUserEndToEndTest {
                 admin = phone("admin")
                 admin.engine.redeemInvite(url, adminInvite, "admin_$run", "admin-password-1", "Admin")
                 // the admin hands out invitations through the API
-                fun codeFor(who: String) = runBlocking { admin.engine.createInvitation(note = "e2e $who").code }
+                fun codeFor(who: String): String = runBlocking { admin.engine.createInvitation(note = "e2e $who").code }
                 alice = phone("alice")
                 alice.engine.redeemInvite(url, codeFor("alice"), "alice_$run", "alice-password-1", "Alice")
                 bob = phone("bob")
@@ -115,7 +115,7 @@ class TwoUserEndToEndTest {
     }
 
     @Test
-    fun realtimeMessagesBothWaysWithReceiptsEditAndDelete() = runBlocking {
+    fun realtimeMessagesBothWaysWithReceiptsEditAndDelete() = runBlocking<Unit> {
         alice.engine.startRealtime(); bob.engine.startRealtime()
         try {
             val conv = directChat(alice, bob)
@@ -154,7 +154,7 @@ class TwoUserEndToEndTest {
     }
 
     @Test
-    fun offlineCatchUpDeliversEverythingOnceAndInOrder() = runBlocking {
+    fun offlineCatchUpDeliversEverythingOnceAndInOrder() = runBlocking<Unit> {
         val conv = directChat(alice, bob)
         bob.engine.sync()
         // bob is offline (no realtime): alice sends 30 messages
@@ -163,21 +163,25 @@ class TwoUserEndToEndTest {
         assertTrue(ids.all { alice.store.getMessage(it)!!.status == MessageStatus.SENT || alice.store.getMessage(it)!!.status.ordinal > 1 })
 
         bob.engine.sync()
-        assertEquals((1..30).map { "offline $it" }, bob.texts(conv))
-        assertEquals(ids, bob.store.getMessages(conv, 100).map { it.id })
-        assertTrue(bob.store.getMessages(conv, 100).all { it.decryptError == null })
-        val seqs = bob.store.getMessages(conv, 100).map { it.seq!! }
-        assertEquals(seqs.sorted(), seqs)
+        // (the direct conversation is shared by all tests, so look only at this test's messages)
+        suspend fun mine() = bob.store.getMessages(conv, 1000).filter { it.id in ids }
+        assertEquals((1..30).map { "offline $it" }, mine().map { it.text })
+        assertEquals(ids, mine().map { it.id })
+        assertTrue(bob.store.getMessages(conv, 1000).all { it.decryptError == null })
+        val allSeqs = bob.store.getMessages(conv, 1000).filter { !it.isSystem }.map { it.seq!! }
+        assertEquals(allSeqs.sorted(), allSeqs)
         // a second sync changes nothing
+        val before = bob.store.getMessages(conv, 1000).size
         assertEquals(0, bob.engine.sync())
-        assertEquals(30, bob.store.getMessages(conv, 100).size)
+        assertEquals(before, bob.store.getMessages(conv, 1000).size)
+        assertEquals(30, mine().size)
         // the server saw the acks: alice learns about delivery
         alice.engine.sync()
         eventually(timeout, "delivery receipts for all") { alice.engine.sync(); ids.all { alice.store.getMessage(it)!!.status.ordinal >= MessageStatus.DELIVERED.ordinal } }
     }
 
     @Test
-    fun duplicateSendOfTheSameIdCreatesOneMessage() = runBlocking {
+    fun duplicateSendOfTheSameIdCreatesOneMessage() = runBlocking<Unit> {
         val conv = directChat(alice, bob)
         bob.engine.sync()
         val id = alice.engine.sendText(conv, "only once")
@@ -186,13 +190,14 @@ class TwoUserEndToEndTest {
         alice.store.putOutbox(OutboxEntry(id, conv, MessageKind.MESSAGE, null, "only once", null, emptyList(), 1, createdAt = 1))
         alice.engine.processOutbox()
         bob.engine.sync()
-        assertEquals(listOf("only once"), bob.texts(conv))
+        assertEquals(1, bob.store.getMessages(conv, 1000).count { it.id == id })
+        assertEquals("only once", bob.store.getMessage(id)!!.text)
         val onServer = alice.rawApi().listMessages(conv, null, 50)
         assertEquals(1, onServer.count { it.id == id })
     }
 
     @Test
-    fun attachmentIsEncryptedOnTheWireAndRoundTrips() = runBlocking {
+    fun attachmentIsEncryptedOnTheWireAndRoundTrips() = runBlocking<Unit> {
         val conv = directChat(alice, bob)
         bob.engine.sync()
         val data = Random(42).nextBytes(2 * 1024 * 1024 + 123)
@@ -220,7 +225,7 @@ class TwoUserEndToEndTest {
     }
 
     @Test
-    fun groupOfThreeAndRemovedMemberGetsNothingNew() = runBlocking {
+    fun groupOfThreeAndRemovedMemberGetsNothingNew() = runBlocking<Unit> {
         listOf(alice, bob, carol).forEach { it.engine.startRealtime() }
         try {
             val g = alice.engine.createGroup("Familjen $run", listOf(bob.userId, carol.userId))
@@ -250,7 +255,7 @@ class TwoUserEndToEndTest {
     }
 
     @Test
-    fun secondDeviceReceivesSubsequentMessagesOnBothDevices() = runBlocking {
+    fun secondDeviceReceivesSubsequentMessagesOnBothDevices() = runBlocking<Unit> {
         val conv = directChat(alice, bob)
         bob.engine.sync()
         alice.engine.startRealtime(); bob.engine.startRealtime()
@@ -283,7 +288,7 @@ class TwoUserEndToEndTest {
     }
 
     @Test
-    fun serverDatabaseNeverContainsPlaintext() = runBlocking {
+    fun serverDatabaseNeverContainsPlaintext() = runBlocking<Unit> {
         Assume.assumeTrue("FAMILYCHAT_TEST_DB not set: skipping plaintext check", dbPath != null)
         val conv = directChat(alice, bob)
         bob.engine.sync()

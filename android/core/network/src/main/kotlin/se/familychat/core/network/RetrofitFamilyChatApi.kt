@@ -14,13 +14,23 @@ import java.io.FileOutputStream
 import java.io.IOException
 
 /** [FamilyChatApi] on top of Retrofit: maps HTTP errors to [ApiException] and adds streaming download. */
-internal class RetrofitFamilyChatApi(private val raw: RawApi) : FamilyChatApi {
+internal class RetrofitFamilyChatApi(
+    private val raw: RawApi,
+    /** True once the session was ended (tokens dropped); a 401 `token_expired` then really means "logged out". */
+    private val isSessionEnded: () -> Boolean = { false },
+) : FamilyChatApi {
 
     private suspend inline fun <T> call(block: () -> T): T =
         try {
             block()
         } catch (e: HttpException) {
-            throw mapHttpException(e)
+            throw mapHttpException(e).let { mapped ->
+                if (mapped is ApiException.TokenExpired && isSessionEnded()) {
+                    ApiException.SessionEnded("session_ended", "The session has ended; please sign in again")
+                } else {
+                    mapped
+                }
+            }
         }
 
     override suspend fun healthz() = call { raw.healthz() }

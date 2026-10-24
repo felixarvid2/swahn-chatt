@@ -40,7 +40,7 @@ class EngineTest {
     }
 
     @Test
-    fun `sign up uploads keys and prekeys are consumed by senders`() = runBlocking {
+    fun `sign up uploads keys and prekeys are consumed by senders`() = runBlocking<Unit> {
         val alice = client("alice")
         alice.signUp()
         val dev = server.devices.getValue(alice.deviceIdOnServer())
@@ -51,7 +51,7 @@ class EngineTest {
     }
 
     @Test
-    fun `text round trip both directions with receipts, edit and delete`() = runBlocking {
+    fun `text round trip both directions with receipts, edit and delete`() = runBlocking<Unit> {
         val (alice, bob, convId) = pair()
         val id = alice.engine.sendText(convId, "hello bob")
         assertEquals(MessageStatus.PENDING, alice.store.getMessage(id)!!.status)
@@ -102,7 +102,7 @@ class EngineTest {
     }
 
     @Test
-    fun `only the author can edit or delete`() = runBlocking {
+    fun `only the author can edit or delete`() = runBlocking<Unit> {
         val (alice, bob, convId) = pair()
         val id = alice.engine.sendText(convId, "mine"); alice.engine.processOutbox(); bob.engine.sync()
         assertFailsWith<IllegalArgumentException> { bob.engine.editMessage(id, "hacked") }
@@ -111,7 +111,7 @@ class EngineTest {
     }
 
     @Test
-    fun `messages are ordered by server seq`() = runBlocking {
+    fun `messages are ordered by server seq`() = runBlocking<Unit> {
         val (alice, bob, convId) = pair()
         val ids = (1..25).map { alice.engine.sendText(convId, "m$it") }
         alice.engine.processOutbox()
@@ -123,7 +123,7 @@ class EngineTest {
     }
 
     @Test
-    fun `network failure keeps the message pending with the same id and a retry sends exactly once`() = runBlocking {
+    fun `network failure keeps the message pending with the same id and a retry sends exactly once`() = runBlocking<Unit> {
         val (alice, bob, convId) = pair()
         server.failSends = 2
         val id = alice.engine.sendText(convId, "flaky")
@@ -147,7 +147,7 @@ class EngineTest {
     }
 
     @Test
-    fun `lost response then retry yields one message (server idempotency)`() = runBlocking {
+    fun `lost response then retry yields one message (server idempotency)`() = runBlocking<Unit> {
         val (alice, bob, convId) = pair()
         server.loseSendResponses = 1
         val id = alice.engine.sendText(convId, "once")
@@ -164,7 +164,7 @@ class EngineTest {
     }
 
     @Test
-    fun `the same id sent twice creates one message`() = runBlocking {
+    fun `the same id sent twice creates one message`() = runBlocking<Unit> {
         val (alice, bob, convId) = pair()
         val id = alice.engine.sendText(convId, "dup")
         alice.engine.processOutbox()
@@ -179,7 +179,7 @@ class EngineTest {
     }
 
     @Test
-    fun `409 missing device refreshes devices and keys then retries`() = runBlocking {
+    fun `409 missing device refreshes devices and keys then retries`() = runBlocking<Unit> {
         val (alice, bob, convId) = pair()
         // warm up: alice has bob's device list and a session
         alice.engine.sendText(convId, "one"); alice.engine.processOutbox(); bob.engine.sync()
@@ -204,7 +204,7 @@ class EngineTest {
     }
 
     @Test
-    fun `409 extra device drops its session and retries`() = runBlocking {
+    fun `409 extra device drops its session and retries`() = runBlocking<Unit> {
         val (alice, bob, convId) = pair()
         val bob2 = client("bob")
         bob2.engine.login("https://fake.example", "bob", "password-bob")
@@ -222,7 +222,7 @@ class EngineTest {
     }
 
     @Test
-    fun `mismatch retries are bounded and the message stays pending`() = runBlocking {
+    fun `mismatch retries are bounded and the message stays pending`() = runBlocking<Unit> {
         val (alice, _, convId) = pair()
         server.alwaysMismatch = true
         val id = alice.engine.sendText(convId, "never accepted")
@@ -236,7 +236,7 @@ class EngineTest {
     }
 
     @Test
-    fun `events replayed after a crash are applied once`() = runBlocking {
+    fun `events replayed after a crash are applied once`() = runBlocking<Unit> {
         val (alice, bob, convId) = pair()
         val id = alice.engine.sendText(convId, "replay me"); alice.engine.processOutbox()
         alice.engine.editMessage(id, "replayed edit"); alice.engine.processOutbox()
@@ -256,7 +256,7 @@ class EngineTest {
     }
 
     @Test
-    fun `ack is sent only after the cursor and messages are committed`() = runBlocking {
+    fun `ack is sent only after the cursor and messages are committed`() = runBlocking<Unit> {
         val (alice, bob, convId) = pair()
         alice.engine.sendText(convId, "a"); alice.engine.sendText(convId, "b"); alice.engine.processOutbox()
         val observed = mutableListOf<Triple<Long, Long, Int>>()
@@ -274,7 +274,7 @@ class EngineTest {
     }
 
     @Test
-    fun `a failure while applying a page prevents the ack and the cursor move, and the retry loses nothing`() = runBlocking {
+    fun `a failure while applying a page prevents the ack and the cursor move, and the retry loses nothing`() = runBlocking<Unit> {
         val alice = client("alice")
         alice.signUp()
         val failing = FailingStore()
@@ -300,7 +300,7 @@ class EngineTest {
     }
 
     @Test
-    fun `a transient storage error while saving a decrypted message is retried instead of losing the plaintext`() = runBlocking {
+    fun `a transient storage error while saving a decrypted message is retried instead of losing the plaintext`() = runBlocking<Unit> {
         val alice = client("alice")
         alice.signUp()
         val failing = FailingStore()
@@ -317,7 +317,7 @@ class EngineTest {
     }
 
     @Test
-    fun `concurrent syncs are serialised`() = runBlocking {
+    fun `concurrent syncs are serialised`() = runBlocking<Unit> {
         val (alice, bob, convId) = pair()
         repeat(10) { alice.engine.sendText(convId, "c$it") }
         alice.engine.processOutbox()
@@ -327,7 +327,7 @@ class EngineTest {
     }
 
     @Test
-    fun `attachment round trip with multi megabyte file`() = runBlocking {
+    fun `attachment round trip with multi megabyte file`() = runBlocking<Unit> {
         val (alice, bob, convId) = pair()
         val data = Random(9).nextBytes(3 * 1024 * 1024 + 17)
         val f = File(alice.dir, "photo.jpg").apply { writeBytes(data) }
@@ -357,7 +357,7 @@ class EngineTest {
     }
 
     @Test
-    fun `tampered or missing attachment ciphertext fails safely`() = runBlocking {
+    fun `tampered or missing attachment ciphertext fails safely`() = runBlocking<Unit> {
         val (alice, bob, convId) = pair()
         val f = File(alice.dir, "doc.bin").apply { writeBytes(Random(1).nextBytes(100_000)) }
         val id = alice.engine.sendAttachments(convId, listOf(OutgoingAttachment(f, "application/pdf", "file")))
@@ -373,7 +373,7 @@ class EngineTest {
     }
 
     @Test
-    fun `wrong attachment key is reported as a crypto error`() = runBlocking {
+    fun `wrong attachment key is reported as a crypto error`() = runBlocking<Unit> {
         val (alice, bob, convId) = pair()
         val f = File(alice.dir, "doc.bin").apply { writeBytes(Random(2).nextBytes(10_000)) }
         val id = alice.engine.sendAttachments(convId, listOf(OutgoingAttachment(f, "application/pdf", "file")))
@@ -385,7 +385,7 @@ class EngineTest {
     }
 
     @Test
-    fun `upload survives a failed send and is not repeated`() = runBlocking {
+    fun `upload survives a failed send and is not repeated`() = runBlocking<Unit> {
         val (alice, bob, convId) = pair()
         val f = File(alice.dir, "a.bin").apply { writeBytes(Random(3).nextBytes(50_000)) }
         server.failSends = 1
@@ -399,7 +399,7 @@ class EngineTest {
     }
 
     @Test
-    fun `group of three, removal stops delivery to the removed member`() = runBlocking {
+    fun `group of three, removal stops delivery to the removed member`() = runBlocking<Unit> {
         val alice = client("alice"); val bob = client("bob"); val carol = client("carol")
         listOf(alice, bob, carol).forEach { it.signUp() }
         alice.engine.refreshDirectory()
@@ -430,7 +430,7 @@ class EngineTest {
     }
 
     @Test
-    fun `second device of a contact gets a notice and receives later messages on both devices`() = runBlocking {
+    fun `second device of a contact gets a notice and receives later messages on both devices`() = runBlocking<Unit> {
         val (alice, bob, convId) = pair()
         alice.engine.sendText(convId, "before"); alice.engine.processOutbox(); bob.engine.sync()
 
@@ -457,7 +457,7 @@ class EngineTest {
     }
 
     @Test
-    fun `own other device receives my messages as outgoing`() = runBlocking {
+    fun `own other device receives my messages as outgoing`() = runBlocking<Unit> {
         val (alice, bob, convId) = pair()
         val alice2 = client("alice")
         alice2.engine.login("https://fake.example", "alice", "password-alice")
@@ -472,7 +472,7 @@ class EngineTest {
     }
 
     @Test
-    fun `corrupted incoming ciphertext becomes a could-not-decrypt placeholder and later messages still work`() = runBlocking {
+    fun `corrupted incoming ciphertext becomes a could-not-decrypt placeholder and later messages still work`() = runBlocking<Unit> {
         val (alice, bob, convId) = pair()
         val bad = alice.engine.sendText(convId, "will be corrupted"); alice.engine.processOutbox()
         val good = alice.engine.sendText(convId, "fine"); alice.engine.processOutbox()
@@ -497,7 +497,7 @@ class EngineTest {
     }
 
     @Test
-    fun `changed identity of a known device blocks decryption until accepted`() = runBlocking {
+    fun `changed identity of a known device blocks decryption until accepted`() = runBlocking<Unit> {
         val (alice, bob, convId) = pair()
         alice.engine.sendText(convId, "hi"); alice.engine.processOutbox(); bob.engine.sync()
         val aliceNumber = alice.engine.account.value!!.deviceNumber
@@ -532,7 +532,7 @@ class EngineTest {
     }
 
     @Test
-    fun `safety numbers match on both sides`() = runBlocking {
+    fun `safety numbers match on both sides`() = runBlocking<Unit> {
         val (alice, bob, convId) = pair()
         alice.engine.sendText(convId, "hi"); alice.engine.processOutbox(); bob.engine.sync()
         val a = alice.engine.safetyNumber(bob.userId(), bob.engine.account.value!!.deviceNumber)!!
@@ -545,7 +545,7 @@ class EngineTest {
     }
 
     @Test
-    fun `typing indicators arrive via realtime and expire`() = runBlocking {
+    fun `typing indicators arrive via realtime and expire`() = runBlocking<Unit> {
         val (alice, bob, convId) = pair()
         alice.engine.startRealtime(); bob.engine.startRealtime()
         eventually(what = "connected") { alice.engine.realtimeState.value == se.familychat.core.network.RealtimeState.CONNECTED }
@@ -556,7 +556,7 @@ class EngineTest {
     }
 
     @Test
-    fun `realtime loop syncs on hints and delivers the outbox in the background`() = runBlocking {
+    fun `realtime loop syncs on hints and delivers the outbox in the background`() = runBlocking<Unit> {
         val alice = TestClient(server, "alice", scope, workers = true)
         val bob = TestClient(server, "bob", scope, workers = true)
         alice.signUp(); bob.signUp()
@@ -583,7 +583,7 @@ class EngineTest {
     }
 
     @Test
-    fun `logout wipes everything and revokes the device`() = runBlocking {
+    fun `logout wipes everything and revokes the device`() = runBlocking<Unit> {
         val (alice, bob, convId) = pair()
         alice.engine.sendText(convId, "x"); alice.engine.processOutbox()
         val deviceId = alice.deviceIdOnServer()

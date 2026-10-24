@@ -41,7 +41,7 @@ class EngineHttpTest {
     private val userJson = """{"id":"u1","username":"anna","display_name":"Anna","is_admin":false,"created_at":1}"""
     private val deviceJson = """{"id":"d1","user_id":"u1","number":1,"name":"P"}"""
 
-    @BeforeTest fun setUp() = runBlocking {
+    @BeforeTest fun setUp() = runBlocking<Unit> {
         server = MockWebServer().also { it.start() }
         val dir = Files.createTempDirectory("fc-http").toFile()
         engine = FamilyChatEngine(
@@ -59,7 +59,7 @@ class EngineHttpTest {
     }
 
     @Test
-    fun `expired access token is refreshed once for many concurrent calls and the calls succeed`() = runBlocking {
+    fun `expired access token is refreshed once for many concurrent calls and the calls succeed`() = runBlocking<Unit> {
         server.dispatcher = object : Dispatcher() {
             override fun dispatch(request: RecordedRequest): MockResponse = when {
                 request.path!!.endsWith("/auth/refresh") -> {
@@ -82,7 +82,7 @@ class EngineHttpTest {
     }
 
     @Test
-    fun `reused refresh token ends the session, stops the engine and reports it`() = runBlocking {
+    fun `reused refresh token ends the session, stops the engine and reports it`() = runBlocking<Unit> {
         server.dispatcher = object : Dispatcher() {
             override fun dispatch(request: RecordedRequest): MockResponse = when {
                 request.path!!.endsWith("/auth/refresh") ->
@@ -102,7 +102,7 @@ class EngineHttpTest {
     }
 
     @Test
-    fun `logout works offline and still wipes local data`() = runBlocking {
+    fun `logout works offline and still wipes local data`() = runBlocking<Unit> {
         server.shutdown()
         engine.logout()
         assertNull(store.getAccount())

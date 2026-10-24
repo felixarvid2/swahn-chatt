@@ -39,7 +39,6 @@ class BaseUrlTest {
             assertEquals("/api/v1/", url.encodedPath)
         }
     }
-    }
 
     @Test
     fun `plain http refused for public or non-cgnat addresses even with the flag`() {

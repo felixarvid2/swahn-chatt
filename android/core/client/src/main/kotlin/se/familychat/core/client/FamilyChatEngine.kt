@@ -468,7 +468,7 @@ class FamilyChatEngine(
             realtime = rt
             realtimeJob = scope.launch {
                 // Subscribe before starting so the first hello cannot be missed.
-                val collector = launch {
+                val collector = launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
                     rt.frames.collect { frame ->
                         when (frame) {
                             is ServerFrame.Hello, is ServerFrame.Sync -> requestSync()
@@ -477,7 +477,7 @@ class FamilyChatEngine(
                         }
                     }
                 }
-                val stateCollector = launch { rt.state.collect { _realtimeState.value = it } }
+                val stateCollector = launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) { rt.state.collect { _realtimeState.value = it } }
                 rt.start()
                 try {
                     // Key maintenance rides along with each foreground session; failures are not fatal.

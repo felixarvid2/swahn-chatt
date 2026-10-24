@@ -48,7 +48,7 @@ class ApiClientTest {
     private fun client() = ApiClient.create(server.url("/").toString(), tokens, allowInsecureLan = true)
 
     @Test
-    fun `sends bearer token and parses json`() = runBlocking {
+    fun `sends bearer token and parses json`() = runBlocking<Unit> {
         server.enqueue(json(200, USER))
         val me = client().api.me()
         assertEquals("anna", me.username)
@@ -58,14 +58,14 @@ class ApiClientTest {
     }
 
     @Test
-    fun `login carries no bearer token`() = runBlocking {
+    fun `login carries no bearer token`() = runBlocking<Unit> {
         server.enqueue(json(200, auth("a", "r")))
         client().api.login(LoginRequest("anna", "pw", "P"))
         assertNull(server.takeRequest().getHeader("Authorization"))
     }
 
     @Test
-    fun `typed errors`() = runBlocking {
+    fun `typed errors`() = runBlocking<Unit> {
         val c = client().api
         server.enqueue(json(409, """{"code":"mismatched_devices","message":"m","missing_devices":[{"user_id":"u","device_id":"d"}],"extra_devices":[]}"""))
         val e = assertFailsWith<ApiException.MismatchedDevices> {
@@ -86,7 +86,7 @@ class ApiClientTest {
     }
 
     @Test
-    fun `network failure is an IOException not an ApiException`() = runBlocking {
+    fun `network failure is an IOException not an ApiException`() = runBlocking<Unit> {
         val c = client().api
         server.shutdown()
         assertFailsWith<IOException> { c.me() }
@@ -94,7 +94,7 @@ class ApiClientTest {
     }
 
     @Test
-    fun `refreshes once on token_expired and retries`() = runBlocking {
+    fun `refreshes once on token_expired and retries`() = runBlocking<Unit> {
         server.enqueue(json(401, """{"code":"token_expired","message":"e"}"""))
         server.enqueue(json(200, auth("new", "r2")))
         server.enqueue(json(200, USER))
@@ -109,7 +109,7 @@ class ApiClientTest {
     }
 
     @Test
-    fun `concurrent expired requests refresh exactly once`() = runBlocking {
+    fun `concurrent expired requests refresh exactly once`() = runBlocking<Unit> {
         val refreshes = AtomicInteger()
         server.dispatcher = object : Dispatcher() {
             override fun dispatch(request: RecordedRequest): MockResponse = when {
@@ -129,13 +129,13 @@ class ApiClientTest {
     }
 
     @Test
-    fun `token_reused ends the session without retry`() = runBlocking {
+    fun `token_reused ends the session without retry`() = runBlocking<Unit> {
         server.enqueue(json(401, """{"code":"token_expired","message":"e"}"""))
         server.enqueue(json(401, """{"code":"token_reused","message":"revoked"}"""))
         val c = client()
         val event = async(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) { c.sessionEvents.first() }
         val e = assertFailsWith<ApiException.SessionEnded> { c.api.me() }
-        assertEquals("token_expired", e.code) // the original 401 surfaces; the refresh failure ended the session
+        assertEquals("session_ended", e.code) // the original 401 was token_expired, but refreshing ended the session
         assertEquals(LogoutReason.SESSION_REVOKED, tokens.loggedOutReason)
         assertNull(tokens.getTokens())
         assertEquals(2, server.requestCount)
@@ -143,7 +143,7 @@ class ApiClientTest {
     }
 
     @Test
-    fun `plain unauthorized ends the session`() = runBlocking {
+    fun `plain unauthorized ends the session`() = runBlocking<Unit> {
         server.enqueue(json(401, """{"code":"unauthorized","message":"revoked"}"""))
         val e = assertFailsWith<ApiException.SessionEnded> { client().api.me() }
         assertEquals("unauthorized", e.code)
@@ -152,7 +152,7 @@ class ApiClientTest {
     }
 
     @Test
-    fun `refresh server error keeps the session and fails as IOException`() = runBlocking {
+    fun `refresh server error keeps the session and fails as IOException`() = runBlocking<Unit> {
         server.enqueue(json(401, """{"code":"token_expired","message":"e"}"""))
         server.enqueue(MockResponse().setResponseCode(503))
         assertFailsWith<IOException> { client().api.me() }
@@ -161,7 +161,7 @@ class ApiClientTest {
     }
 
     @Test
-    fun `invalid credentials does not trigger logout logic`() = runBlocking {
+    fun `invalid credentials does not trigger logout logic`() = runBlocking<Unit> {
         server.enqueue(json(401, """{"code":"invalid_credentials","message":"bad"}"""))
         assertFailsWith<ApiException.InvalidCredentials> { client().api.login(LoginRequest("a", "b", "c")) }
         assertEquals(1, server.requestCount)
@@ -169,7 +169,7 @@ class ApiClientTest {
     }
 
     @Test
-    fun `update calls send explicit null only when asked`() = runBlocking {
+    fun `update calls send explicit null only when asked`() = runBlocking<Unit> {
         val api = client().api
         server.enqueue(json(200, USER)); server.enqueue(json(200, USER))
         api.updateMe(displayName = "Anna B")
@@ -179,7 +179,7 @@ class ApiClientTest {
     }
 
     @Test
-    fun `get keys sends optional device filter`() = runBlocking {
+    fun `get keys sends optional device filter`() = runBlocking<Unit> {
         val api = client().api
         server.enqueue(json(200, """{"user_id":"u","devices":[]}""")); server.enqueue(json(200, """{"user_id":"u","devices":[]}"""))
         api.getKeys("u"); api.getKeys("u", "dev")
@@ -188,10 +188,10 @@ class ApiClientTest {
     }
 
     @Test
-    fun `streaming upload sends checksum and exact bytes`() = runBlocking {
+    fun `streaming upload sends checksum and exact bytes`() = runBlocking<Unit> {
         server.enqueue(json(201, """{"id":"a1","purpose":"message","content_type":"application/octet-stream","size":300000,"sha256":"x","created_at":1}"""))
         val data = ByteArray(300_000) { (it * 31).toByte() }
-        val f = File.createTempFile("up", ".bin").apply { writeBytes(data); deleteOnExit() }
+        val f = File.createTempFile("upl", ".bin").apply { writeBytes(data); deleteOnExit() }
         val sha = MessageDigest.getInstance("SHA-256").digest(data).joinToString("") { "%02x".format(it) }
         var progress = 0L
         val up = client().api.uploadAttachment(StreamingRequestBody.of(f) { progress = it }, sha256Hex = sha)
@@ -206,9 +206,9 @@ class ApiClientTest {
     }
 
     @Test
-    fun `download resumes with a range request`() = runBlocking {
+    fun `download resumes with a range request`() = runBlocking<Unit> {
         val data = ByteArray(100_000) { (it % 251).toByte() }
-        val f = File.createTempFile("dl", ".part").apply { deleteOnExit() }
+        val f = File.createTempFile("dwn", ".part").apply { deleteOnExit() }
         val api = client().api
 
         server.enqueue(MockResponse().setResponseCode(200).setBody(Buffer().write(data)))

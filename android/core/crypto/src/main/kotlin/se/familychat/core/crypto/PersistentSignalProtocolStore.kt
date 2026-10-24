@@ -181,6 +181,9 @@ class PersistentSignalProtocolStore(private val storage: ProtocolStorage) : Sign
         }
     }
 
+    /** True if any session record (even an archived one) is stored for the device. */
+    fun hasSessionRecord(userId: String, deviceNumber: Int): Boolean = storage.loadSession(userId, deviceNumber) != null
+
     override fun deleteSession(address: SignalProtocolAddress) = storage.deleteSession(address.name, address.deviceId)
     override fun deleteAllSessions(name: String) = storage.deleteAllSessions(name)
 

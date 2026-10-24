@@ -34,10 +34,10 @@ class TestClient(
     suspend fun signUp(): Account =
         engine.redeemInvite("https://fake.example", "CODE", name, "password-$name", name.replaceFirstChar { it.uppercase() })
 
-    suspend fun userId() = engine.account.value!!.userId
+    fun userId() = engine.account.value!!.userId
 
     /** The device list of this account as the server knows it. */
-    suspend fun deviceIdOnServer() = engine.account.value!!.deviceId
+    fun deviceIdOnServer() = engine.account.value!!.deviceId
 
     suspend fun messages(conversationId: String) = store.getMessages(conversationId, 1000)
     suspend fun texts(conversationId: String) = messages(conversationId).filter { !it.isSystem }.map { it.text }

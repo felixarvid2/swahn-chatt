@@ -165,16 +165,19 @@ class KeyManager(
         PqPreKeyDto(it.id, b64(it.keyPair.publicKey.serialize()), b64(it.signature))
     }
 
-    /** Drops signed prekeys and last-resort Kyber keys that were superseded more than [RETENTION_MS] ago. */
+    /**
+     * Drops signed prekeys and last-resort Kyber keys that were superseded (replaced by a newer one) more than
+     * [RETENTION_MS] ago, so messages that were already in flight at rotation time still decrypt.
+     */
     private fun pruneOldKeys(now: Long) {
-        val curSigned = currentSignedPreKey()?.id
-        store.loadSignedPreKeys().filter { it.id != curSigned && now - it.timestamp > ROTATION_MS + RETENTION_MS }
-            .forEach { store.removeSignedPreKey(it.id) }
-        val curKyber = currentLastResort()?.id
-        storage.loadKyberPreKeys().filter { it.lastResort && it.id != curKyber }
-            .map { KyberPreKeyRecord(it.record) }
-            .filter { now - it.timestamp > ROTATION_MS + RETENTION_MS }
-            .forEach { storage.removeKyberPreKey(it.id) }
+        val signed = store.loadSignedPreKeys().sortedBy { it.timestamp }
+        for (i in 0 until signed.size - 1) {
+            if (now - signed[i + 1].timestamp > RETENTION_MS) store.removeSignedPreKey(signed[i].id)
+        }
+        val kyber = storage.loadKyberPreKeys().filter { it.lastResort }.map { KyberPreKeyRecord(it.record) }.sortedBy { it.timestamp }
+        for (i in 0 until kyber.size - 1) {
+            if (now - kyber[i + 1].timestamp > RETENTION_MS) storage.removeKyberPreKey(kyber[i].id)
+        }
     }
 
     companion object {

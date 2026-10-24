@@ -4,11 +4,11 @@ kotlin = "2.2.21"
 ksp = "2.2.21-2.0.5"
 hilt = "2.57.2"
 androidxHilt = "1.2.0"
-composeBom = "2025.10.01"
-activityCompose = "1.11.0"
+composeBom = "2025.06.01"
+activityCompose = "1.10.1"
 lifecycle = "2.9.4"
 navigationCompose = "2.9.5"
-coreKtx = "1.17.0"
+coreKtx = "1.16.0"
 room = "2.8.1"
 sqlcipher = "4.9.0"
 sqliteKtx = "2.5.2"
@@ -22,6 +22,7 @@ unifiedpush = "3.0.10"
 libsignal = "0.86.5"
 coil = "2.7.0"
 junit = "4.13.2"
+desugar = "2.1.5"
 
 [libraries]
 # Signal protocol: JVM build (tests, compileOnly in :core:crypto) and Android build (app)
@@ -69,6 +70,7 @@ unifiedpush-connector = { module = "org.unifiedpush.android:connector", version.
 coil-compose = { module = "io.coil-kt:coil-compose", version.ref = "coil" }
 
 junit = { module = "junit:junit", version.ref = "junit" }
+desugar-jdk-libs = { module = "com.android.tools:desugar_jdk_libs", version.ref = "desugar" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
