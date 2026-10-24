@@ -53,8 +53,19 @@ Risks of libsignal that we accept and mitigate:
   Pairwise fan-out costs O(devices) per message, which is trivial at family size. Signal-style Sender Keys or
   MLS can replace it later without changing the server model.
 - **Content format** (inside the ciphertext): versioned JSON, padded to a multiple of 160 bytes:
-  `{"v":1, "type":"text|edit|...", "text":..., "attachments":[{"id","key","sha256","size","mime","name",
-  "kind":"image|video|voice|file","width","height","duration_ms","thumbnail"}], "reply_to":...}`.
+  `{"v":2, "type":"text|edit|delete", "conversation_id", "message_id", "target_message_id" (edit/delete),
+  "text":..., "attachments":[{"id","key","sha256","size","mime","name","kind":"image|video|voice|file",
+  "width","height","duration_ms","thumbnail"}], "reply_to":...}`.
+- **Content is bound to its context.** Everything the server says about a message (`sender_user_id`,
+  `sender_device_id`, `conversation_id`, message id, `target_message_id`) is an untrusted claim. After decrypting,
+  the client requires the conversation, message and target ids inside the content to equal the outer fields, the
+  sender device to be listed under the claimed sender, and the sender to be a member of the conversation.
+  Otherwise the message is dropped. So the server cannot move a private message into a group, re-aim an edit, or
+  relabel who sent something.
+- **Edits and deletes are authenticated.** Both are sent as encrypted content to every device. A client applies
+  them only after decrypting content from the original author that names the target. Envelope-less edit or delete
+  events (which only the server could produce) are ignored, so the server cannot wipe or rewrite messages on
+  the phones. It can still withhold or drop ciphertext.
 - **Attachments** are encrypted on the phone with Google Tink streaming AEAD (`AES256_GCM_HKDF_4KB`) under a
   fresh random 32-byte key per file, then uploaded. The key, the ciphertext SHA-256, the real MIME type and the
   file name travel only inside the Signal-encrypted message. The server therefore cannot validate MIME types of
@@ -64,12 +75,26 @@ Risks of libsignal that we accept and mitigate:
 
 ## Identity verification
 
-- Each device's identity key is trusted on first use and pinned locally. If a known device's key changes the
-  message is rejected (libsignal `UntrustedIdentityException`) and the conversation shows a warning.
-- When a contact adds a device (new phone, reinstall), the conversation shows "Anna added a new device".
-- **Safety numbers:** the contact screen shows a 60-digit libsignal fingerprint per contact device; compare it
-  in person or on a call and mark it verified. A later change of a verified device's key is blocked until the
-  user re-verifies.
+- **Trust is per device UUID.** Sessions and identity pins are addressed by the device's immutable id
+  (`<userId>/<deviceUuid>`), never by the server-assigned device number, which is display-only. A device is pinned
+  (owner + identity key) the first time it appears in a device list. A later list, key bundle or prekey message
+  showing another key or another owner for that id is an identity change: sending and receiving with that device
+  stop, the conversation shows a warning, and the user must accept explicitly. An accept is refused unless the key
+  matches the server's current device list. libsignal's own trust-on-first-use is disabled: an unpinned device
+  is never trusted.
+- **Every new device is announced.** One code path compares device lists. After the first fetch of a user (the
+  baseline), every device not seen before produces "Anna added a new device" in every conversation with that user.
+  This also covers devices learned through a `409 mismatched_devices` or as the sender of a message, and devices
+  that reappear after the list was emptied. A new device on **your own account** shows up in all conversations.
+- **New devices are held back where it matters.** If you have marked any of a contact's devices as verified,
+  a new device of that contact gets nothing (no sends, its messages are held unread) until you approve it on the
+  safety-number screen. The same applies to every new device on your own account. When you log in on a second
+  phone, approve it on the old one (Inställningar → Säkerhetsnummer för mina enheter). Without this, a server could
+  silently add a listening device.
+- **Group membership changes are announced** ("X was added", "X left") in the conversation, so a server that adds
+  an account to a group cannot do it unnoticed. Membership itself is still server-controlled metadata.
+- **Safety numbers:** the contact screen shows a 60-digit libsignal fingerprint per contact device (computed over
+  device UUIDs). Compare it in person or on a call and mark it verified.
 
 ## Keys on the phone
 
@@ -77,6 +102,10 @@ Risks of libsignal that we accept and mitigate:
   with SQLCipher. Its 256-bit passphrase is generated once and stored wrapped by an AES-GCM key in the Android
   Keystore (hardware-backed where available, non-exportable).
 - Access and refresh tokens are stored in the same encrypted database.
+- The database is wiped only when the Keystore key is conclusively lost (missing alias, permanently invalidated
+  key, failed GCM tag). A temporary Keystore error shows a retry screen instead.
+- Attachment file names come from other people. They are sanitised (no path separators, leading dots, control or
+  bidi characters) before a file is written for sharing.
 - Backups by Android are disabled for app data (`android:allowBackup="false"`, data-extraction rules exclude
   everything), so keys never land in Google Drive.
 
@@ -158,7 +187,13 @@ metadata and password hashes.
 
 - Metadata (who, when, group names and members, receipts, sizes) is visible to the server.
 - No sealed sender, no encrypted group metadata, no reproducible builds.
-- Safety-number verification is manual.
+- Safety-number verification is manual (no QR scanning yet).
+- The first device list fetched for a user, and the first view of a conversation's members, are accepted as the
+  baseline without a notice. A server that is already malicious at that moment is not detected unless you
+  compare safety numbers.
+- A server can withhold, delay or drop messages, and can show a message as deleted before you received it (a
+  tombstone without content). It cannot forge, edit, delete or re-route content you did receive.
+- Display names, avatars and device names shown in notices are server data.
 - No message history transfer between devices.
 - Rate limiting (including the per-username login counters) is per-process memory and resets on restart.
 - The security review in `HANDOVER.md` lists what was tested and what still needs an external review.

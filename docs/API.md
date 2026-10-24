@@ -49,6 +49,10 @@ The running server also serves a generated OpenAPI document at `/api/v1/openapi.
 
 `direct` conversations have exactly two members and `name: null`; the client shows the other person's name.
 
+Clients identify devices by `id`. `Device.number` and `device_number` in key bundles are informational only.
+All sender, conversation and target fields on message events are claims that clients check against the decrypted
+content (see SECURITY.md, "Content is bound to its context").
+
 ## Health
 
 | Method | Path | Result |
@@ -186,7 +190,7 @@ nothing on the server side; their devices are excluded from future envelopes.
   same message `id`.
 - `kind: "edit"` and `kind: "delete"` need `target_message_id` naming a non-deleted message by the same sender
   in the same conversation. Both carry envelopes for the full device set, like a normal message: an edit holds
-  the new encrypted content, a delete holds an encrypted `{"type":"delete"}` content. Recipients apply a delete
+  the new encrypted content, a delete holds an encrypted `{"v":2,"type":"delete","conversation_id","message_id","target_message_id"}` content. Recipients apply a delete
   only after decrypting it, so the server cannot forge one. The server marks the target deleted and drops its
   undelivered ciphertexts. Deletes carry no attachments.
 - `attachment_ids` must be `message` attachments uploaded by the sender. Members of the conversation may then

@@ -1,25 +1,25 @@
 # FamilyChat handover
 
-Last updated: 2026-10-24. Branch `ccr-187bef76-iz1nsw`, PR #54 in felixarvid2/test.
+Last updated: 2026-10-24. Branch `ccr-187bef76-iz1nsw` (PR #54 merged; security fixes on top).
 
 ## State in one paragraph
 
 The code for all phases is written: backend, Docker deployment, the Android core modules and the Android app. Real
 end-to-end encrypted messaging between independent clients is proven by automated tests against a real running
-backend. **Nothing has been run on a physical phone, an emulator or a Raspberry Pi yet**, and there has been no
-external security review. The build is therefore **not production-ready**. It has no "insecure" plaintext mode:
+backend. **Nothing has been run on a physical phone, an emulator or a Raspberry Pi yet.** An internal security
+review has been done and its findings are fixed (below); an external review has not. The build is therefore **not production-ready**. It has no "insecure" plaintext mode:
 E2EE is on from the first build, and the server rejects nothing but also understands nothing about message content.
 
 ## Verified (actually executed in this session)
 
 | Check | Result |
 |---|---|
-| Backend pytest (`backend/`, `.venv/bin/python -m pytest`) | 121 passed: auth, invitations, rate limits, admin removal, conversation authorization, group membership changes, keys, delivery, duplicate suppression, concurrent sends, offline sync, edits/deletes, receipts, attachments (limits, quota, checksum, unauthorized access, Range), push (content-free, host allow-list), migrations (upgrade, empty autogenerate diff, downgrade), backup/restore (including corrupted archives), plaintext-free storage |
+| Backend pytest (`backend/`, `.venv/bin/python -m pytest`) | 189 passed: auth, invitations, rate limits, admin removal, conversation authorization, group membership changes, keys, delivery, duplicate suppression, concurrent sends, offline sync, edits/deletes, receipts, attachments (limits, quota, checksum, unauthorized access, Range), push (content-free, host allow-list), migrations (upgrade, empty autogenerate diff, downgrade), backup/restore (including corrupted archives), plaintext-free storage |
 | `ruff check` / `ruff format` | clean |
 | `pip-audit -r requirements.txt` | no known vulnerabilities |
 | Docker image (amd64) | builds, runs as non-root, migrates on start, healthy; compose restart and down/up keep data; `backup.sh`/`restore.sh` round-trip; Caddy (TLS + WebSocket) and ntfy profiles start |
-| Android `./gradlew build` | passes, including lint and R8 `assembleRelease`. Unit tests: `:core:model` 11, `:core:network` 32, `:core:crypto` 36 (real libsignal on the JVM: sessions, multi-device, out-of-order, corrupted/truncated/garbage ciphertext, replay, identity change, padding, attachment tamper/wrong key, safety numbers), `:core:client` 36, `:app` 154 (Room store contracts, transactions, token storage, Keystore vault logic, notifications, ViewModels, Robolectric screenshots) |
-| `android/scripts/run-e2e.sh` | `TwoUserEndToEndTest` 7/7 and `RoomEngineE2ETest` 1/1 against a real backend. These cover real-time delivery both ways, receipts, edit/delete, 30-message offline catch-up without duplicates, an idempotent duplicate send, an encrypted attachment round-trip, group member removal, a second device, and a raw scan of the server's SQLite file + WAL that finds no plaintext |
+| Android `./gradlew build` | passes, including lint and R8 `assembleRelease`. Unit tests: `:core:model` 12, `:core:network` 32, `:core:crypto` 42 (real libsignal on the JVM: sessions, multi-device, out-of-order, corrupted/truncated/garbage ciphertext, replay, identity change, padding, attachment tamper/wrong key, safety numbers), `:core:client` 59 (incl. 24 malicious-server attack tests), `:app` 166 (Room store contracts, transactions, token storage, Keystore vault logic, notifications, ViewModels, Robolectric screenshots) |
+| `android/scripts/run-e2e.sh` | `TwoUserEndToEndTest` 8/8 (incl. encrypted delete) and `RoomEngineE2ETest` 1/1 against a real backend. These cover real-time delivery both ways, receipts, edit/delete, 30-message offline catch-up without duplicates, an idempotent duplicate send, an encrypted attachment round-trip, group member removal, a second device, and a raw scan of the server's SQLite file + WAL that finds no plaintext |
 | APKs | debug `android/app/build/outputs/apk/debug/app-debug.apk` (51 MB), release `.../release/app-release.apk` (29 MB, R8, signed with the debug key) |
 
 ## Not verified
@@ -51,6 +51,26 @@ E2EE is on from the first build, and the server rejects nothing but also underst
 7. Decrypt and the message write run in one Room transaction, so a crash cannot lose a message whose ratchet
    step was already stored.
 
+## Security review (2026-10-24)
+
+Two independent reviews were run: the client assumed a malicious server, the backend assumed outside attackers,
+malicious members and revoked devices. Everything found is fixed and covered by tests:
+
+- **Critical (client):** trust was tied to the server-assigned device number, so a server could silently insert
+  or swap devices (a MITM, even for verified contacts). Now trust is per device UUID with pinned keys. Every new
+  device is announced, and new devices of verified contacts and of your own account are blocked until approved.
+- **Client (medium):** content is now bound to its conversation and message id. Deletes are encrypted and
+  authenticated. Group member changes are announced.
+- **Client (low):** send-side identity changes are surfaced; attachment names are sanitised for sharing; a
+  transient Keystore error no longer wipes the database.
+- **Backend:** an unauthenticated memory DoS via the JSON body-limit exemption; Argon2 running under the SQLite
+  write lock; refresh reuse detection escaped by double rotation; one-time prekey draining; no per-account
+  password-guess limit; WebSocket flooding and a revocation race; push allow-list failing open; tokens in logs;
+  unchecked attachment paths; Docker hardening.
+
+Behaviour change to know: after logging in on a second phone, approve it on the first one
+(Inställningar → Säkerhetsnummer för mina enheter) before the first phone sends to it.
+
 ## Known limitations and outstanding issues
 
 - Metadata is visible to the server: who, when, group names and members, receipts and sizes. Group names and
@@ -59,7 +79,10 @@ E2EE is on from the first build, and the server rejects nothing but also underst
   history export/import is the next feature to build.
 - Safety numbers are per device and manual. There is no QR scanning UI yet; the scannable bytes are computed but
   not rendered.
-- Rate limits live in process memory and reset on restart.
+- Rate limits (including per-username login lockout) live in process memory and reset on restart. Anyone who
+  knows a username can block new logins to it for up to an hour.
+- The first device list per user is an unverified baseline; compare safety numbers to rule out a server that
+  was malicious from the start.
 - Delivered ciphertext stays in the server DB. Pruning delivered envelopes is a cheap hardening step.
 - A permanently rejected edit or delete can leave the local view diverged. Normal messages get FAILED + retry.
 - Notifications are not updated when a message is edited. GIFs are sent as still JPEGs. A voice recording is
@@ -76,6 +99,6 @@ E2EE is on from the first build, and the server rejects nothing but also underst
    and the nightly backup timer. Run a restore drill.
 3. Test notification delivery with the app closed and the phone idle (`adb shell dumpsys deviceidle force-idle`).
 4. Create a real release keystore (kept out of git) and build a signed release.
-5. Get a security review of the crypto integration (`android/core/crypto`, `SyncProcessor`, `SendPipeline`) and
-   the server authorization code.
+5. Get an external security review of the crypto integration (`android/core/crypto`, `DeviceDirectory`,
+   `SyncProcessor`, `SendPipeline`) and the server authorization code.
 6. Then decide on production readiness. The open items above must be accepted or fixed first.

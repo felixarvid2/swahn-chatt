@@ -266,6 +266,7 @@ fun errorTexts(): (UiError) -> String {
                     UiError.NETWORK -> R.string.error_network
                     UiError.INVALID_CREDENTIALS -> R.string.error_invalid_credentials
                     UiError.USERNAME_TAKEN -> R.string.error_username_taken
+                    UiError.DEVICE_LIMIT -> R.string.error_device_limit
                     UiError.INVALID_INVITE -> R.string.error_invalid_invite
                     UiError.RATE_LIMITED -> R.string.error_rate_limited
                     UiError.FORBIDDEN -> R.string.error_forbidden

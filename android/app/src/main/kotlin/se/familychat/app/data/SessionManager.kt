@@ -40,14 +40,18 @@ sealed interface SessionState {
 
 /** What went wrong in a way the UI can word. */
 enum class UiError {
-    NETWORK, INVALID_CREDENTIALS, USERNAME_TAKEN, INVALID_INVITE, RATE_LIMITED, FORBIDDEN, TOO_LARGE, INVALID_INPUT,
+    NETWORK, INVALID_CREDENTIALS, USERNAME_TAKEN, INVALID_INVITE, RATE_LIMITED, FORBIDDEN, TOO_LARGE, INVALID_INPUT, DEVICE_LIMIT,
     SESSION_ENDED, SERVER, INSECURE_URL, UNKNOWN,
 }
 
 fun Throwable.toUiError(): UiError = when (this) {
     is ApiException.InvalidCredentials -> UiError.INVALID_CREDENTIALS
     is ApiException.NotFound -> if (code == "invalid_invite") UiError.INVALID_INVITE else UiError.UNKNOWN
-    is ApiException.Conflict -> if (code == "username_taken") UiError.USERNAME_TAKEN else UiError.UNKNOWN
+    is ApiException.Conflict -> when (code) {
+        "username_taken" -> UiError.USERNAME_TAKEN
+        "device_limit" -> UiError.DEVICE_LIMIT
+        else -> UiError.UNKNOWN
+    }
     is ApiException.RateLimited -> UiError.RATE_LIMITED
     is ApiException.Forbidden -> UiError.FORBIDDEN
     is ApiException.PayloadTooLarge -> UiError.TOO_LARGE

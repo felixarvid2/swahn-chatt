@@ -44,6 +44,7 @@ class LoginValidationTest {
     @Test fun `exceptions map to the messages shown to the user`() {
         assertEquals(UiError.INVALID_CREDENTIALS, ApiException.InvalidCredentials("x").toUiError())
         assertEquals(UiError.INVALID_INVITE, ApiException.NotFound("invalid_invite", "x").toUiError())
+        assertEquals(UiError.DEVICE_LIMIT, ApiException.Conflict("device_limit", "x").toUiError())
         assertEquals(UiError.USERNAME_TAKEN, ApiException.Conflict("username_taken", "x").toUiError())
         assertEquals(UiError.RATE_LIMITED, ApiException.RateLimited("x", 30).toUiError())
         assertEquals(UiError.TOO_LARGE, ApiException.PayloadTooLarge("payload_too_large", "x").toUiError())

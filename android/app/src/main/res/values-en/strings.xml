@@ -84,6 +84,7 @@
     <string name="error_username_taken">That username is taken.</string>
     <string name="error_invalid_invite">The invitation code is invalid, used or expired.</string>
     <string name="error_rate_limited">Too many attempts. Wait a moment and try again.</string>
+    <string name="error_device_limit">The account already has the maximum number of devices. Remove one in the settings on another phone, then log in again.</string>
     <string name="error_forbidden">You are not allowed to do that.</string>
     <string name="error_too_large">The file is too large. The limit is 100 MB.</string>
     <string name="error_invalid_input">The input was not accepted. Check it and try again.</string>

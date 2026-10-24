@@ -84,6 +84,7 @@
     <string name="error_username_taken">Användarnamnet är upptaget.</string>
     <string name="error_invalid_invite">Inbjudningskoden är ogiltig, använd eller utgången.</string>
     <string name="error_rate_limited">För många försök. Vänta en stund och försök igen.</string>
+    <string name="error_device_limit">Kontot har redan så många enheter som tillåts. Ta bort en enhet i inställningarna på en annan telefon och logga in igen.</string>
     <string name="error_forbidden">Du har inte behörighet till det här.</string>
     <string name="error_too_large">Filen är för stor. Gränsen är 100 MB.</string>
     <string name="error_invalid_input">Uppgifterna kunde inte godkännas. Kontrollera dem och försök igen.</string>
