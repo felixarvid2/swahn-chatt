@@ -57,6 +57,22 @@ interface StoreDao {
     @Upsert suspend fun putDraft(d: DraftEntity)
     @Query("DELETE FROM drafts WHERE conversationId = :id") suspend fun deleteDraft(id: String)
 
+    // --- pinned / muted / archived (local only) -------------------------------------------------------------------
+    @Query("SELECT * FROM conversation_settings WHERE conversationId = :id") suspend fun settings(id: String): ConversationSettingsEntity?
+    @Upsert suspend fun putSettings(s: ConversationSettingsEntity)
+    @Query("DELETE FROM conversation_settings WHERE conversationId = :id") suspend fun deleteSettings(id: String)
+
+    /** Drops the row when nothing is set any more (the defaults need no row). */
+    @Query("DELETE FROM conversation_settings WHERE conversationId = :id AND pinnedAt IS NULL AND mutedUntil = 0 AND archived = 0")
+    suspend fun deleteSettingsIfDefault(id: String)
+
+    @Query("SELECT COUNT(*) FROM conversation_settings WHERE pinnedAt IS NOT NULL AND conversationId != :except")
+    suspend fun pinnedCountExcept(except: String): Int
+
+    /** A new incoming message brings an archived conversation back, unless it is muted. */
+    @Query("UPDATE conversation_settings SET archived = 0 WHERE conversationId = :id AND archived = 1 AND mutedUntil <= :now")
+    suspend fun unarchiveUnlessMuted(id: String, now: Long)
+
     @Query(
         "SELECT COUNT(*) FROM messages m WHERE m.conversationId = :id AND m.outgoing = 0 AND m.deleted = 0 " +
             "AND m.systemType IS NULL AND COALESCE(m.seq, 0) > COALESCE((SELECT myReadSeq FROM conversations WHERE id = :id), 0)",
@@ -68,7 +84,11 @@ interface StoreDao {
 
     // --- messages -------------------------------------------------------------------------------------------------
     @Query("SELECT * FROM messages WHERE id = :id") suspend fun message(id: String): MessageEntity?
-    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putMessage(m: MessageEntity)
+    /**
+     * Insert or update by id. Not `REPLACE`: SQLite's REPLACE deletes the old row without firing the delete trigger and
+     * gives the new row another rowid, which would leave the old text in the search index (`message_fts`).
+     */
+    @Upsert suspend fun putMessage(m: MessageEntity)
 
     @Query(
         "SELECT * FROM (SELECT * FROM messages WHERE conversationId = :conversationId " +
@@ -170,6 +190,19 @@ data class ConversationOverviewRow(
     val lastMessageAt: Long?,
     val updatedAt: Long,
     val unread: Int,
+    val pinnedAt: Long?,
+    val mutedUntil: Long,
+    val archived: Boolean,
+)
+
+/** A message found by the search (the text is the decrypted one; highlighting is done by the caller). */
+data class SearchHitRow(
+    val messageId: String,
+    val conversationId: String,
+    val text: String,
+    val time: Long,
+    val outgoing: Boolean,
+    val senderUserId: String,
 )
 
 /** Newest message of a conversation (id, who wrote it), for "stay at the bottom" decisions. */
@@ -188,8 +221,10 @@ interface UiDao {
         "SELECT c.id AS id, c.type AS type, c.name AS name, c.avatarAttachmentId AS avatarAttachmentId, " +
             "c.lastMessageAt AS lastMessageAt, c.updatedAt AS updatedAt, " +
             "(SELECT COUNT(*) FROM messages m WHERE m.conversationId = c.id AND m.outgoing = 0 AND m.deleted = 0 " +
-            "AND m.systemType IS NULL AND COALESCE(m.seq, 0) > c.myReadSeq) AS unread " +
-            "FROM conversations c ORDER BY COALESCE(c.lastMessageAt, c.updatedAt) DESC, c.id",
+            "AND m.systemType IS NULL AND COALESCE(m.seq, 0) > c.myReadSeq) AS unread, " +
+            "s.pinnedAt AS pinnedAt, COALESCE(s.mutedUntil, 0) AS mutedUntil, COALESCE(s.archived, 0) AS archived " +
+            "FROM conversations c LEFT JOIN conversation_settings s ON s.conversationId = c.id " +
+            "ORDER BY COALESCE(c.lastMessageAt, c.updatedAt) DESC, c.id",
     )
     fun observeOverview(): Flow<List<ConversationOverviewRow>>
 
@@ -254,6 +289,20 @@ interface UiDao {
             "OR (m.clientTs = t.clientTs AND m.id > t.id))))",
     )
     suspend fun newerThan(conversationId: String, messageId: String): Int
+
+    /**
+     * Full-text search; [query] is an FTS4 expression built by `SearchQuery.toMatch` (never raw user input). Newest first;
+     * deleted messages and system notices are not hits ([conversationId] null: all conversations).
+     */
+    @Query(
+        "SELECT m.id AS messageId, m.conversationId AS conversationId, m.text AS text, " +
+            "COALESCE(m.serverTs, m.clientTs) AS time, m.outgoing AS outgoing, m.senderUserId AS senderUserId " +
+            "FROM messages m JOIN message_fts ON message_fts.docid = m.rowid " +
+            "WHERE message_fts MATCH :query AND m.deleted = 0 AND m.systemType IS NULL AND m.text IS NOT NULL " +
+            "AND (:conversationId IS NULL OR m.conversationId = :conversationId) " +
+            "ORDER BY COALESCE(m.serverTs, m.clientTs) DESC, m.id LIMIT :limit",
+    )
+    suspend fun search(query: String, conversationId: String?, limit: Int): List<SearchHitRow>
 
     @Query("SELECT conversationId, text FROM drafts") fun observeDrafts(): Flow<List<DraftRow>>
 

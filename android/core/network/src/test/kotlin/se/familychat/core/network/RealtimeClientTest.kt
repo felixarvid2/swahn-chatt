@@ -80,8 +80,12 @@ class RealtimeClientTest {
         assertEquals("Bearer t1", server.takeRequest().getHeader("Authorization"))
         assertEquals(RealtimeState.CONNECTED, rt.state.value)
 
+        // Subscribe before the server sends: frames is a hot flow without replay.
+        val typingFrame = async(start = CoroutineStart.UNDISPATCHED) {
+            rt.frames.filterIsInstance<ServerFrame.Typing>().first()
+        }
         serverSockets.poll(2, TimeUnit.SECONDS)!!.send("""{"type":"typing","conversation_id":"c","user_id":"u","state":"start"}""")
-        val typing = withTimeout(5000) { rt.frames.filterIsInstance<ServerFrame.Typing>().first() }
+        val typing = withTimeout(5000) { typingFrame.await() }
         assertEquals(TypingState.START, typing.state)
 
         assertTrue(rt.sendTyping("c", TypingState.STOP))
