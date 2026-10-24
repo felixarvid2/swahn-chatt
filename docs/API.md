@@ -179,8 +179,10 @@ nothing on the server side; their devices are excluded from future envelopes.
   "extra_devices": [{"user_id", "device_id"}]}`. The client refreshes device lists/keys and retries with the
   same message `id`.
 - `kind: "edit"` and `kind: "delete"` need `target_message_id` naming a non-deleted message by the same sender
-  in the same conversation. `delete` carries no envelopes (`[]`); the server marks the target deleted and
-  drops its undelivered ciphertexts. `edit` carries envelopes with the new encrypted content.
+  in the same conversation. Both carry envelopes for the full device set, like a normal message: an edit holds
+  the new encrypted content, a delete holds an encrypted `{"type":"delete"}` content. Recipients apply a delete
+  only after decrypting it, so the server cannot forge one. The server marks the target deleted and drops its
+  undelivered ciphertexts. Deletes carry no attachments.
 - `attachment_ids` must be `message` attachments uploaded by the sender. Members of the conversation may then
   download them.
 - Idempotency: the message `id` is the idempotency key. Re-sending an `id` already stored for the same sender

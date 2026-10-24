@@ -72,8 +72,8 @@ def send(db: Session, p: Principal, req: SendMessage) -> tuple[dict, bool]:
         raise invalid("target_message_id is only for edit and delete")
     if req.kind != "message" and not req.target_message_id:
         raise invalid("target_message_id is required for edit and delete")
-    if req.kind == "delete" and (req.envelopes or req.attachment_ids):
-        raise invalid("a delete carries no envelopes or attachments")
+    if req.kind == "delete" and req.attachment_ids:
+        raise invalid("a delete carries no attachments")
 
     target = None
     if req.target_message_id:
@@ -88,10 +88,8 @@ def send(db: Session, p: Principal, req: SendMessage) -> tuple[dict, bool]:
             raise conflict("target message already deleted")
 
     member_ids = conversation_member_ids(db, conv.id)
-    if req.kind == "delete":
-        recipients = [(d, u) for d, u in keyed_device_rows(db, member_ids) if d != p.device_id]
-    else:
-        recipients = _check_device_set(db, member_ids, p.device_id, req)
+    # Deletes carry encrypted envelopes too, so recipients can authenticate them (the server cannot forge one).
+    recipients = _check_device_set(db, member_ids, p.device_id, req)
 
     if req.attachment_ids:
         found = {a.id: a for a in db.scalars(select(Attachment).where(Attachment.id.in_(req.attachment_ids)))}
@@ -128,7 +126,7 @@ def send(db: Session, p: Principal, req: SendMessage) -> tuple[dict, bool]:
     else:
         target.deleted_at = now
         # Drop ciphertext nobody has fetched yet (the target and edits of it).
-        edit_ids = select(Message.id).where(Message.target_message_id == target.id)
+        edit_ids = select(Message.id).where(Message.target_message_id == target.id, Message.kind == "edit")
         db.execute(
             delete(MessageEnvelope).where(
                 MessageEnvelope.delivered_at.is_(None),

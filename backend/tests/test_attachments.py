@@ -61,7 +61,7 @@ def test_deleted_message_revokes_member_access(factory, alice, bob):
     cid = factory.direct(alice, bob)
     mid = alice.send(cid, "file", attachment_ids=[att["id"]]).json()["message"]["id"]
     assert bob.get(f"/attachments/{att['id']}").status_code == 200
-    alice.send(cid, "", kind="delete", target_message_id=mid, envelopes=[])
+    alice.send(cid, "", kind="delete", target_message_id=mid)
     assert bob.get(f"/attachments/{att['id']}").status_code == 404
     assert alice.get(f"/attachments/{att['id']}").status_code == 200
 

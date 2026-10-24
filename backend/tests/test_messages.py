@@ -228,7 +228,7 @@ def test_edit_and_delete_authorization(factory, alice, bob):
         return actor.send(cid, text, kind=kind, target_message_id=target, **kw)
 
     assert edit(bob, mid).status_code == 403
-    assert edit(bob, mid, kind="delete", envelopes=[]).status_code == 403
+    assert edit(bob, mid, kind="delete").status_code == 403
     assert edit(alice, str(uuid.uuid4())).status_code == 404
     assert alice.send(cid, "x", kind="edit").status_code == 422  # target required
     assert alice.send(cid, "x", target_message_id=mid).status_code == 422  # target only for edit/delete
@@ -256,17 +256,18 @@ def test_edit_and_delete_authorization(factory, alice, bob):
     )
     assert foreign.status_code == 404  # target must be in the same conversation
 
-    # delete: no envelopes allowed; undelivered ciphertext is dropped
-    assert edit(alice, mid, kind="delete").status_code == 422  # carries envelopes by default helper
-    d = edit(alice, mid, kind="delete", envelopes=[])
+    # delete: needs envelopes for every device (authenticated by the recipients); undelivered ciphertext is dropped
+    assert edit(alice, mid, kind="delete", envelopes=[]).status_code == 409  # mismatched_devices
+    d = edit(alice, mid, kind="delete")
     assert d.status_code == 201 and d.json()["message"]["kind"] == "delete"
     page = bob.events("message")
     by_id = {e["data"]["id"]: e["data"] for e in page}
     assert by_id[mid]["deleted"] is True and by_id[mid]["envelope"] is None
     assert [e for e in page if e["data"]["kind"] == "edit"] == []  # undelivered edit of a deleted message
-    assert any(e["data"]["kind"] == "delete" and e["data"]["target_message_id"] == mid for e in page)
+    dels = [e["data"] for e in page if e["data"]["kind"] == "delete"]
+    assert len(dels) == 1 and dels[0]["target_message_id"] == mid and dels[0]["envelope"]["body"]
     assert bob.get(f"/conversations/{cid}").json()["unread_count"] == 0
-    assert edit(alice, mid, kind="delete", envelopes=[]).status_code == 409  # already deleted
+    assert edit(alice, mid, kind="delete").status_code == 409  # already deleted
     hist = {m["id"]: m for m in bob.get(f"/conversations/{cid}/messages").json()}
     assert hist[mid]["deleted"] is True
 
@@ -274,7 +275,7 @@ def test_edit_and_delete_authorization(factory, alice, bob):
 def test_delete_leaves_no_ciphertext_for_target(factory, alice, bob, app):
     cid = factory.direct(alice, bob)
     mid = alice.send(cid, "secret").json()["message"]["id"]
-    alice.send(cid, "", kind="delete", target_message_id=mid, envelopes=[])
+    alice.send(cid, "", kind="delete", target_message_id=mid)
     with app.state.session_factory() as db:
         assert db.query(MessageEnvelope).filter_by(message_id=mid).count() == 0
 
