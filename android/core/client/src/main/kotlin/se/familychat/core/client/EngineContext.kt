@@ -1,0 +1,36 @@
+package se.familychat.core.client
+
+import kotlinx.coroutines.flow.MutableSharedFlow
+import se.familychat.core.crypto.KeyManager
+import se.familychat.core.crypto.MessageCrypto
+import se.familychat.core.crypto.PersistentSignalProtocolStore
+import se.familychat.core.crypto.ProtocolStorage
+import se.familychat.core.network.FamilyChatApi
+import se.familychat.core.network.ServerConnection
+
+/** Shared state and collaborators of the engine's parts. Not public API. */
+internal class EngineContext(
+    val store: LocalStore,
+    val protocolStorage: ProtocolStorage,
+    val config: EngineConfig,
+) {
+    val signalStore = PersistentSignalProtocolStore(protocolStorage)
+    val crypto = MessageCrypto(signalStore)
+    val keyManager = KeyManager(signalStore, protocolStorage, config.clock)
+    val events = MutableSharedFlow<EngineEvent>(extraBufferCapacity = 512)
+
+    @Volatile var account: Account? = null
+    @Volatile var connection: ServerConnection? = null
+
+    val api: FamilyChatApi get() = connection?.api ?: throw NotSignedInException()
+    fun requireAccount(): Account = account ?: throw NotSignedInException()
+
+    fun emit(e: EngineEvent) {
+        events.tryEmit(e)
+    }
+
+    fun now(): Long = config.clock()
+}
+
+/** The operation needs a signed-in account (call login/redeemInvite/restoreSession first). */
+class NotSignedInException : IllegalStateException("Not signed in")
