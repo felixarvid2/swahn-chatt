@@ -2,12 +2,12 @@
 
 import logging
 
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app import clock
 from app.config import Settings
-from app.models import Invitation
+from app.models import Invitation, SessionToken
 from app.models import Session as AuthSession
 from app.services.attachments import collect_garbage
 
@@ -18,10 +18,18 @@ DAY_MS = 86_400_000
 
 def prune(db: Session, settings: Settings) -> dict[str, int]:
     now = clock.now_ms()
-    # Keep dead sessions a few days: their previous_token_hash is what detects refresh token reuse.
-    sessions = db.execute(
-        delete(AuthSession).where((AuthSession.expires_at < now - DAY_MS) | (AuthSession.revoked_at < now - 7 * DAY_MS))
-    ).rowcount
+    # Keep dead sessions a few days: their token history is what detects refresh token reuse.
+    dead = (AuthSession.expires_at < now - DAY_MS) | (AuthSession.revoked_at < now - 7 * DAY_MS)
+    db.execute(delete(SessionToken).where(SessionToken.session_id.in_(select(AuthSession.id).where(dead))))
+    sessions = db.execute(delete(AuthSession).where(dead)).rowcount
+    # Tokens older than a full refresh lifetime are expired anyway; dropping them bounds the table for
+    # long-lived sessions (such a token is simply "invalid" instead of triggering a revocation).
+    db.execute(
+        delete(SessionToken).where(
+            SessionToken.issued_at < now - settings.refresh_token_days * DAY_MS,
+            SessionToken.token_hash.not_in(select(AuthSession.refresh_token_hash)),
+        )
+    )
     invites = db.execute(
         delete(Invitation).where(
             (Invitation.expires_at < now - 7 * DAY_MS)

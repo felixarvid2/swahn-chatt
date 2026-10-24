@@ -16,6 +16,7 @@ from app.models import (
     MessageEnvelope,
     OneTimePqPrekey,
     OneTimePrekey,
+    SessionToken,
     User,
 )
 from app.models import Session as AuthSession
@@ -54,8 +55,18 @@ def _next_device_number(db: Session, user_id: str) -> int:
     return freed
 
 
-def create_device(db: Session, user_id: str, name: str) -> Device:
+def create_device(db: Session, user_id: str, name: str, max_active: int | None = None) -> Device:
     now = clock.now_ms()
+    if max_active is not None:
+        active = db.scalar(
+            select(func.count()).select_from(Device).where(Device.user_id == user_id, Device.revoked_at.is_(None))
+        )
+        if active >= max_active:
+            raise conflict(
+                f"this account already has {active} devices (the limit is {max_active}); "
+                "log out or remove one of them, then try again",
+                "device_limit",
+            )
     device = Device(
         id=str(uuid.uuid4()),
         user_id=user_id,
@@ -97,14 +108,17 @@ def start_session(db: Session, settings: Settings, user: User, device: Device) -
     )
     db.add(session)
     db.flush()
+    db.add(SessionToken(token_hash=session.refresh_token_hash, session_id=session.id, issued_at=now))
+    db.flush()
     return auth_response(db, settings, user, device, session, refresh)
 
 
 def rotate_session(db: Session, settings: Settings, session: AuthSession, user: User, device: Device) -> dict:
     refresh = new_refresh_token()
-    session.previous_token_hash = session.refresh_token_hash
+    now = clock.now_ms()
     session.refresh_token_hash = hash_token(refresh)
-    session.expires_at = clock.now_ms() + settings.refresh_token_days * 86_400_000
+    session.expires_at = now + settings.refresh_token_days * 86_400_000
+    db.add(SessionToken(token_hash=session.refresh_token_hash, session_id=session.id, issued_at=now))
     db.flush()
     return auth_response(db, settings, user, device, session, refresh)
 

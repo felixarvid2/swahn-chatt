@@ -28,7 +28,8 @@ Schema changes only through Alembic: edit `app/models.py`, then `alembic revisio
 
 ## Layout
 
-`app/main.py` app factory and lifespan; `config.py` settings; `db.py` engine/session (SQLite WAL, `BEGIN IMMEDIATE`);
+`app/main.py` app factory and lifespan; `config.py` settings; `db.py` engine/session (SQLite WAL; write sessions `BEGIN IMMEDIATE`, read-only work uses
+`make_read_session_factory` / `get_read_db` with a deferred `BEGIN`, and Argon2 never runs inside a transaction);
 `models.py`; `schemas.py`; `security.py`; `ratelimit.py`; `hub.py` WebSocket registry; `routers/*` HTTP/WS routes;
 `services/*` business logic (events fan-out, conversations, messages, sync/ack, keys, attachments, push, backup);
 `cli.py`; `migrations/`; `tests/`. One uvicorn worker only: hub, rate limiter and push queue are in-process.

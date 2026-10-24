@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.deps import Principal, get_db, get_principal
+from app.deps import Principal, get_db, get_principal, get_read_db
 from app.errors import invalid
 from app.models import ConversationMember
 from app.schemas import (
@@ -22,7 +22,7 @@ router = APIRouter(prefix="/conversations", tags=["conversations"])
 
 
 @router.get("", response_model=list[ConversationOut])
-def list_conversations(p: Principal = Depends(get_principal), db: Session = Depends(get_db)):
+def list_conversations(p: Principal = Depends(get_principal), db: Session = Depends(get_read_db)):
     ids = db.scalars(select(ConversationMember.conversation_id).where(ConversationMember.user_id == p.user_id)).all()
     return conversations_out(db, ids, p.user_id)
 
@@ -46,7 +46,7 @@ def create_conversation(
 
 
 @router.get("/{conversation_id}", response_model=ConversationOut)
-def get_conversation(conversation_id: str, p: Principal = Depends(get_principal), db: Session = Depends(get_db)):
+def get_conversation(conversation_id: str, p: Principal = Depends(get_principal), db: Session = Depends(get_read_db)):
     svc.require_member(db, conversation_id, p.user_id)
     return svc.conversation_for(db, conversation_id, p.user_id)
 
@@ -101,7 +101,7 @@ def list_messages(
     before_seq: int | None = Query(None, ge=0),
     limit: int = Query(50, ge=1, le=200),
     p: Principal = Depends(get_principal),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_read_db),
 ):
     conv, _ = svc.require_member(db, conversation_id, p.user_id)
     return msgs.list_messages(db, conv, p.user_id, p.device_id, before_seq, limit)

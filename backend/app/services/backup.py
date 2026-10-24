@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from app.config import Settings
+from app.services.attachments import InvalidStoragePath, check_storage_path
 
 FORMAT = 1
 DB_NAME = "familychat.db"
@@ -210,6 +211,11 @@ def _extract_verified(archive: Path, staging: Path) -> dict:
     try:
         if con.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
             raise BackupError("restored database failed its integrity check")
+        for att_id, storage_path in con.execute("SELECT id, storage_path FROM attachments"):
+            try:
+                check_storage_path(storage_path, att_id)
+            except InvalidStoragePath:
+                raise BackupError(f"attachment {att_id} has an invalid storage path; refusing to restore") from None
     except sqlite3.DatabaseError as exc:
         raise BackupError(f"restored database is not a valid SQLite file: {exc}") from exc
     finally:

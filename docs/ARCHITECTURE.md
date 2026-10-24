@@ -48,7 +48,8 @@
 | `users` | id, username (unique), display_name, password_hash, is_admin, avatar_attachment_id, created_at, disabled_at |
 | `invitations` | id, code_hash (unique), note, is_admin, created_by, created_at, expires_at, used_at, used_by, revoked_at |
 | `devices` | id, user_id, number (1..127, unique per user), name, created_at, last_seen_at, revoked_at, push_kind, push_endpoint, acked_cursor |
-| `sessions` | id, user_id, device_id, refresh_token_hash (unique), previous_token_hash, created_at, expires_at, revoked_at |
+| `sessions` | id, user_id, device_id, refresh_token_hash (unique), created_at, expires_at, revoked_at |
+| `session_tokens` | token_hash (PK), session_id — every refresh token a session issued, for reuse detection |
 | `device_keys` | device_id (PK), registration_id, identity_key, signed_prekey_id/public/signature, pq_last_resort_id/public/signature, updated_at |
 | `one_time_prekeys` | device_id, key_id, public_key (unique device_id+key_id) |
 | `one_time_pq_prekeys` | device_id, key_id, public_key, signature |

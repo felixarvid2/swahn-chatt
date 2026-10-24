@@ -10,7 +10,10 @@
     "stdout": {
       "class": "logging.StreamHandler",
       "stream": "ext://sys.stdout",
-      "formatter": "json"
+      "formatter": "json",
+      "filters": [
+        "redact_query"
+      ]
     }
   },
   "loggers": {
@@ -35,5 +38,10 @@
       "stdout"
     ],
     "level": "INFO"
+  },
+  "filters": {
+    "redact_query": {
+      "()": "app.logging_setup.RedactQueryFilter"
+    }
   }
 }

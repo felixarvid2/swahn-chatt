@@ -1,6 +1,7 @@
 """Attachments: streamed upload (never fully in memory), ranged download."""
 
 import hashlib
+import logging
 import os
 import re
 from typing import Literal
@@ -12,11 +13,13 @@ from sqlalchemy.orm import Session
 
 from app import clock
 from app.config import Settings
-from app.deps import Principal, get_db, get_principal, get_settings_dep
+from app.deps import Principal, get_principal, get_read_db, get_settings_dep
 from app.errors import ApiError, not_found
 from app.models import Attachment
 from app.schemas import AttachmentOut
 from app.services import attachments as svc
+
+log = logging.getLogger("familychat.attachments")
 
 router = APIRouter(prefix="/attachments", tags=["attachments"])
 
@@ -89,7 +92,7 @@ async def upload(
 
 
 def _used(request: Request, user_id: str) -> int:
-    with request.app.state.session_factory() as db:
+    with request.app.state.read_session_factory() as db:
         return svc.used_bytes(db, user_id)
 
 
@@ -100,7 +103,7 @@ def _sync_file(f) -> None:
 
 def _finish(request, settings, p, att_id, purpose, content_type, size, digest, tmp) -> dict:
     final_rel = svc.new_storage_path(att_id)
-    final = svc.full_path(settings, final_rel)
+    final = svc.full_path(settings, final_rel, att_id)
     final.parent.mkdir(parents=True, exist_ok=True)
     with request.app.state.session_factory() as db:
         # Re-check the quota inside the write transaction so parallel uploads cannot overshoot it.
@@ -138,12 +141,16 @@ def download(
     attachment_id: str,
     p: Principal = Depends(get_principal),
     settings: Settings = Depends(get_settings_dep),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_read_db),
 ):
     att = db.get(Attachment, attachment_id)
     if att is None or not svc.can_access(db, p.user_id, att):
         raise not_found("attachment not found")
-    path = svc.full_path(settings, att.storage_path)
+    try:
+        path = svc.full_path(settings, att.storage_path, att.id)
+    except svc.InvalidStoragePath:
+        log.error("attachment %s has an invalid storage path", att.id)
+        raise not_found("attachment not found") from None
     if not path.is_file():
         raise not_found("attachment not found")
     return FileResponse(

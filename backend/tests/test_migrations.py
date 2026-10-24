@@ -85,3 +85,39 @@ def test_sqlite_pragmas(app):
         assert raw.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
         assert raw.execute("PRAGMA foreign_keys").fetchone()[0] == 1
         assert raw.execute("PRAGMA busy_timeout").fetchone()[0] >= 5000
+
+
+def test_0002_backfills_token_history_and_downgrades(tmp_path):
+    s = make_settings(tmp_path)
+    cfg = alembic_config(s.database_url)
+    command.upgrade(cfg, "0001")
+    con = sqlite3.connect(tmp_path / "familychat.db")
+    con.execute(
+        "INSERT INTO users (id, username, display_name, password_hash, is_admin, created_at) "
+        "VALUES ('u','u','U','x',0,1)"
+    )
+    con.execute(
+        "INSERT INTO devices (id, user_id, number, name, created_at, last_seen_at, acked_cursor) "
+        "VALUES ('d','u',1,'n',1,1,0)"
+    )
+    con.execute(
+        "INSERT INTO sessions "
+        "(id, user_id, device_id, refresh_token_hash, previous_token_hash, created_at, expires_at) "
+        "VALUES ('s1','u','d','cur','prev',5,99), ('s2','u','d','only',NULL,6,99)"
+    )
+    con.commit()
+    con.close()
+    command.upgrade(cfg, "head")
+    con = sqlite3.connect(tmp_path / "familychat.db")
+    assert set(con.execute("SELECT token_hash, session_id FROM session_tokens")) == {
+        ("cur", "s1"),
+        ("prev", "s1"),
+        ("only", "s2"),
+    }
+    assert "previous_token_hash" not in {r[1] for r in con.execute("PRAGMA table_info(sessions)")}
+    con.close()
+    command.downgrade(cfg, "0001")
+    con = sqlite3.connect(tmp_path / "familychat.db")
+    assert con.execute("SELECT previous_token_hash FROM sessions WHERE id='s1'").fetchone() == ("prev",)
+    assert "session_tokens" not in tables(tmp_path / "familychat.db")
+    con.close()

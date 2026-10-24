@@ -3,6 +3,7 @@
 import hashlib
 import hmac
 import secrets
+import threading
 from dataclasses import dataclass
 from functools import lru_cache
 
@@ -15,6 +16,10 @@ from app.config import Settings
 from app.errors import unauthorized
 
 JWT_ALG = "HS256"
+# Each Argon2 run needs ~64 MiB; the request thread pool is much larger than a Raspberry Pi can afford, so at
+# most this many hashes/verifications run at once (the rest wait, without holding any database transaction).
+ARGON2_CONCURRENCY = 2
+_argon2_slots = threading.BoundedSemaphore(ARGON2_CONCURRENCY)
 INVITE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"  # no 0/O/1/I
 
 
@@ -28,22 +33,24 @@ def hasher(settings: Settings) -> PasswordHasher:
 
 
 def hash_password(settings: Settings, password: str) -> str:
-    return hasher(settings).hash(password)
+    with _argon2_slots:
+        return hasher(settings).hash(password)
 
 
 def verify_password(settings: Settings, stored_hash: str | None, password: str) -> bool:
     """Constant-ish time: an unknown user is verified against a dummy hash."""
     h = hasher(settings)
-    if stored_hash is None:
+    with _argon2_slots:
+        if stored_hash is None:
+            try:
+                h.verify(_dummy_hash(settings), password)  # (first use hashes it here, inside the slot)
+            except (VerificationError, InvalidHashError):
+                pass
+            return False
         try:
-            h.verify(_dummy_hash(settings), password)
+            return h.verify(stored_hash, password)
         except (VerificationError, InvalidHashError):
-            pass
-        return False
-    try:
-        return h.verify(stored_hash, password)
-    except (VerificationError, InvalidHashError):
-        return False
+            return False
 
 
 @lru_cache

@@ -12,6 +12,8 @@ from app.config import Settings
 
 log = logging.getLogger("familychat.db")
 
+READ_ONLY_OPTION = "familychat_read_only"
+
 
 def make_engine(url: str) -> Engine:
     if url.startswith("sqlite"):
@@ -35,7 +37,12 @@ def make_engine(url: str) -> Engine:
         def _on_begin(conn):
             # Take the write lock up front: a deferred read->write upgrade can fail with SQLITE_BUSY
             # without honouring busy_timeout. Writers queue instead (fine for a family server).
-            conn.exec_driver_sql("BEGIN IMMEDIATE")
+            # Strictly read-only work opts out (make_read_session_factory): a deferred BEGIN takes no lock in
+            # WAL mode, so reads never wait for, or hold up, a writer.
+            if conn.get_execution_options().get(READ_ONLY_OPTION):
+                conn.exec_driver_sql("BEGIN")
+            else:
+                conn.exec_driver_sql("BEGIN IMMEDIATE")
 
         return engine
     return create_engine(url, pool_pre_ping=True)
@@ -43,6 +50,21 @@ def make_engine(url: str) -> Engine:
 
 def make_session_factory(engine: Engine, info: dict[str, Any] | None = None) -> sessionmaker[Session]:
     return sessionmaker(bind=engine, expire_on_commit=False, autoflush=True, info={} if info is None else info)
+
+
+def make_read_session_factory(engine: Engine) -> sessionmaker[Session]:
+    """Sessions for code that never writes: on SQLite they start a deferred transaction (no write lock).
+    Flushing any change through such a session is a bug and raises."""
+    factory = sessionmaker(
+        bind=engine.execution_options(**{READ_ONLY_OPTION: True}), expire_on_commit=False, autoflush=False
+    )
+
+    @event.listens_for(factory, "before_flush")
+    def _no_writes(session, _ctx, _instances):
+        if session.new or session.dirty or session.deleted:
+            raise RuntimeError("read-only session must not modify the database")
+
+    return factory
 
 
 @event.listens_for(Session, "after_commit")
@@ -67,4 +89,4 @@ def session_factory_for(settings: Settings) -> Callable[[], Session]:
     return make_session_factory(make_engine(settings.database_url))
 
 
-__all__ = ["NullPool", "make_engine", "make_session_factory"]
+__all__ = ["NullPool", "make_engine", "make_read_session_factory", "make_session_factory"]

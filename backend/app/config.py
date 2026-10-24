@@ -32,10 +32,16 @@ class Settings(BaseSettings):
     # Comma separated CIDRs whose X-Forwarded-For header is honoured (rate limiting only).
     trusted_proxies: str = ""
     push_allow_http: bool = False
-    # Comma separated host names push endpoints may use (e.g. "ntfy.example.ts.net"). Empty = any host.
+    # Comma separated host names push endpoints may use (e.g. "ntfy.example.ts.net"). Required in production:
+    # empty means push registration is refused there (development: any host name, but never IP literals).
     push_allowed_hosts: str = ""
     expose_docs: bool = False
     log_level: str = "INFO"
+    # Active devices per account; logging in on another one fails with 409 device_limit until one is removed.
+    max_devices_per_user: int = Field(10, ge=1)
+    # How often an open WebSocket re-checks that its session and device are still valid (covers revocations done
+    # by another process, e.g. the `cli` commands, which cannot kick sockets in this process directly).
+    ws_revalidate_seconds: float = Field(60.0, ge=0.05)
     # Tunables (defaults match SECURITY.md; tests lower them).
     rate_limit_enabled: bool = True
     argon2_time_cost: int = Field(3, ge=1)
@@ -61,6 +67,10 @@ class Settings(BaseSettings):
         if self.attachments_dir is None:
             self.attachments_dir = self.data_dir / "attachments"
         return self
+
+    @property
+    def push_requires_allowlist(self) -> bool:
+        return self.env == "production"
 
     @property
     def docs_enabled(self) -> bool:

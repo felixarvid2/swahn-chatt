@@ -19,7 +19,8 @@ def test_push_endpoint_registration_rules(make_app):
     assert a.put("/devices/me/push", {"kind": "unifiedpush", "endpoint": ENDPOINT}).status_code == 204
     assert a.delete("/devices/me/push").status_code == 204
 
-    app2, client2 = make_app(push_allow_http=True)
+    # plain http to an IP literal needs both push_allow_http and an explicit allowlist entry
+    app2, client2 = make_app(push_allow_http=True, push_allowed_hosts="192.168.1.5")
     b = Factory(app2, client2).user("bob")
     assert (
         b.put("/devices/me/push", {"kind": "unifiedpush", "endpoint": "http://192.168.1.5:2586/up1"}).status_code == 204
@@ -155,3 +156,70 @@ def test_push_allowed_hosts_restricts_endpoints(make_app):
     assert (
         a.put("/devices/me/push", {"kind": "unifiedpush", "endpoint": "https://evil.example.com/up"}).status_code == 422
     )
+
+
+def test_production_without_allowlist_refuses_push_registration(make_app, caplog):
+    with caplog.at_level("WARNING", logger="familychat"):
+        app, client = make_app(env="production")
+    assert any("PUSH_ALLOWED_HOSTS is empty" in r.getMessage() for r in caplog.records)
+    a = Factory(app, client).user("alice")
+    r = a.put("/devices/me/push", {"kind": "unifiedpush", "endpoint": ENDPOINT})
+    assert r.status_code == 409 and r.json()["code"] == "push_not_configured"
+    assert "FAMILYCHAT_PUSH_ALLOWED_HOSTS" in r.json()["message"]
+    # clearing a registration is always possible
+    assert a.delete("/devices/me/push").status_code == 204
+
+
+def test_production_with_allowlist_registers_listed_hosts_only(make_app, caplog):
+    with caplog.at_level("WARNING", logger="familychat"):
+        app, client = make_app(env="production", push_allowed_hosts="ntfy.example.org")
+    assert not any("PUSH_ALLOWED_HOSTS" in r.getMessage() for r in caplog.records)
+    a = Factory(app, client).user("alice")
+    assert a.put("/devices/me/push", {"kind": "unifiedpush", "endpoint": ENDPOINT}).status_code == 204
+    r = a.put("/devices/me/push", {"kind": "unifiedpush", "endpoint": "https://other.example.org/up"})
+    assert r.status_code == 422
+
+
+def test_stored_endpoint_is_not_pushed_to_in_production_without_allowlist(make_app):
+    from app.models import Device
+
+    app, client = make_app(env="production")
+    f = Factory(app, client)
+    a, b = f.user("alice"), f.user("bob")
+    with app.state.session_factory() as db:  # registered before the allowlist became mandatory
+        d = db.get(Device, b.device_id)
+        d.push_kind, d.push_endpoint = "unifiedpush", ENDPOINT
+        db.commit()
+    f.direct(a, b)
+    app.state.push.flush()
+    assert app.state.pushes == []
+
+
+def test_ip_literal_hosts_are_rejected_unless_listed(make_app):
+    from app.services.push import endpoint_allowed, is_ip_literal
+
+    for host in (
+        "127.0.0.1",
+        "169.254.169.254",
+        "[::1]",
+        "[::ffff:127.0.0.1]",
+        "2130706433",
+        "0x7f.1",
+        "017700000001",
+        "10.1",
+    ):
+        assert is_ip_literal(host), host
+        url = f"https://{host}/x"
+        assert not endpoint_allowed(url, False), host
+        assert not endpoint_allowed(url, False, frozenset({"ntfy.example.org"})), host
+    for host in ("ntfy.example.org", "localhost", "push.family.ts.net", "a1.b2.example"):
+        assert not is_ip_literal(host), host
+        assert endpoint_allowed(f"https://{host}/x", False), host
+    assert endpoint_allowed("https://10.0.0.7/x", False, frozenset({"10.0.0.7"}))
+    assert not endpoint_allowed("https://ntfy.example.org/x", False, frozenset(), require_allowlist=True)
+
+    app, client = make_app()  # development: hostnames are open, IP literals still need listing
+    a = Factory(app, client).user("alice")
+    for host in ("127.0.0.1", "2130706433", "[::1]"):
+        r = a.put("/devices/me/push", {"kind": "unifiedpush", "endpoint": f"https://{host}/up"})
+        assert r.status_code == 422, host

@@ -11,7 +11,8 @@ KEEP="${KEEP:-14}"
 mkdir -p "$DEST"
 chmod 700 "$DEST"
 
-remote="$(docker compose exec -T backend python -m app.cli backup /tmp/backups | tail -n 1 | tr -d '\r')"
+# Staged on the data volume (the container's root filesystem is read-only and /tmp is a small tmpfs).
+remote="$(docker compose exec -T backend python -m app.cli backup /data/.backup-tmp | tail -n 1 | tr -d '\r')"
 name="$(basename "$remote")"
 docker compose cp "backend:$remote" "$DEST/$name"
 docker compose exec -T backend rm -f "$remote"
