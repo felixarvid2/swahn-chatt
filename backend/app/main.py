@@ -10,7 +10,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from app import __version__
+from app import __version__, metrics
 from app.config import Settings, get_settings
 from app.db import make_engine, make_read_session_factory, make_session_factory
 from app.errors import ApiError, error_body, install_error_handlers
@@ -32,8 +32,10 @@ from app.routers import (
     users,
     ws,
 )
+from app.services import lockout
 from app.services.events import Dispatcher
 from app.services.maintenance import prune
+from app.services.presence import Presence
 from app.services.push import PushService, parse_hosts
 
 log = logging.getLogger("familychat")
@@ -47,10 +49,12 @@ UPLOAD_PATH = "/api/v1/attachments"
 
 
 def is_upload(scope: Scope) -> bool:
-    """Only POST of the attachment upload endpoint streams to disk and enforces its own (larger) limit."""
+    """Attachment uploads (POST, and PATCH chunks of a resumable upload) stream to disk and enforce their own limits."""
     path = scope["path"]
     if path.endswith("/"):
         path = path[:-1]
+    if scope["method"] == "PATCH" and path.startswith(UPLOAD_PATH + "/uploads/"):
+        return True  # resumable upload chunks: the route enforces its own (8 MiB) limit
     return scope["method"] == "POST" and path == UPLOAD_PATH
 
 
@@ -125,6 +129,7 @@ def create_app(settings: Settings | None = None, push_transport=None) -> FastAPI
             "the push server's host name"
         )
     info["dispatcher"] = Dispatcher(hub, push)
+    _restore_lockouts(session_factory, limiter)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -148,6 +153,7 @@ def create_app(settings: Settings | None = None, push_transport=None) -> FastAPI
                     log.warning("maintenance did not stop in time; cancelled")
                 except Exception:
                     log.exception("maintenance task failed while stopping")
+            presence.stop()
             try:
                 push.stop()
             finally:
@@ -169,7 +175,10 @@ def create_app(settings: Settings | None = None, push_transport=None) -> FastAPI
     app.state.hub = hub
     app.state.limiter = limiter
     app.state.push = push
+    app.state.http_metrics = http_metrics = metrics.HttpMetrics()
     app.state.started_at = time.monotonic()
+    app.state.uploads_busy = set()  # upload ids with a chunk being written (single process)
+    app.state.presence = presence = Presence(app, settings.presence_debounce_seconds)
 
     install_error_handlers(app)
     app.add_middleware(BodyLimitMiddleware)
@@ -196,15 +205,28 @@ def create_app(settings: Settings | None = None, push_transport=None) -> FastAPI
             )
         return response
 
+    app.add_middleware(metrics.MetricsMiddleware, metrics=http_metrics)
     app.add_middleware(RequestIdMiddleware)  # added last = outermost: everything below sees the ID
 
     app.include_router(health.router, include_in_schema=False)  # probes for the container runtime
+    app.include_router(metrics.router)  # Prometheus; local or admin only, see app/metrics.py
     api = "/api/v1"
     app.include_router(health.router, prefix=api)
     for module in (auth, admin, users, devices, keys, conversations, messages, sync, attachments, ws):
         app.include_router(module.router, prefix=api)
     install_openapi(app)
     return app
+
+
+def _restore_lockouts(session_factory, limiter: RateLimiter) -> None:
+    """Replay persisted login failures so a restart does not reset the per-username lockouts."""
+    try:
+        with session_factory() as db:
+            restored = lockout.restore(db, limiter)
+        if restored:
+            log.info("restored %d recent login failures", restored)
+    except Exception:  # e.g. the database was not migrated yet: readiness reports that, startup goes on
+        log.warning("could not restore login failure counters", exc_info=True)
 
 
 async def _maintenance_loop(app: FastAPI, stop: asyncio.Event) -> None:

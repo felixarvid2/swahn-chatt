@@ -12,7 +12,15 @@ from sqlalchemy.orm import Session
 
 from app import clock
 from app.config import Settings
-from app.models import Attachment, Conversation, ConversationMember, Message, MessageAttachment, User
+from app.models import (
+    Attachment,
+    Conversation,
+    ConversationMember,
+    Message,
+    MessageAttachment,
+    UploadSession,
+    User,
+)
 
 log = logging.getLogger("familychat.attachments")
 
@@ -67,7 +75,15 @@ def full_path(settings: Settings, storage_path: str, att_id: str | None = None) 
 
 
 def used_bytes(db: Session, user_id: str) -> int:
-    return db.scalar(select(func.coalesce(func.sum(Attachment.size), 0)).where(Attachment.uploader_id == user_id)) or 0
+    """Quota in use: stored attachments plus the full size of the user's live resumable upload sessions (reserved
+    when the session starts, so parallel uploads cannot overshoot the quota)."""
+    stored = db.scalar(select(func.coalesce(func.sum(Attachment.size), 0)).where(Attachment.uploader_id == user_id))
+    reserved = db.scalar(
+        select(func.coalesce(func.sum(UploadSession.size), 0)).where(
+            UploadSession.user_id == user_id, UploadSession.expires_at > clock.now_ms()
+        )
+    )
+    return int(stored or 0) + int(reserved or 0)
 
 
 def can_access(db: Session, user_id: str, att: Attachment) -> bool:
@@ -102,9 +118,12 @@ def collect_garbage(db: Session, settings: Settings) -> int:
         .where(User.avatar_attachment_id.is_not(None))
         .union(select(Conversation.avatar_attachment_id).where(Conversation.avatar_attachment_id.is_not(None)))
     )
+    removed_users = select(User.id).where(User.disabled_at.is_not(None))
     victims = db.scalars(
         select(Attachment).where(
-            Attachment.created_at < cutoff,
+            # Accounts that were removed (by an admin or themselves) leave no orphans behind: their attachments that
+            # no message references go at the next run, not after the 24 h grace period.
+            (Attachment.created_at < cutoff) | Attachment.uploader_id.in_(removed_users),
             ((Attachment.purpose == "message") & Attachment.id.not_in(referenced_msg))
             | ((Attachment.purpose == "avatar") & Attachment.id.not_in(used_avatars)),
         )

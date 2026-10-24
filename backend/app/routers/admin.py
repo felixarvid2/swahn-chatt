@@ -52,7 +52,14 @@ def create_invitation(
     db.add(inv)
     db.flush()
     audit.record(
-        db, "invitation_created", actor=created_by, target=inv.id, ip=ip, is_admin=is_admin, hours=hours, max_uses=max_uses
+        db,
+        "invitation_created",
+        actor=created_by,
+        target=inv.id,
+        ip=ip,
+        is_admin=is_admin,
+        hours=hours,
+        max_uses=max_uses,
     )
     return inv, code
 

@@ -50,7 +50,12 @@ def find_usable(db: Session, code: str) -> tuple[str, str] | None:
     row = db.execute(
         select(PasswordReset.id, PasswordReset.user_id)
         .join(User, User.id == PasswordReset.user_id)
-        .where(PasswordReset.code_hash == hash_reset_code(code), User.disabled_at.is_(None), *_usable(now))
+        .where(
+            PasswordReset.code_hash == hash_reset_code(code),
+            User.disabled_at.is_(None),
+            User.suspended_at.is_(None),  # a suspended account cannot get back in through a reset code either
+            *_usable(now),
+        )
     ).first()
     return (row.id, row.user_id) if row else None
 

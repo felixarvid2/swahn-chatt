@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, Request, Response
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app import clock
@@ -94,7 +94,12 @@ def update_settings(
         user.share_presence = body.share_presence
         user.presence_last_seen_at = None  # nothing from the sharing period is kept
         audit.record(
-            db, "presence_setting_changed", actor=p.user_id, target_user=p.user_id, ip=addr, share_presence=user.share_presence
+            db,
+            "presence_setting_changed",
+            actor=p.user_id,
+            target_user=p.user_id,
+            ip=addr,
+            share_presence=user.share_presence,
         )
     db.commit()
     if changed:

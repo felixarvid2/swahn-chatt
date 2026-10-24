@@ -1,7 +1,7 @@
 import uuid
 
 from fastapi import APIRouter, Depends, Response
-from sqlalchemy import select, update
+from sqlalchemy import case, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -17,38 +17,15 @@ from app.deps import (
     get_read_db,
     get_settings_dep,
 )
-from app.errors import ApiError, error_responses, unauthorized
+from app.errors import ApiError, account_suspended, error_responses, unauthorized
 from app.models import Device, Invitation, SessionToken, User
 from app.models import Session as AuthSession
 from app.ratelimit import RateLimiter
 from app.schemas import AuthResponse, LoginRequest, PasswordResetRequest, RedeemRequest, RefreshRequest
 from app.security import hash_invite_code, hash_password, hash_token, verify_password
-from app.services import accounts, audit, password_reset
+from app.services import accounts, audit, lockout, password_reset
 
 router = APIRouter(prefix="/auth", tags=["auth"])
-
-
-# Failed password guesses per username (whatever the client IP, and whether or not the account exists, so the
-# response never reveals which usernames are real): temporary lock after LOGIN_FAILS_PER_HOUR failures within an
-# hour, and a longer one after LOGIN_FAILS_PER_DAY within a day. Entries age out, so the lock decays by itself.
-LOGIN_FAILS_PER_HOUR = 10
-LOGIN_FAILS_PER_DAY = 30
-HOUR_S = 3600.0
-DAY_S = 86400.0
-
-
-def _fail_key(username: str) -> str:
-    return f"login-fail:{username}"
-
-
-def _ensure_not_locked(limiter: RateLimiter, username: str) -> None:
-    limiter.ensure_below(_fail_key(username) + ":h", LOGIN_FAILS_PER_HOUR, HOUR_S)
-    limiter.ensure_below(_fail_key(username) + ":d", LOGIN_FAILS_PER_DAY, DAY_S)
-
-
-def _record_failure(limiter: RateLimiter, username: str) -> None:
-    limiter.record(_fail_key(username) + ":h", HOUR_S)
-    limiter.record(_fail_key(username) + ":d", DAY_S)
 
 
 @router.post(
@@ -80,14 +57,23 @@ def redeem(
     rdb.rollback()
     password_hash = hash_password(settings, body.password)
 
-    # Claim the invitation atomically: of two concurrent redeems of one code exactly one UPDATE matches.
+    # Claim one use atomically: the UPDATE only matches while uses < max_uses, so of N concurrent redeems of a code
+    # with M uses left exactly min(N, M) succeed (writers are serialised by the database, SQLite and PostgreSQL).
     claimed = db.execute(
-        update(Invitation).where(Invitation.id == inv_id, *_usable_invite(clock.now_ms())).values(used_at=now)
+        update(Invitation)
+        .where(Invitation.id == inv_id, *_usable_invite(clock.now_ms()))
+        .values(
+            uses=Invitation.uses + 1,
+            used_at=case((Invitation.uses + 1 >= Invitation.max_uses, now), else_=Invitation.used_at),
+        )
     ).rowcount
     if claimed != 1:
         db.rollback()
         raise ApiError(404, "invalid_invite", "invitation is invalid, expired or already used")
-    is_admin = bool(db.scalar(select(Invitation.is_admin).where(Invitation.id == inv_id)))
+    is_admin, uses, max_uses = db.execute(
+        select(Invitation.is_admin, Invitation.uses, Invitation.max_uses).where(Invitation.id == inv_id)
+    ).one()
+    is_admin = bool(is_admin)
     user = User(
         id=str(uuid.uuid4()),
         username=body.username,
@@ -107,7 +93,15 @@ def redeem(
     result = accounts.start_session(db, settings, user, device)
     accounts.broadcast_user_updated(db, user)
     audit.record(
-        db, "invitation_redeemed", actor=user.id, target_user=user.id, target=inv_id, ip=addr, is_admin=is_admin
+        db,
+        "invitation_redeemed",
+        actor=user.id,
+        target_user=user.id,
+        target=inv_id,
+        ip=addr,
+        is_admin=is_admin,
+        use=uses,
+        max_uses=max_uses,
     )
     if is_admin:
         audit.record(db, "admin_granted", target_user=user.id, target=inv_id, ip=addr, via="invitation")
@@ -143,7 +137,7 @@ def reset_password(
 
 
 def _usable_invite(now: int) -> tuple:
-    return (Invitation.used_at.is_(None), Invitation.revoked_at.is_(None), Invitation.expires_at > now)
+    return (Invitation.uses < Invitation.max_uses, Invitation.revoked_at.is_(None), Invitation.expires_at > now)
 
 
 def _audit_login_failure(db: Session, addr: str, user_id: str | None, username: str | None) -> None:
@@ -171,20 +165,27 @@ def login(
 ):
     limiter.check(f"login-ip:{ip}", 10)
     limiter.check(f"login-user:{ip}:{body.username}", 5)
-    _ensure_not_locked(limiter, body.username)
+    lockout.ensure_not_locked(limiter, settings, body.username)
     found = rdb.execute(
-        select(User.id, User.password_hash).where(User.username == body.username, User.disabled_at.is_(None))
+        select(User.id, User.password_hash, User.suspended_at).where(
+            User.username == body.username, User.disabled_at.is_(None)
+        )
     ).first()
     rdb.rollback()  # no transaction while Argon2 runs
     stored = found.password_hash if found else None
     ok = verify_password(settings, stored, body.password)
     if not ok or found is None:
-        _record_failure(limiter, body.username)
+        lockout.record_failure(db, limiter, settings, body.username)
         _audit_login_failure(db, addr, found.id if found else None, body.username if found else None)
         raise unauthorized("invalid username or password", "invalid_credentials")
+    if found.suspended_at is not None:
+        # Only after the password was right, so this does not reveal which usernames exist.
+        audit.record(db, "login_blocked", target_user=found.id, ip=addr, reason="suspended")
+        db.commit()
+        raise account_suspended()
     # Now take the write lock and make sure the account did not change while the hash was being checked.
     user = db.scalar(select(User).where(User.id == found.id, User.disabled_at.is_(None)))
-    if user is None or user.password_hash != stored:
+    if user is None or user.password_hash != stored or user.suspended_at is not None:
         db.rollback()
         _audit_login_failure(db, addr, found.id, body.username)
         raise unauthorized("invalid username or password", "invalid_credentials")
@@ -244,6 +245,8 @@ def refresh(
         or user.disabled_at is not None
     ):
         raise unauthorized("invalid refresh token", "invalid_token")
+    if user.suspended_at is not None:
+        raise account_suspended()  # the session stays as it is: unsuspending restores it
     result = accounts.rotate_session(db, settings, session, user, device)
     db.commit()
     return result

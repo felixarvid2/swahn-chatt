@@ -159,8 +159,10 @@ def revoke_other_sessions(db: Session, user_id: str, keep_device_id: str) -> Non
 
 def active_admin_count(db: Session, excluding: str | None = None) -> int:
     """Administrators who can act: not removed, not suspended. Optionally leaving one user out of the count."""
-    query = select(func.count()).select_from(User).where(
-        User.is_admin.is_(True), User.disabled_at.is_(None), User.suspended_at.is_(None)
+    query = (
+        select(func.count())
+        .select_from(User)
+        .where(User.is_admin.is_(True), User.disabled_at.is_(None), User.suspended_at.is_(None))
     )
     if excluding is not None:
         query = query.where(User.id != excluding)

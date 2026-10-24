@@ -68,6 +68,15 @@ class RateLimiter:
         with self._lock:
             self._trim(key, now, window).append(now)
 
+    def seed(self, key: str, window: float, ages: list[float]) -> None:
+        """Re-create events that happened `ages` seconds ago (used at startup to restore persisted failure counters)."""
+        if not self.enabled:
+            return
+        now = self._clock()
+        with self._lock:
+            q = self._trim(key, now, window)
+            q.extend(now - a for a in sorted(ages, reverse=True) if a < window)
+
     def clear(self, key: str) -> None:
         with self._lock:
             self._hits.pop(key, None)

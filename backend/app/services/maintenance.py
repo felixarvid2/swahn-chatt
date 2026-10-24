@@ -10,7 +10,9 @@ from app import clock
 from app.config import Settings
 from app.models import AuditEvent, Invitation, Message, MessageEnvelope, PasswordReset, SessionToken
 from app.models import Session as AuthSession
+from app.services import lockout
 from app.services.attachments import collect_garbage
+from app.services.uploads import collect_expired as collect_expired_uploads
 
 log = logging.getLogger("familychat.maintenance")
 
@@ -67,7 +69,9 @@ def prune(db: Session, settings: Settings) -> dict[str, int]:
     audit_events = db.execute(
         delete(AuditEvent).where(AuditEvent.at < now - settings.audit_retention_days * DAY_MS)
     ).rowcount
+    login_failures = lockout.prune(db, now)
     db.commit()
+    uploads = collect_expired_uploads(db, settings)  # before the GC: it frees the quota of dead sessions
     attachments = collect_garbage(db, settings)
     result = {
         "sessions": sessions,
@@ -77,6 +81,8 @@ def prune(db: Session, settings: Settings) -> dict[str, int]:
         "envelopes": envelopes,
         "audit_events": audit_events,
         "attachments": attachments,
+        "upload_sessions": uploads,
+        "login_failures": login_failures,
     }
     log.info("maintenance %s", result)
     return result
