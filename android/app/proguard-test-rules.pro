@@ -10,6 +10,7 @@
 # :core:network
 -keep,allowobfuscation class se.familychat.core.network.InMemoryTokenProvider { *; }
 -keep,allowobfuscation class se.familychat.core.network.ApiClient { public *; }
+-keep,allowobfuscation class se.familychat.core.network.ApiClient$Companion { *; }
 -keep,allowobfuscation interface se.familychat.core.network.FamilyChatApi { *; }
 
 # :core:model: construction and property access only. Companion / serializer() are NOT listed: the app rules must keep them.
@@ -19,6 +20,8 @@
 # App code the tests drive directly
 -keep,allowobfuscation class se.familychat.app.data.security.** { *; }
 -keep,allowobfuscation class se.familychat.app.data.db.AppDatabase { *; }
+-keep,allowobfuscation class se.familychat.app.data.db.AppDatabase$Companion { *; }
+-keep,allowobfuscation class se.familychat.app.data.db.MessageEntity { *; }
 -keep,allowobfuscation class se.familychat.app.data.db.DraftEntity { *; }
 -keep,allowobfuscation class se.familychat.app.data.db.StoreDao { *; }
 -keep,allowobfuscation class se.familychat.app.data.SearchRepository { *; }

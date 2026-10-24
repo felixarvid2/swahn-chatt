@@ -137,7 +137,9 @@ class CryptoInstrumentedTest {
         val (key, ct) = tinkEncrypt(Random(1).nextBytes(20_000))
         val tampered = ct.copyOf().also { it[ct.size / 2] = (it[ct.size / 2].toInt() xor 1).toByte() }
         assertFailsWith<AttachmentCryptoException> { AttachmentCipher.decrypt(ByteArrayInputStream(tampered), ByteArrayOutputStream(), key) }
-        assertFailsWith<AttachmentCryptoException> { AttachmentCipher.decrypt(ByteArrayInputStream(ct), ByteArrayOutputStream(), AttachmentCipher.generateKey()) }
+        assertFailsWith<AttachmentCryptoException> {
+            AttachmentCipher.decrypt(ByteArrayInputStream(ct), ByteArrayOutputStream(), AttachmentCipher.generateKey())
+        }
         assertFailsWith<AttachmentCryptoException> {
             AttachmentCipher.decrypt(ByteArrayInputStream(ct.copyOf(ct.size - 100)), ByteArrayOutputStream(), key)
         }

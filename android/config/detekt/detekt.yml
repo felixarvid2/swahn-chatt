@@ -92,5 +92,11 @@ formatting:
     active: false
   ChainWrapping:
     active: false
+  AnnotationOnSeparateLine:
+    active: false # Room DAOs: `@Query(...) suspend fun x()` on one line
+  SpacingBetweenDeclarationsWithAnnotations:
+    active: false
+  PropertyWrapping:
+    active: false
   SpacingBetweenDeclarationsWithComments:
     active: false

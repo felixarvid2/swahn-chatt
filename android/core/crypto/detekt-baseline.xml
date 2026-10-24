@@ -1,0 +1,8 @@
+<?xml version="1.0" ?>
+<SmellBaseline>
+  <ManuallySuppressedIssues/>
+  <CurrentIssues>
+    <ID>MaxLineLength:MessageCryptoTest.kt$MessageCryptoTest$assertEquals(marker + " with some more words", bob.crypto.decryptContent(alice.userId, alice.deviceId, envelopes[0].type, envelopes[0].body).text.orEmpty())</ID>
+    <ID>MaxLineLength:MessageCryptoTest.kt$MessageCryptoTest$val envelopes = alice.crypto.encryptContent(Content(text = "$marker with some more words", conversationId = "c", messageId = "m"), listOf(bob.recipient))</ID>
+  </CurrentIssues>
+</SmellBaseline>

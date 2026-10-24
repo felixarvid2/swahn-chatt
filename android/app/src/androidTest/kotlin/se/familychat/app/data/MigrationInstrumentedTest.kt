@@ -20,6 +20,7 @@ import kotlin.test.assertTrue
  * The migration chain 1 -> 2 -> 3 on a device, on real SQLCipher files: phones in the field are on version 1 or 2 and their
  * data must survive, including the full text index. The schemas come from the exported `app/schemas/ JSON files` (test APK assets).
  */
+@Suppress("MaxLineLength") // SQL fixtures
 @RunWith(AndroidJUnit4::class)
 class MigrationInstrumentedTest {
     private val passphrase = ByteArray(32) { (it * 7 + 3).toByte() }
