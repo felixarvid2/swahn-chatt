@@ -25,7 +25,7 @@ class TestClient(
         store, protocol, tokens,
         EngineConfig(
             deviceName = "$name phone", attachmentDir = File(dir, "att"), tempDir = File(dir, "tmp"),
-            allowInsecureLan = true, startWorkers = workers, typingTimeoutMs = 400,
+            allowInsecureLan = true, startWorkers = workers, typingTimeoutMs = 1_500,
         ),
         scope,
         connectionFactory = { server.connect() },

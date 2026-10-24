@@ -182,8 +182,8 @@ data class OutboxEntry(
  * Implementation notes:
  * - Functions that take a lambda ([updateMessage], [transaction]) must run it atomically with respect to other store
  *   calls (Room: `withTransaction`).
- * - The engine never decrypts inside [transaction]; libsignal's own state is persisted separately and immediately
- *   (see `ProtocolStorage`), so a transaction here never needs to wrap crypto calls.
+ * - The engine never decrypts inside [transaction]. Where decryption and the message write must be atomic (so a crash
+ *   cannot leave an advanced ratchet without its plaintext) it uses [blockingTransaction] instead.
  * - Message order: by `seq` ascending, rows without `seq` after them by `clientTs`, then `id`.
  */
 interface LocalStore {
@@ -200,6 +200,21 @@ interface LocalStore {
 
     /** Runs [block] atomically. */
     suspend fun <T> transaction(block: suspend () -> T): T
+
+    /**
+     * Runs the **blocking** [block] on the calling thread inside one database transaction, which is committed when the
+     * block returns and rolled back when it throws.
+     *
+     * An implementation whose `ProtocolStorage` lives in the same database makes the blocking `ProtocolStorage` calls
+     * (libsignal persists its ratchet through them) and the store calls made from the block on this thread part of that
+     * transaction. The block may call `runBlocking { store.xyz() }`: the store must then run the call inline on this
+     * thread, without switching to another one, and without starting a second transaction.
+     * The engine uses this to decrypt a message and write it as one atomic step; the caller holds
+     * `MessageCrypto.exclusive` around the call (lock order: crypto lock, then transaction).
+     *
+     * The default does not provide atomicity (it just runs the block); [InMemoryLocalStore] keeps it.
+     */
+    fun <T> blockingTransaction(block: () -> T): T = block()
 
     // --- directory ----------------------------------------------------------------------------------------------------
     suspend fun upsertUsers(users: List<User>)

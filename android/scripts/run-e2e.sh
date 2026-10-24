@@ -6,7 +6,8 @@
 #   KEEP=1 android/scripts/run-e2e.sh     # keep the data dir and log for inspection
 #
 # What it does: migrates a temp SQLite database, starts ONE uvicorn worker on a free port in development mode, creates
-# an admin invitation with the CLI, exports FAMILYCHAT_TEST_URL / _ADMIN_INVITE / _DB and runs the Gradle test.
+# an admin invitation with the CLI, exports FAMILYCHAT_TEST_URL / _ADMIN_INVITE / _DB and runs the Gradle tests:
+# core:client TwoUserEndToEndTest (in-memory stores) and app RoomEngineE2ETest (one phone on the app's Room stores).
 set -euo pipefail
 
 ANDROID_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -66,14 +67,18 @@ curl -fsS "$URL/api/v1/healthz" >/dev/null || { echo "backend did not become hea
 # The code is the LAST stdout line of the CLI.
 INVITE="$("$PY" -m app.cli create-invite --admin --note e2e 2>/dev/null | tail -n 1)"
 [ -n "$INVITE" ] || { echo "could not create an admin invitation" >&2; exit 1; }
+# a second one: invitations work once and each test class creates its own administrator
+APP_INVITE="$("$PY" -m app.cli create-invite --admin --note e2e-app 2>/dev/null | tail -n 1)"
+[ -n "$APP_INVITE" ] || { echo "could not create the second admin invitation" >&2; exit 1; }
 
 export FAMILYCHAT_TEST_URL="$URL"
 export FAMILYCHAT_TEST_ADMIN_INVITE="$INVITE"
+export FAMILYCHAT_TEST_APP_ADMIN_INVITE="$APP_INVITE"
 export FAMILYCHAT_TEST_DB="$FAMILYCHAT_DATA_DIR/familychat.db"
 
 cd "$ANDROID_DIR"
 set +e
-./gradlew :core:client:test --tests '*TwoUserEndToEndTest*' --rerun-tasks -i "$@"
+./gradlew :core:client:test --tests '*TwoUserEndToEndTest*' :app:testDebugUnitTest --tests '*RoomEngineE2ETest*' --rerun-tasks -i "$@"
 STATUS=$?
 set -e
 if [ "$STATUS" -ne 0 ]; then

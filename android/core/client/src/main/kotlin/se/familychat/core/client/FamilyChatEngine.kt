@@ -12,13 +12,19 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import se.familychat.core.crypto.ProtocolStorage
 import se.familychat.core.crypto.SafetyNumber
 import se.familychat.core.crypto.SafetyNumbers
 import se.familychat.core.model.AddMembersRequest
+import se.familychat.core.model.AttachmentPurpose
 import se.familychat.core.model.AuthResponse
+import se.familychat.core.model.ChangePasswordRequest
+import se.familychat.core.model.Device
+import se.familychat.core.model.PushRegistration
+import se.familychat.core.model.User
 import se.familychat.core.model.Conversation
 import se.familychat.core.model.ConversationType
 import se.familychat.core.model.CreateConversationRequest
@@ -39,8 +45,11 @@ import se.familychat.core.network.RealtimeConnection
 import se.familychat.core.network.ServerConnection
 import se.familychat.core.network.TokenProvider
 import se.familychat.core.network.Tokens
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.File
 import java.io.IOException
+import java.security.MessageDigest
 import java.util.Base64
 
 /**
@@ -122,11 +131,19 @@ class FamilyChatEngine(
         stored
     }
 
-    /** Signs in on this device (registering it as a new device on the server). */
-    suspend fun login(serverUrl: String, username: String, password: String): Account = sessionMutex.withLock {
+    /**
+     * Signs in on this device (registering it as a new device on the server). [deviceName] overrides the configured name
+     * (the login screen lets the user choose one).
+     */
+    suspend fun login(
+        serverUrl: String,
+        username: String,
+        password: String,
+        deviceName: String = config.deviceName,
+    ): Account = sessionMutex.withLock {
         val url = BaseUrl.normalize(serverUrl, config.allowInsecureLan).toString()
         val connection = connectionFactory(url)
-        val auth = connection.api.login(LoginRequest(username.trim().lowercase(), password, config.deviceName))
+        val auth = connection.api.login(LoginRequest(username.trim().lowercase(), password, deviceName.trim().ifEmpty { config.deviceName }))
         completeSignIn(url, connection, auth)
     }
 
@@ -137,11 +154,15 @@ class FamilyChatEngine(
         username: String,
         password: String,
         displayName: String,
+        deviceName: String = config.deviceName,
     ): Account = sessionMutex.withLock {
         val url = BaseUrl.normalize(serverUrl, config.allowInsecureLan).toString()
         val connection = connectionFactory(url)
         val auth = connection.api.redeemInvite(
-            RedeemInviteRequest(code.trim(), username.trim().lowercase(), password, displayName.trim(), config.deviceName),
+            RedeemInviteRequest(
+                code.trim(), username.trim().lowercase(), password, displayName.trim(),
+                deviceName.trim().ifEmpty { config.deviceName },
+            ),
         )
         completeSignIn(url, connection, auth)
     }
@@ -271,8 +292,10 @@ class FamilyChatEngine(
         return c
     }
 
-    suspend fun createGroup(name: String, memberUserIds: List<String>): Conversation {
-        val c = ctx.api.createConversation(CreateConversationRequest(ConversationType.GROUP, name.trim(), memberUserIds))
+    suspend fun createGroup(name: String, memberUserIds: List<String>, avatarAttachmentId: String? = null): Conversation {
+        val c = ctx.api.createConversation(
+            CreateConversationRequest(ConversationType.GROUP, name.trim(), memberUserIds, avatarAttachmentId),
+        )
         ctx.store.upsertConversation(c)
         c.members.forEach { directory.refreshDevices(it.userId) }
         ctx.emit(EngineEvent.ConversationChanged(c.id))
@@ -308,6 +331,85 @@ class FamilyChatEngine(
         ctx.store.upsertConversation(c)
         ctx.emit(EngineEvent.ConversationChanged(c.id))
         return c
+    }
+
+    /** Group admins only: sets the group picture from an already uploaded avatar ([uploadAvatar]). */
+    suspend fun setConversationAvatar(conversationId: String, avatarAttachmentId: String): Conversation =
+        updated(ctx.api.updateConversation(conversationId, avatarAttachmentId = avatarAttachmentId))
+
+    suspend fun clearConversationAvatar(conversationId: String): Conversation =
+        updated(ctx.api.updateConversation(conversationId, clearAvatar = true))
+
+    // =========================================================================================================
+    // Profile, devices, push
+    // =========================================================================================================
+
+    /** Uploads [bytes] (JPEG, PNG or WebP, at most 2 MiB) as an avatar and returns the attachment id. Avatars are not encrypted. */
+    suspend fun uploadAvatar(bytes: ByteArray, mime: String = "image/jpeg"): String {
+        require(bytes.size <= MAX_AVATAR_BYTES) { "Avatar is larger than 2 MiB" }
+        val sha = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+        return ctx.api.uploadAttachment(bytes.toRequestBody(mime.toMediaType()), AttachmentPurpose.AVATAR, sha).id
+    }
+
+    /** Changes the display name and/or the avatar (an id from [uploadAvatar]) of this account. */
+    suspend fun updateProfile(displayName: String? = null, avatarAttachmentId: String? = null, clearAvatar: Boolean = false): User {
+        val user = ctx.api.updateMe(displayName?.trim(), avatarAttachmentId, clearAvatar)
+        ctx.store.upsertUsers(listOf(user))
+        val account = ctx.requireAccount()
+        if (user.displayName != account.displayName) {
+            val updated = account.copy(displayName = user.displayName)
+            ctx.store.saveAccount(updated)
+            ctx.account = updated
+            _account.value = updated
+        }
+        ctx.emit(EngineEvent.DirectoryChanged(user.id))
+        return user
+    }
+
+    /** The server revokes every other session and device of this account when this succeeds. */
+    suspend fun changePassword(current: String, new: String) {
+        ctx.api.changePassword(ChangePasswordRequest(current, new))
+    }
+
+    /** Active devices of this account (including this one: compare with [Account.deviceId]). */
+    suspend fun myDevices(): List<Device> = ctx.api.listDevices(ctx.requireAccount().userId)
+
+    /** Revokes one of this account's devices; it loses access at once. Not for the current device (use [logout]). */
+    suspend fun revokeDevice(deviceId: String) {
+        require(deviceId != ctx.requireAccount().deviceId) { "Use logout() for this device" }
+        ctx.api.deleteDevice(deviceId)
+    }
+
+    /** Tells the server where to send content-free wake-ups (UnifiedPush endpoint of this device). */
+    suspend fun registerPush(endpoint: String) {
+        ctx.api.setPush(PushRegistration(endpoint = endpoint))
+    }
+
+    suspend fun clearPush() {
+        ctx.api.clearPush()
+    }
+
+    /**
+     * The avatar image [attachmentId] as a local file (downloaded once; avatar ids never change their content). Lives in
+     * the attachment directory, so logout removes it.
+     */
+    suspend fun avatarFile(attachmentId: String): File {
+        val safe = attachmentId.filter { it.isLetterOrDigit() || it == '-' }
+        val dir = File(config.attachmentDir, "avatars")
+        val target = File(dir, safe)
+        if (target.isFile && target.length() > 0) return target
+        return withContext(config.ioDispatcher) {
+            dir.mkdirs()
+            val part = File(dir, "$safe.part")
+            part.delete()
+            ctx.api.downloadAttachment(attachmentId, part)
+            if (part.length() > MAX_AVATAR_BYTES) {
+                part.delete()
+                throw IOException("Avatar is larger than 2 MiB")
+            }
+            if (!part.renameTo(target)) throw IOException("Could not store avatar")
+            target
+        }
     }
 
     /** Admin only: creates an invitation code (shown once). */
@@ -576,6 +678,18 @@ class FamilyChatEngine(
         )
     }
 
+    /**
+     * The safety number this device would have with [userId]'s device [deviceNumber] if [identityKey] (a serialized
+     * `IdentityKey`, for example [IdentityChange.newIdentityKey]) were its identity. Lets the user compare the number of a
+     * changed key before accepting it.
+     */
+    fun safetyNumberFor(userId: String, deviceNumber: Int, identityKey: ByteArray): SafetyNumber? {
+        val account = ctx.account ?: return null
+        return SafetyNumbers.compute(
+            account.userId, account.deviceNumber, ctx.keyManager.identityPublicKey(), userId, deviceNumber, identityKey,
+        )
+    }
+
     /** True if the user marked this device's pinned identity as verified. */
     fun isVerified(userId: String, deviceNumber: Int): Boolean =
         ctx.signalStore.pinnedIdentity(userId, deviceNumber)?.verified == true
@@ -625,5 +739,6 @@ class OutgoingAttachment(
     val thumbnailBase64: String? = null,
 )
 
+internal const val MAX_AVATAR_BYTES = 2 * 1024 * 1024
 internal const val META_KEYS_UPLOADED = "keys_uploaded"
 internal const val META_PENDING_READ = "pending_read:"

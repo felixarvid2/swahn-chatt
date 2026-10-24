@@ -1,6 +1,7 @@
 package se.familychat.core.client
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -29,8 +30,11 @@ import java.util.Base64
  * duplicate error); receipts, conversation updates and directory events are plain upserts. Because the cursor only moves
  * after a whole page was applied, a crash or network error mid-page replays that page safely.
  *
- * Known window: libsignal persists its ratchet state at decryption time, the message row right afterwards. A crash in
- * between loses that one plaintext (the replay yields a [DecryptError.DUPLICATE] placeholder).
+ * Crash window: libsignal persists its ratchet state at decryption time. [decryptAndWrite] therefore runs the
+ * decryption and the write of the plaintext inside one [LocalStore.blockingTransaction]. With a store that implements it
+ * on the same database as the `ProtocolStorage` (the app's Room store) both commit together or not at all, so a crash
+ * or a storage error replays the event and decrypts it again. With a store that does not (the in-memory one) a crash in
+ * between still loses that one plaintext (the replay yields a [DecryptError.DUPLICATE] placeholder).
  */
 internal class SyncProcessor(private val ctx: EngineContext, private val directory: DeviceDirectory) {
     private val mutex = Mutex()
@@ -117,29 +121,37 @@ internal class SyncProcessor(private val ctx: EngineContext, private val directo
             seq = m.seq, clientTs = m.clientTs, serverTs = m.serverTs, text = null, replyTo = null,
         )
         val envelope = m.envelope
-        val message = if (m.deleted || envelope == null) {
-            base.copy(deleted = true) // deleted before we synced: keep a tombstone so ordering and counts stay right
-        } else when (val r = decrypt(m, envelope.type, envelope.body)) {
-            is Decrypted.Ok -> base.copy(
-                text = r.content.text, replyTo = r.content.replyTo,
-                attachments = r.content.attachments.map { a ->
-                    LocalAttachment(
-                        id = a.id, key = a.key, sha256 = a.sha256, size = a.size, mime = a.mime, name = a.name, kind = a.kind,
-                        width = a.width, height = a.height, durationMs = a.durationMs, thumbnail = a.thumbnail,
-                        localPath = null, downloadState = DownloadState.NONE,
-                    )
-                },
-            )
-            is Decrypted.Failed -> base.copy(
-                decryptError = r.error,
-                pendingEnvelopeType = if (r.error == DecryptError.UNTRUSTED_IDENTITY) envelope.type else null,
-                pendingEnvelopeBody = if (r.error == DecryptError.UNTRUSTED_IDENTITY) envelope.body else null,
-            )
+        suspend fun write(message: StoredMessage) {
+            retryStore { ctx.store.upsertMessage(message) }
+            ctx.store.getConversation(m.conversationId)?.let { c ->
+                if (m.seq > (c.lastMessageSeq ?: 0)) ctx.store.upsertConversation(c.copy(lastMessageSeq = m.seq, lastMessageAt = m.serverTs))
+            }
         }
-        // The ratchet already advanced when we decrypted; do not lose the plaintext to a transient storage error.
-        retryStore { ctx.store.upsertMessage(message) }
-        ctx.store.getConversation(m.conversationId)?.let { c ->
-            if (m.seq > (c.lastMessageSeq ?: 0)) ctx.store.upsertConversation(c.copy(lastMessageSeq = m.seq, lastMessageAt = m.serverTs))
+        if (m.deleted || envelope == null) {
+            // deleted before we synced: keep a tombstone so ordering and counts stay right
+            write(base.copy(deleted = true))
+        } else {
+            decryptAndWrite(m, envelope.type, envelope.body) { r ->
+                write(
+                    when (r) {
+                        is Decrypted.Ok -> base.copy(
+                            text = r.content.text, replyTo = r.content.replyTo,
+                            attachments = r.content.attachments.map { a ->
+                                LocalAttachment(
+                                    id = a.id, key = a.key, sha256 = a.sha256, size = a.size, mime = a.mime, name = a.name, kind = a.kind,
+                                    width = a.width, height = a.height, durationMs = a.durationMs, thumbnail = a.thumbnail,
+                                    localPath = null, downloadState = DownloadState.NONE,
+                                )
+                            },
+                        )
+                        is Decrypted.Failed -> base.copy(
+                            decryptError = r.error,
+                            pendingEnvelopeType = if (r.error == DecryptError.UNTRUSTED_IDENTITY) envelope.type else null,
+                            pendingEnvelopeBody = if (r.error == DecryptError.UNTRUSTED_IDENTITY) envelope.body else null,
+                        )
+                    },
+                )
+            }
         }
         ctx.emit(EngineEvent.MessageReceived(m.conversationId, m.id, fromSelfOtherDevice = mine))
     }
@@ -169,20 +181,53 @@ internal class SyncProcessor(private val ctx: EngineContext, private val directo
         return ctx.store.findDevice(m.senderDeviceId)?.number
     }
 
-    private suspend fun decrypt(m: Message, type: String, body: String): Decrypted {
-        val number = senderDeviceNumber(m) ?: return Decrypted.Failed(DecryptError.UNKNOWN_SENDER_DEVICE)
-        return try {
-            Decrypted.Ok(withContext(ctx.config.ioDispatcher) { ctx.crypto.decryptContent(m.senderUserId, number, type, body) })
-        } catch (e: UntrustedIdentityException) {
-            noteIdentityChange(m.senderUserId, number, e.newIdentityKey)
-            Decrypted.Failed(DecryptError.UNTRUSTED_IDENTITY)
-        } catch (e: DuplicateMessageException) {
-            Decrypted.Failed(DecryptError.DUPLICATE)
-        } catch (e: NoSessionException) {
-            Decrypted.Failed(DecryptError.NO_SESSION)
-        } catch (e: InvalidCiphertextException) {
-            Decrypted.Failed(DecryptError.CORRUPT)
+    /** Decrypts one envelope; never throws for a bad message. Blocking: call with the crypto lock held, off the main thread. */
+    private fun decryptNow(senderUserId: String, number: Int, type: String, body: String): Attempt = try {
+        Attempt(Decrypted.Ok(ctx.crypto.decryptContent(senderUserId, number, type, body)))
+    } catch (e: UntrustedIdentityException) {
+        Attempt(Decrypted.Failed(DecryptError.UNTRUSTED_IDENTITY), untrustedKey = e.newIdentityKey, untrusted = true)
+    } catch (e: DuplicateMessageException) {
+        Attempt(Decrypted.Failed(DecryptError.DUPLICATE))
+    } catch (e: NoSessionException) {
+        Attempt(Decrypted.Failed(DecryptError.NO_SESSION))
+    } catch (e: InvalidCiphertextException) {
+        Attempt(Decrypted.Failed(DecryptError.CORRUPT))
+    }
+
+    /** [result] plus, for [DecryptError.UNTRUSTED_IDENTITY], the key the sender presented. */
+    private class Attempt(val result: Decrypted, val untrustedKey: ByteArray? = null, val untrusted: Boolean = false)
+
+    /**
+     * Decrypts the envelope of [m] and runs [write] with the outcome, both inside one `blockingTransaction` (see the class
+     * comment) on an IO thread. The sender's device number is looked up first, because that may need the network, which
+     * must never happen inside a database transaction. [write] runs with `runBlocking`, on the transaction's thread, and
+     * must only call the store.
+     */
+    private suspend fun <R> decryptAndWrite(m: Message, type: String, body: String, write: suspend (Decrypted) -> R): R? =
+        decryptAndWrite(m.senderUserId, senderDeviceNumber(m), type, body, write)
+
+    private suspend fun <R> decryptAndWrite(
+        senderUserId: String,
+        number: Int?,
+        type: String,
+        body: String,
+        write: suspend (Decrypted) -> R,
+    ): R? {
+        if (number == null) {
+            write(Decrypted.Failed(DecryptError.UNKNOWN_SENDER_DEVICE))
+            return null
         }
+        val (attempt, result) = withContext(ctx.config.ioDispatcher) {
+            // Lock order: crypto lock first, then the transaction (see MessageCrypto.exclusive).
+            ctx.crypto.exclusive {
+                ctx.store.blockingTransaction {
+                    val a = decryptNow(senderUserId, number, type, body)
+                    a to runBlocking { write(a.result) }
+                }
+            }
+        }
+        if (attempt.untrusted) noteIdentityChange(senderUserId, number, attempt.untrustedKey)
+        return result
     }
 
     /** Remembers the offending key so the UI can offer to accept it, and tells the user once. */
@@ -213,16 +258,16 @@ internal class SyncProcessor(private val ctx: EngineContext, private val directo
         val target = ctx.store.getMessage(targetId) ?: return
         if (target.senderUserId != m.senderUserId || target.conversationId != m.conversationId) return // only the author may edit
         val envelope = m.envelope ?: return
-        val content = when (val r = decrypt(m, envelope.type, envelope.body)) {
-            is Decrypted.Ok -> r.content
-            is Decrypted.Failed -> return // replay of an applied edit (duplicate) or undecryptable: keep what we have
+        val applied = decryptAndWrite(m, envelope.type, envelope.body) { r ->
+            // Failed: a replay of an applied edit (duplicate) or undecryptable; keep what we have.
+            val content = (r as? Decrypted.Ok)?.content?.takeIf { it.type == ContentType.EDIT } ?: return@decryptAndWrite false
+            ctx.store.updateMessage(targetId) { cur ->
+                if (cur.deleted) cur
+                else cur.copy(text = content.text, edited = true, editedAt = m.serverTs, decryptError = null)
+            }
+            true
         }
-        if (content.type != ContentType.EDIT) return
-        ctx.store.updateMessage(targetId) { cur ->
-            if (cur.deleted) cur
-            else cur.copy(text = content.text, edited = true, editedAt = m.serverTs, decryptError = null)
-        }
-        ctx.emit(EngineEvent.MessageChanged(m.conversationId, targetId))
+        if (applied == true) ctx.emit(EngineEvent.MessageChanged(m.conversationId, targetId))
     }
 
     private suspend fun applyDelete(m: Message) {
@@ -324,29 +369,28 @@ internal class SyncProcessor(private val ctx: EngineContext, private val directo
         for (m in ctx.store.undecryptedFrom(userId, device.id)) {
             val type = m.pendingEnvelopeType ?: continue
             val body = m.pendingEnvelopeBody ?: continue
-            val content = try {
-                withContext(ctx.config.ioDispatcher) { ctx.crypto.decryptContent(userId, deviceNumber, type, body) }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
+            val done = decryptAndWrite(userId, deviceNumber, type, body) { r ->
                 ctx.store.updateMessage(m.id) {
-                    it.copy(decryptError = DecryptError.CORRUPT, pendingEnvelopeType = null, pendingEnvelopeBody = null)
-                }
-                continue
-            }
-            ctx.store.updateMessage(m.id) {
-                it.copy(
-                    text = content.text, replyTo = content.replyTo, decryptError = null,
-                    pendingEnvelopeType = null, pendingEnvelopeBody = null,
-                    attachments = content.attachments.map { a ->
-                        LocalAttachment(
-                            a.id, a.key, a.sha256, a.size, a.mime, a.name, a.kind, a.width, a.height, a.durationMs,
-                            a.thumbnail, null, DownloadState.NONE,
+                    when (r) {
+                        is Decrypted.Ok -> it.copy(
+                            text = r.content.text, replyTo = r.content.replyTo, decryptError = null,
+                            pendingEnvelopeType = null, pendingEnvelopeBody = null,
+                            attachments = r.content.attachments.map { a ->
+                                LocalAttachment(
+                                    a.id, a.key, a.sha256, a.size, a.mime, a.name, a.kind, a.width, a.height, a.durationMs,
+                                    a.thumbnail, null, DownloadState.NONE,
+                                )
+                            },
                         )
-                    },
-                )
+                        // Still untrusted: keep the envelope so a later accept can retry; anything else is final.
+                        is Decrypted.Failed -> if (r.error == DecryptError.UNTRUSTED_IDENTITY) it else it.copy(
+                            decryptError = DecryptError.CORRUPT, pendingEnvelopeType = null, pendingEnvelopeBody = null,
+                        )
+                    }
+                }
+                true
             }
-            ctx.emit(EngineEvent.MessageChanged(m.conversationId, m.id))
+            if (done == true) ctx.emit(EngineEvent.MessageChanged(m.conversationId, m.id))
         }
     }
 

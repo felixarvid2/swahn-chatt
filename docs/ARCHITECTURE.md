@@ -91,6 +91,21 @@ Client data flow:
 - Unread counts and conversation order come from Room (`last_message_seq`), corrected by the server's
   `GET /conversations` on full refresh.
 
+### App internals (`:app`)
+
+- **Storage.** One Room database, encrypted with SQLCipher, holds `LocalStore` (messages, conversations, outbox, cursor),
+  `ProtocolStorage` (libsignal identity, prekeys, sessions, pinned remote identities) and the tokens. The passphrase is
+  32 random bytes, wrapped by a non-exportable AES-256-GCM key in the Android Keystore (StrongBox where available); the
+  wrapped blob lives in `noBackupFilesDir`. The database is opened lazily on a background thread.
+- **Atomic decrypt-and-store.** libsignal advances its ratchet while decrypting; `SyncProcessor` therefore decrypts and
+  writes the plaintext inside one `LocalStore.blockingTransaction` on one thread, so a crash cannot leave an advanced
+  ratchet without its message (the replay decrypts again). Lock order everywhere: crypto lock (`MessageCrypto.exclusive`)
+  first, database transaction second. `RoomLocalStore` runs calls inline when the thread is already in a transaction.
+- **Background.** WebSocket (`engine.startRealtime()`) only while the app is visible (`ProcessLifecycleOwner`);
+  WorkManager: `OutboxWorker` (on every send and when connectivity returns), `SyncWorker` (expedited, started by a
+  UnifiedPush wake-up) and `PeriodicSyncWorker` (15 minutes). Notifications are built locally from the decrypted
+  messages after a sync, never from the push.
+
 ## Notifications: FCM vs self-hosted
 
 | | Firebase Cloud Messaging | UnifiedPush (ntfy on the Pi) | Own foreground service + WebSocket |

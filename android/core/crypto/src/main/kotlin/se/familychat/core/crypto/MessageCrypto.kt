@@ -40,6 +40,16 @@ class EncryptedMessage(val type: String, val body: ByteArray)
 class MessageCrypto(private val store: PersistentSignalProtocolStore) {
     private val lock = Any()
 
+    /**
+     * Runs [block] holding the lock all other operations of this class take (re-entrant for the same thread).
+     *
+     * Lock order: a caller that also needs a database transaction around crypto calls (see
+     * `LocalStore.blockingTransaction`) must take **this lock first and the transaction second**. The operations above
+     * hold the lock while they write to [ProtocolStorage]; entering a transaction first and the lock second could
+     * deadlock against them.
+     */
+    fun <T> exclusive(block: () -> T): T = synchronized(lock) { block() }
+
     private fun address(userId: String, deviceNumber: Int) = SignalProtocolAddress(userId, deviceNumber)
 
     /** True if a usable session with the device exists. */

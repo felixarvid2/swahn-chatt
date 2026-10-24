@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- DEBUG BUILDS ONLY (src/debug overrides src/main). Android's network security config cannot express address ranges, so
+     the platform permits cleartext for every host here; the app itself (core:network BaseUrl, enabled by
+     BuildConfig.ALLOW_INSECURE_LAN) refuses http:// for anything but localhost, 10.x (emulator host 10.0.2.2
+     included), 192.168.x and 100.64.0.0/10. The app makes no other network requests. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>
