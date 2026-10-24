@@ -245,4 +245,35 @@
         <item quantity="one">%1$d vald</item>
         <item quantity="other">%1$d valda</item>
     </plurals>
+
+    <!-- connection banner -->
+    <string name="connection_connecting">Ansluter…</string>
+    <string name="connection_offline">Offline – meddelanden skickas när du är online igen</string>
+    <!-- conversation: unread divider, jump to latest -->
+    <string name="unread_divider">Olästa meddelanden</string>
+    <string name="scroll_to_latest">Gå till senaste meddelandet</string>
+    <plurals name="scroll_to_latest_new">
+        <item quantity="one">Gå till senaste meddelandet, %1$d nytt meddelande</item>
+        <item quantity="other">Gå till senaste meddelandet, %1$d nya meddelanden</item>
+    </plurals>
+    <!-- drafts -->
+    <string name="draft_preview">Utkast: %1$s</string>
+    <!-- links -->
+    <string name="link_confirm_title">Öppna länk?</string>
+    <string name="link_confirm_text">Du lämnar FamilyChat. Kontrollera hela adressen innan du fortsätter.</string>
+    <string name="link_confirm_open">Öppna</string>
+    <string name="link_target_web">Webbplats: %1$s</string>
+    <string name="link_target_email">E-postadress: %1$s</string>
+    <string name="link_target_phone">Telefonnummer: %1$s</string>
+    <string name="link_suspicious">Adressen innehåller ovanliga tecken eller dolda delar. Dubbelkolla den.</string>
+    <string name="link_open_action">Öppna länk: %1$s</string>
+    <string name="error_open_link">Ingen app kunde öppna länken</string>
+    <!-- voice playback speed -->
+    <string name="voice_speed_description">Uppspelningshastighet %1$s</string>
+    <string name="voice_speed_change">Ändra uppspelningshastighet</string>
+    <!-- header: safety numbers -->
+    <string name="safety_verified_description">Alla enheter är verifierade. Öppna säkerhetsnummer.</string>
+    <string name="safety_warning_description">Säkerhetsnyckeln har ändrats eller en ny enhet väntar på ditt godkännande. Granska.</string>
+    <!-- screen reader description of a message bubble -->
+    <string name="bubble_reply_to">svar till %1$s</string>
 </resources>

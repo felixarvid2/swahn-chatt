@@ -56,11 +56,19 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -79,7 +87,14 @@ import se.familychat.app.ui.theme.LocalStatusColors
 import java.io.File
 
 /** Playback state of the voice message that is currently loaded. */
-data class PlaybackUi(val attachmentId: String? = null, val playing: Boolean = false, val positionMs: Long = 0, val durationMs: Long = 0)
+data class PlaybackUi(
+    val attachmentId: String? = null,
+    val playing: Boolean = false,
+    val positionMs: Long = 0,
+    val durationMs: Long = 0,
+    /** 1, 1.5 or 2; the same for every voice message and remembered (see `AppPrefs.voiceSpeed`). */
+    val speed: Float = 1f,
+)
 
 /** What a bubble can ask for. All of them are optional no-ops in previews and screenshots. */
 class BubbleActions(
@@ -95,6 +110,10 @@ class BubbleActions(
     /** Opens the safety screen of a user (also the own account), from a system notice. */
     val onOpenContact: (userId: String) -> Unit = {},
     val onJumpTo: (String) -> Unit = {},
+    /** Next playback speed (1x, 1.5x, 2x) for voice messages. */
+    val onCycleVoiceSpeed: () -> Unit = {},
+    /** A link in a message text was tapped; the screen confirms the address before anything is opened. */
+    val onOpenLink: (String) -> Unit = {},
 )
 
 /** Decodes a thumbnail from the message. It is untrusted input: refuse anything that is not a small image. */
@@ -126,6 +145,10 @@ fun MessageBubble(
     val content = if (m.outgoing) scheme.onPrimaryContainer else scheme.onSurface
     val shape = if (m.outgoing) RoundedCornerShape(18.dp, 18.dp, 4.dp, 18.dp) else RoundedCornerShape(4.dp, 18.dp, 18.dp, 18.dp)
     val topPadding = if (row.firstOfRun) 8.dp else 2.dp
+    val time = clock(m.time)
+    val description = bubbleDescription(m, time)
+    val links = remember(m.text, m.deleted) { if (m.deleted || m.text.isNullOrBlank()) emptyList() else findLinks(m.text) }
+    val openLinkLabels = links.map { l -> stringResource(R.string.link_open_action, describeLink(l.url)?.target ?: l.url) }
 
     Row(
         modifier = modifier.fillMaxWidth().padding(start = 8.dp, end = 8.dp, top = topPadding),
@@ -148,13 +171,25 @@ fun MessageBubble(
                         onClick = { if (m.failed) actions.onRetry(m.id) },
                         onLongClick = { menuOpen = true },
                         onLongClickLabel = stringResource(R.string.message_actions),
-                    ),
+                    )
+                    // One spoken line per bubble (who, what, when, status); the pieces it names are hidden below.
+                    // Attachments, the quoted reply and buttons keep their own nodes. Links of the (hidden) text
+                    // are offered as actions instead.
+                    .semantics(mergeDescendants = true) {
+                        contentDescription = description
+                        if (links.isNotEmpty()) {
+                            customActions = links.mapIndexed { i, l ->
+                                CustomAccessibilityAction(openLinkLabels[i]) { actions.onOpenLink(l.url); true }
+                            }
+                        }
+                    },
             ) {
                 Column(Modifier.padding(horizontal = 10.dp, vertical = 6.dp).width(IntrinsicSize.Max).widthIn(min = 72.dp)) {
                     if (m.senderName != null && row.firstOfRun) {
                         Text(
                             m.senderName, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold,
                             color = scheme.primary, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.clearAndSetSemantics {},
                         )
                     }
                     when {
@@ -162,9 +197,9 @@ fun MessageBubble(
                         m.undecryptable != null -> UndecryptablePlaceholder(m.undecryptable, actions.onReviewIdentity)
                         else -> BubbleBody(m, actions, playback, content)
                     }
-                    BubbleFooter(m, clock(m.time), content)
+                    BubbleFooter(m, time, content)
                     if (m.failed) {
-                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp).clearAndSetSemantics {}) {
                             Icon(Icons.Filled.Refresh, contentDescription = null, tint = LocalStatusColors.current.failed, modifier = Modifier.size(16.dp))
                             Text(
                                 stringResource(R.string.message_failed_retry), style = MaterialTheme.typography.labelMedium,
@@ -224,13 +259,18 @@ private fun BubbleBody(m: MessageUi, actions: BubbleActions, playback: PlaybackU
         Spacer(Modifier.height(4.dp))
     }
     if (!m.text.isNullOrBlank()) {
-        Text(m.text, style = MaterialTheme.typography.bodyLarge, color = content, modifier = Modifier.padding(top = 2.dp))
+        val linkColor = if (m.outgoing) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.primary
+        val text = remember(m.text, linkColor, actions) {
+            linkify(m.text, SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline), actions.onOpenLink)
+        }
+        // read as part of the bubble's description; the bubble offers the links as accessibility actions
+        Text(text, style = MaterialTheme.typography.bodyLarge, color = content, modifier = Modifier.padding(top = 2.dp).clearAndSetSemantics {})
     }
 }
 
 @Composable
 private fun DeletedPlaceholder(content: Color) {
-    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 2.dp)) {
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 2.dp).clearAndSetSemantics {}) {
         Icon(Icons.Filled.Block, contentDescription = null, tint = content.copy(alpha = 0.7f), modifier = Modifier.size(16.dp))
         Text(
             stringResource(R.string.message_deleted), fontStyle = FontStyle.Italic, color = content.copy(alpha = 0.8f),
@@ -242,7 +282,7 @@ private fun DeletedPlaceholder(content: Color) {
 @Composable
 private fun UndecryptablePlaceholder(kind: UndecryptableUi, onReview: () -> Unit) {
     Column(Modifier.padding(vertical = 2.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.clearAndSetSemantics {}) {
             Icon(Icons.Filled.Lock, contentDescription = null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(16.dp))
             Text(
                 stringResource(R.string.message_undecryptable), fontStyle = FontStyle.Italic,
@@ -252,7 +292,7 @@ private fun UndecryptablePlaceholder(kind: UndecryptableUi, onReview: () -> Unit
         if (kind == UndecryptableUi.RETRYABLE_IDENTITY) {
             Text(
                 stringResource(R.string.message_undecryptable_identity), style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.padding(top = 2.dp),
+                modifier = Modifier.padding(top = 2.dp).clearAndSetSemantics {},
             )
             Text(
                 stringResource(R.string.action_review_identity), style = MaterialTheme.typography.labelLarge,
@@ -266,7 +306,8 @@ private fun UndecryptablePlaceholder(kind: UndecryptableUi, onReview: () -> Unit
 @Composable
 private fun BubbleFooter(m: MessageUi, time: String, content: Color) {
     Row(
-        modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
+        // the bubble's description already says time and status
+        modifier = Modifier.fillMaxWidth().padding(top = 2.dp).clearAndSetSemantics {},
         horizontalArrangement = Arrangement.End,
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -277,14 +318,14 @@ private fun BubbleFooter(m: MessageUi, time: String, content: Color) {
         Text(time, style = MaterialTheme.typography.labelSmall, color = content.copy(alpha = 0.7f))
         if (m.outgoing) {
             Spacer(Modifier.width(4.dp))
-            DeliveryIcon(m.delivery, content)
+            DeliveryIcon(m.delivery, content, describe = false)
         }
     }
 }
 
 /** Clock = waiting, one check = sent, two = delivered, two in colour = read. Every state has a description. */
 @Composable
-fun DeliveryIcon(delivery: DeliveryUi, base: Color, modifier: Modifier = Modifier) {
+fun DeliveryIcon(delivery: DeliveryUi, base: Color, modifier: Modifier = Modifier, describe: Boolean = true) {
     val status = LocalStatusColors.current
     val (icon, tint, text) = when (delivery) {
         DeliveryUi.PENDING -> Triple(Icons.Filled.Schedule, base.copy(alpha = 0.7f), R.string.status_pending)
@@ -294,7 +335,48 @@ fun DeliveryIcon(delivery: DeliveryUi, base: Color, modifier: Modifier = Modifie
         DeliveryUi.FAILED -> Triple(Icons.Filled.ErrorOutline, status.failed, R.string.status_failed)
         DeliveryUi.NONE -> return
     }
-    Icon(icon, contentDescription = stringResource(text), tint = tint, modifier = modifier.size(16.dp))
+    Icon(icon, contentDescription = if (describe) stringResource(text) else null, tint = tint, modifier = modifier.size(16.dp))
+}
+
+/** The status word a screen reader says for a delivery state, null if there is none. */
+@Composable
+private fun deliveryWord(delivery: DeliveryUi): String? = when (delivery) {
+    DeliveryUi.PENDING -> stringResource(R.string.status_pending)
+    DeliveryUi.SENT -> stringResource(R.string.status_sent)
+    DeliveryUi.DELIVERED -> stringResource(R.string.status_delivered)
+    DeliveryUi.READ -> stringResource(R.string.status_read)
+    DeliveryUi.FAILED -> stringResource(R.string.status_failed)
+    DeliveryUi.NONE -> null
+}
+
+/**
+ * What TalkBack says for a bubble: "Bertil Ek, Ska vi ses vid fyra?, 14:30" or "Du, Foto, redigerad, 14:33, Läst".
+ * Who first, then what (a reply, attachments, the text), then when and the delivery status of own messages.
+ */
+@Composable
+fun bubbleDescription(m: MessageUi, time: String): String {
+    val parts = ArrayList<String>(6)
+    parts += if (m.outgoing) stringResource(R.string.you) else m.speaker ?: m.senderName ?: stringResource(R.string.unknown_user)
+    when {
+        m.deleted -> parts += stringResource(R.string.message_deleted)
+        m.undecryptable != null -> parts += stringResource(R.string.message_undecryptable)
+        else -> {
+            m.reply?.let { parts += stringResource(R.string.bubble_reply_to, it.senderName ?: stringResource(R.string.you)) }
+            for (a in m.attachments) {
+                val kind = attachmentKindLabel(a.kind)
+                parts += when {
+                    a.kind == AttachmentKindUi.VOICE && a.durationMs != null -> "$kind ${formatDuration(a.durationMs)}"
+                    a.kind == AttachmentKindUi.FILE && a.name != null -> stringResource(R.string.attachment_file_named, a.name)
+                    else -> kind
+                }
+            }
+            if (!m.text.isNullOrBlank()) parts += m.text
+            if (m.edited) parts += stringResource(R.string.message_edited)
+        }
+    }
+    parts += time
+    deliveryWord(m.delivery)?.let { parts += it }
+    return parts.joinToString(", ")
 }
 
 @Composable
@@ -433,7 +515,8 @@ private fun VoiceView(messageId: String, a: AttachmentUi, actions: BubbleActions
                 else -> Icon(Icons.Filled.Download, stringResource(R.string.action_download), tint = MaterialTheme.colorScheme.onPrimary)
             }
         }
-        Column(Modifier.padding(start = 10.dp).weight(1f)) {
+        // the position is spoken through the play button; the bubble's description names the duration
+        Column(Modifier.padding(start = 10.dp).weight(1f).clearAndSetSemantics {}) {
             val progress = if (total > 0) (position.toFloat() / total).coerceIn(0f, 1f) else 0f
             LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth().height(4.dp).clip(CircleShape))
             Text(
@@ -441,8 +524,31 @@ private fun VoiceView(messageId: String, a: AttachmentUi, actions: BubbleActions
                 style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(top = 4.dp),
             )
         }
+        if (a.transfer is TransferUi.Ready) SpeedChip(playback.speed, actions.onCycleVoiceSpeed)
     }
 }
+
+/** "1x" / "1.5x" / "2x": one tap moves to the next speed, for all voice messages. */
+@Composable
+private fun SpeedChip(speed: Float, onClick: () -> Unit) {
+    val label = speedLabel(speed)
+    val description = stringResource(R.string.voice_speed_description, label)
+    Box(
+        Modifier.defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
+            .clickable(role = Role.Button, onClickLabel = stringResource(R.string.voice_speed_change), onClick = onClick)
+            .semantics { contentDescription = description },
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            label, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surface.copy(alpha = 0.55f))
+                .padding(horizontal = 8.dp, vertical = 4.dp),
+        )
+    }
+}
+
+/** 1 -> "1x", 1.5 -> "1.5x", 2 -> "2x" (a digit and an x read the same in every language). */
+fun speedLabel(speed: Float): String = if (speed % 1f == 0f) "${speed.toInt()}x" else "${speed}x"
 
 @Composable
 private fun FileChip(messageId: String, a: AttachmentUi, actions: BubbleActions) {

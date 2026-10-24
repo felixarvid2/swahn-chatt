@@ -6,7 +6,23 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import androidx.paging.Pager
+import androidx.paging.PagingConfig
+import androidx.paging.PagingData
+import androidx.paging.cachedIn
+import androidx.paging.map
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.onStart
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
@@ -25,6 +41,10 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import se.familychat.app.data.ChatRepository
+import se.familychat.app.data.ConnectionStatus
+import se.familychat.app.data.db.LatestMessageRow
+import se.familychat.app.data.db.toModel
+import se.familychat.app.di.ApplicationScope
 import se.familychat.app.data.UiError
 import se.familychat.app.data.toUiError
 import se.familychat.app.media.AttachmentPreparer
@@ -42,9 +62,12 @@ import se.familychat.app.ui.model.AttachmentUi
 import se.familychat.app.ui.model.AvatarUi
 import se.familychat.app.ui.model.ChatRow
 import se.familychat.app.ui.model.ChatRowContext
+import se.familychat.app.ui.model.ConnectionUi
+import se.familychat.app.ui.model.SafetyUi
+import se.familychat.app.ui.model.toChatRow
+import se.familychat.app.ui.model.withSeparators
 import se.familychat.app.ui.model.ReplyUi
 import se.familychat.app.ui.model.attachmentKindOf
-import se.familychat.app.ui.model.buildChatRows
 import se.familychat.core.client.DownloadState
 import se.familychat.core.client.FamilyChatEngine
 import se.familychat.core.client.LocalStore
@@ -64,7 +87,6 @@ data class ConversationUiState(
     val isGroup: Boolean = false,
     val memberCount: Int = 0,
     val avatar: AvatarUi = AvatarUi(""),
-    val rows: List<ChatRow> = emptyList(),
     val typingNames: List<String> = emptyList(),
     /** The other person of a direct conversation (for the contact screen). */
     val otherUserId: String? = null,
@@ -75,15 +97,32 @@ data class ConversationUiState(
     val sending: Boolean = false,
     val loaded: Boolean = false,
     val removed: Boolean = false,
+    /** The newest message of the conversation (the list shows it first when it is at the bottom); null: no messages. */
+    val latestId: String? = null,
+    val latestOutgoing: Boolean = false,
+    /** Messages from others that arrived while the list was scrolled away from the bottom (or were unread on opening). */
+    val newMessages: Int = 0,
+    /** Unread messages when the conversation was opened (0: the list starts at the bottom). */
+    val openUnread: Int = 0,
+    val connection: ConnectionUi = ConnectionUi.HIDDEN,
+    val safety: SafetyUi = SafetyUi(),
 )
 
 sealed interface ConversationEffect {
     data class Error(val error: UiError, val detail: String? = null) : ConversationEffect
     data class OpenFile(val path: String, val mime: String, val name: String?) : ConversationEffect
+
+    /** Scroll to this message; if it is not loaded yet, [ConversationViewModel.loadAround] has been asked for. */
     data class ScrollTo(val messageId: String) : ConversationEffect
 }
 
-@OptIn(ExperimentalCoroutinesApi::class)
+/** What was unread when the conversation was opened (captured before it is marked read). */
+class OpenAnchor(val readSeq: Long, val firstUnreadId: String?, val unreadCount: Int)
+
+/** Where the paged list starts: [key] is an offset into the newest-first list (null: the newest message). */
+private class PagerStart(val key: Int?, val generation: Int)
+
+@OptIn(ExperimentalCoroutinesApi::class, FlowPreview::class)
 @HiltViewModel
 class ConversationViewModel @Inject constructor(
     savedState: SavedStateHandle,
@@ -96,6 +135,8 @@ class ConversationViewModel @Inject constructor(
     private val active: ActiveConversation,
     private val notifier: Notifier,
     private val work: WorkScheduler,
+    connectionStatus: ConnectionStatus,
+    @ApplicationScope private val appScope: CoroutineScope,
 ) : ViewModel() {
     val conversationId: String = checkNotNull(savedState["id"])
 
@@ -104,12 +145,15 @@ class ConversationViewModel @Inject constructor(
     private val editing = MutableStateFlow<String?>(null)
     private val recording = MutableStateFlow<RecordingUi?>(null)
     private val sending = MutableStateFlow(false)
-    private val windowSize = MutableStateFlow(INITIAL_WINDOW)
     private val downloads = MutableStateFlow<Map<String, Float?>>(emptyMap())
     private val validated = MutableStateFlow<Map<String, Boolean>>(emptyMap())
     private val missing = MutableStateFlow<Set<String>>(emptySet())
     private val autoRequested = ConcurrentHashMap.newKeySet<String>()
+    private val validating = ConcurrentHashMap.newKeySet<String>()
     private val resumed = MutableStateFlow(false)
+    private val pagerStart = MutableStateFlow(PagerStart(null, 0))
+    /** Messages above this sequence number count as "new" in the jump-to-bottom button; null while the list is at the bottom. */
+    private val newSinceSeq = MutableStateFlow<Long?>(null)
     private var recordingTicker: Job? = null
     private var typingJob: Job? = null
 
@@ -118,22 +162,38 @@ class ConversationViewModel @Inject constructor(
 
     val playback: StateFlow<PlaybackUi> = player.state
 
-    private val messages = windowSize.flatMapLatest { repo.messages(conversationId, it) }
+    /** The unread state at the moment of opening; computed before anything marks the conversation read. */
+    private val anchor: Deferred<OpenAnchor> = viewModelScope.async {
+        val readSeq = store.getConversation(conversationId)?.myReadSeq ?: 0L
+        val unread = store.unreadCount(conversationId)
+        OpenAnchor(readSeq, if (unread > 0) repo.firstUnreadId(conversationId, readSeq) else null, unread)
+    }
 
-    private val rowsFlow = combine(messages, repo.userMap(), engine.account, downloads, validated, missing) { values ->
-        @Suppress("UNCHECKED_CAST") val list = values[0] as List<StoredMessage>
-        @Suppress("UNCHECKED_CAST") val users = values[1] as Map<String, se.familychat.core.model.User>
-        val account = values[2] as se.familychat.core.client.Account?
-        @Suppress("UNCHECKED_CAST") val dl = values[3] as Map<String, Float?>
-        @Suppress("UNCHECKED_CAST") val ok = values[4] as Map<String, Boolean>
-        @Suppress("UNCHECKED_CAST") val gone = values[5] as Set<String>
-        val me = account?.userId.orEmpty()
+    private val pagedEntities = pagerStart.flatMapLatest { start ->
+        val a = anchor.await()
+        // a start at the newest message loads all unread messages at once, so the divider and the first unread are there
+        val initial = if (start.key == null) (a.unreadCount + PAGE_SIZE).coerceIn(2 * PAGE_SIZE, MAX_INITIAL_LOAD) else 2 * PAGE_SIZE
+        Pager(
+            PagingConfig(pageSize = PAGE_SIZE, initialLoadSize = initial, prefetchDistance = PAGE_SIZE / 2, enablePlaceholders = false),
+            initialKey = start.key,
+        ) { repo.pagedMessages(conversationId) }.flow
+    }.cachedIn(viewModelScope)
+
+    private val rowContext = combine(repo.userMap(), engine.account, downloads, validated, missing) { users, account, dl, ok, gone ->
         val isGroup = store.getConversation(conversationId)?.type == ConversationType.GROUP
-        val inWindow = list.mapTo(HashSet()) { it.id }
-        val referenced = list.mapNotNull { it.replyTo }.filter { it !in inWindow }.distinct()
-            .mapNotNull { store.getMessage(it) }.associateBy { it.id }
-        scheduleWork(list)
-        buildChatRows(list, ChatRowContext(me, isGroup, users, referenced, dl, ok, gone))
+        ChatRowContext(account?.userId.orEmpty(), isGroup, users, emptyMap(), dl, ok, gone)
+    }
+
+    /**
+     * The list, newest message first (the screen shows it with a reversed layout). A change of downloads or users maps the
+     * cached pages again; the pages themselves are not reloaded.
+     */
+    val rows: Flow<PagingData<ChatRow>> = combine(pagedEntities, rowContext) { data, ctx ->
+        val firstUnread = anchor.await().firstUnreadId
+        data.map { entity ->
+            val m = entity.toModel()
+            m.toChatRow(ctx, m.replyTo?.let { store.getMessage(it) })
+        }.withSeparators(ctx.zone, firstUnread)
     }
 
     private val header = combine(repo.conversation(conversationId), repo.members(conversationId), engine.typing, engine.account) { c, members, typing, account ->
@@ -158,26 +218,59 @@ class ConversationViewModel @Inject constructor(
 
     private class Composer(val draft: String, val replyTo: String?, val editing: String?, val recording: RecordingUi?, val sending: Boolean)
 
-    val state: StateFlow<ConversationUiState> = combine(header, rowsFlow, composer) { h, rows, c ->
+    /** Everything around the list that comes from the database or the connection. */
+    private class Around(
+        val latest: LatestMessageRow?, val newMessages: Int, val connection: ConnectionUi, val safety: SafetyUi, val openUnread: Int,
+    )
+
+    private val openUnread = MutableStateFlow(0)
+
+    private val around = combine(
+        repo.latestMessage(conversationId),
+        newSinceSeq.flatMapLatest { seq -> if (seq == null) flowOf(0) else repo.incomingAfter(conversationId, seq) },
+        connectionStatus.state.onStart { emit(ConnectionUi.HIDDEN) },
+        repo.safety(conversationId),
+        openUnread,
+        ::Around,
+    )
+
+    val state: StateFlow<ConversationUiState> = combine(header, composer, around) { h, c, ar ->
         if (h == null) return@combine ConversationUiState(removed = true, loaded = true)
         val reply = c.replyTo?.let { id ->
-            rows.filterIsInstance<ChatRow.Message>().firstOrNull { it.message.id == id }?.message?.let {
-                ReplyUi(it.id, if (it.outgoing) null else it.senderName ?: h.title, it.text, it.attachments.firstOrNull()?.kind, it.deleted)
-            } ?: store.getMessage(id)?.let { ReplyUi(it.id, null, it.text, it.attachments.firstOrNull()?.let { a -> attachmentKindOf(a.kind) }, it.deleted) }
+            store.getMessage(id)?.let { m ->
+                val name = if (m.outgoing) null else store.getUser(m.senderUserId)?.displayName ?: h.title
+                ReplyUi(m.id, name, m.text, m.attachments.firstOrNull()?.let { a -> attachmentKindOf(a.kind) }, m.deleted)
+            }
         }
         ConversationUiState(
-            title = h.title, isGroup = h.isGroup, memberCount = h.memberCount, avatar = h.avatar, rows = rows,
+            title = h.title, isGroup = h.isGroup, memberCount = h.memberCount, avatar = h.avatar,
             typingNames = h.typingNames, otherUserId = h.otherUserId, replyTo = reply, editingMessageId = c.editing,
             draft = c.draft, recording = c.recording, sending = c.sending, loaded = true,
+            latestId = ar.latest?.id, latestOutgoing = ar.latest?.outgoing == true, newMessages = ar.newMessages,
+            openUnread = ar.openUnread, connection = ar.connection, safety = ar.safety,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ConversationUiState())
 
     init {
         viewModelScope.launch {
-            // keep the conversation read while it is on screen
-            combine(resumed, messages) { r, m -> r to m.lastOrNull { !it.outgoing }?.seq }.collect { (r, seq) ->
+            val a = anchor.await()
+            openUnread.value = a.unreadCount
+            // opened on unread messages: the button counts them until the user has read down to the bottom
+            if (a.unreadCount > 0) newSinceSeq.value = a.readSeq
+        }
+        viewModelScope.launch {
+            // keep the conversation read while it is on screen (but only after the unread state was captured)
+            anchor.await()
+            combine(resumed, repo.newestIncomingSeq(conversationId)) { r, seq -> r to seq }.collect { (r, seq) ->
                 if (r && seq != null) runCatching { engine.markRead(conversationId) }
             }
+        }
+        viewModelScope.launch {
+            // restore the unsent text, then keep it stored while the user types (not while a sent message is edited)
+            repo.draft(conversationId)?.let { if (draft.value.isEmpty() && editing.value == null) draft.value = it }
+            combine(draft, editing) { d, e -> if (e == null) d else null }
+                .filterNotNull().drop(1).debounce(DRAFT_SAVE_DELAY_MS).distinctUntilChanged()
+                .collect { repo.saveDraft(conversationId, it) }
         }
     }
 
@@ -190,6 +283,7 @@ class ConversationViewModel @Inject constructor(
     }
 
     fun onPause() {
+        flushDraft()
         active.leave(conversationId)
         resumed.value = false
         engine.sendTyping(conversationId, false)
@@ -198,14 +292,55 @@ class ConversationViewModel @Inject constructor(
     }
 
     override fun onCleared() {
+        flushDraft()
         active.leave(conversationId)
         recorder.cancel()
         player.stop()
     }
 
-    fun loadOlder() {
-        windowSize.update { it + WINDOW_STEP }
+    /** Stores the unsent text now (the debounce would lose the last keystrokes when the screen goes away). */
+    private fun flushDraft() {
+        if (editing.value != null) return
+        val text = draft.value
+        appScope.launch { repo.saveDraft(conversationId, text) }
     }
+
+    // --- the list ----------------------------------------------------------------------------------------------------
+
+    /**
+     * The screen reports whether the list shows the newest message at the bottom. Leaving the bottom starts counting the
+     * messages that arrive meanwhile (for the jump-to-bottom button); getting back resets the count.
+     */
+    fun onAtBottom(atBottom: Boolean) {
+        if (atBottom) {
+            newSinceSeq.value = null
+        } else if (newSinceSeq.value == null) {
+            viewModelScope.launch { if (newSinceSeq.value == null) newSinceSeq.value = repo.maxSeq(conversationId) }
+        }
+    }
+
+    /** Restarts the list at the newest message (it was showing an older part, after a jump to a quoted message). */
+    fun jumpToLatest() {
+        pagerStart.update { PagerStart(null, it.generation + 1) }
+    }
+
+    /** Restarts the list a little above [messageId] so that it is loaded (a quoted message far back); false: not found. */
+    fun loadAround(messageId: String) {
+        viewModelScope.launch {
+            val offset = repo.offsetOf(conversationId, messageId) ?: return@launch
+            pagerStart.update { PagerStart((offset - LOAD_AROUND_CONTEXT).coerceAtLeast(0), it.generation + 1) }
+        }
+    }
+
+    /** A message came into view: fetch or check its attachments (photos and voice messages are fetched automatically). */
+    fun onMessageShown(messageId: String) {
+        viewModelScope.launch {
+            val m = store.getMessage(messageId) ?: return@launch
+            if (m.attachments.isNotEmpty()) scheduleWork(listOf(m))
+        }
+    }
+
+    fun cycleVoiceSpeed() = player.cycleSpeed()
 
     // --- composer ----------------------------------------------------------------------------------------------------
 
@@ -236,6 +371,7 @@ class ConversationViewModel @Inject constructor(
                 draft.value = ""
                 replyTo.value = null
                 editing.value = null
+                repo.saveDraft(conversationId, "")
                 engine.sendTyping(conversationId, false)
                 work.enqueueOutbox()
             } catch (e: CancellationException) {
@@ -306,6 +442,7 @@ class ConversationViewModel @Inject constructor(
                 val caption = draft.value.trim().ifEmpty { null }
                 engine.sendAttachments(conversationId, prepared, caption, replyTo.value)
                 draft.value = ""
+                repo.saveDraft(conversationId, "")
                 replyTo.value = null
                 work.enqueueOutbox()
             } catch (e: CancellationException) {
@@ -432,7 +569,7 @@ class ConversationViewModel @Inject constructor(
                     continue
                 } else if (validated.value[a.id] == null) {
                     if (File(path).isFile) {
-                        toValidate += a.id to (path to a.kind)
+                        if (validating.add(a.id)) toValidate += a.id to (path to a.kind)
                     } else {
                         gone += a.id
                     }
@@ -460,6 +597,7 @@ class ConversationViewModel @Inject constructor(
                     toValidate.associate { (id, pk) -> id to MediaValidator.isValid(File(pk.first), pk.second) }
                 }
                 validated.update { it + results }
+                validating.removeAll(results.keys)
             }
         }
     }
@@ -471,8 +609,10 @@ class ConversationViewModel @Inject constructor(
     }
 
     private companion object {
-        const val INITIAL_WINDOW = 80
-        const val WINDOW_STEP = 80
+        const val PAGE_SIZE = 40
+        const val MAX_INITIAL_LOAD = 400
+        const val LOAD_AROUND_CONTEXT = 10
+        const val DRAFT_SAVE_DELAY_MS = 500L
         const val MAX_ATTACHMENTS = 10
         const val AUTO_IMAGE_BYTES = 20L * 1024 * 1024
         const val AUTO_VOICE_BYTES = 8L * 1024 * 1024

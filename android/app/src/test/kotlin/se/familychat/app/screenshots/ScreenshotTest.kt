@@ -10,6 +10,9 @@ import androidx.compose.ui.Modifier
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.core.view.drawToBitmap
+import androidx.paging.PagingData
+import androidx.paging.compose.collectAsLazyPagingItems
+import kotlinx.coroutines.flow.flowOf
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -52,6 +55,10 @@ import se.familychat.app.ui.screens.SettingsCallbacks
 import se.familychat.app.ui.screens.SettingsContent
 import se.familychat.app.ui.screens.SettingsUiState
 import se.familychat.app.ui.model.AvatarUi
+import se.familychat.app.ui.model.ChatRow
+import se.familychat.app.ui.model.ConnectionUi
+import se.familychat.app.ui.model.SafetyState
+import se.familychat.app.ui.model.SafetyUi
 import se.familychat.app.ui.theme.FamilyChatTheme
 import java.io.File
 import java.io.FileOutputStream
@@ -91,24 +98,30 @@ class ScreenshotTest {
     // The compose rule can only set content once per test, so each variant is its own test.
 
     private val convState = ConversationUiState(
-        title = "Familjen Ek", isGroup = true, memberCount = 4, avatar = AvatarUi("Familjen Ek"), rows = Fixtures.groupRows, loaded = true,
+        title = "Familjen Ek", isGroup = true, memberCount = 4, avatar = AvatarUi("Familjen Ek"), loaded = true,
         draft = "",
     )
 
     private val directState = ConversationUiState(
-        title = "Bertil Ek", isGroup = false, avatar = Fixtures.bob.avatar, rows = Fixtures.directRows, loaded = true, otherUserId = "bob",
+        title = "Bertil Ek", isGroup = false, avatar = Fixtures.bob.avatar, loaded = true, otherUserId = "bob",
         typingNames = listOf("Bertil"),
         replyTo = se.familychat.app.ui.model.ReplyUi("a", "Bertil Ek", "Ska vi ses vid fyra?", null, false), draft = "Absolut, ses där",
     )
 
+    /** [rows] are oldest first, like the fixtures; the screen gets them newest first, as pages. */
     @Composable private fun ConversationUnderTest(
         state: ConversationUiState,
         playback: se.familychat.app.ui.components.PlaybackUi = Fixtures.idle,
         firstVisible: Int = 0,
-    ) = ConversationContent(
-        state, playback, BubbleActions(), ConversationCallbacks(),
-        listState = androidx.compose.foundation.lazy.rememberLazyListState(initialFirstVisibleItemIndex = firstVisible),
-    )
+        rows: List<ChatRow> = if (state.isGroup) Fixtures.groupRows else Fixtures.directRows,
+    ) {
+        val items = flowOf(PagingData.from(rows.asReversed())).collectAsLazyPagingItems()
+        ConversationContent(
+            state.copy(latestId = (rows.lastOrNull { it is ChatRow.Message } as? ChatRow.Message)?.message?.id), items, playback,
+            BubbleActions(), ConversationCallbacks(),
+            listState = androidx.compose.foundation.lazy.rememberLazyListState(initialFirstVisibleItemIndex = firstVisible),
+        )
+    }
 
     @Test fun conversationsLight() = shot("1_conversations", false) { ConversationsContent(Fixtures.conversationItems, false, {}, {}, {}, {}) }
     @Test fun conversationsDark() = shot("1_conversations", true) { ConversationsContent(Fixtures.conversationItems, false, {}, {}, {}, {}) }
@@ -119,6 +132,25 @@ class ScreenshotTest {
     // scrolled up to the photo, voice message, video and the reply
     @Test fun conversationMediaLight() = shot("2b_conversation_group_media", false) { ConversationUnderTest(convState, Fixtures.playing, firstVisible = 7) }
     @Test fun conversationMediaDark() = shot("2b_conversation_group_media", true) { ConversationUnderTest(convState, Fixtures.playing, firstVisible = 7) }
+
+    // opened with six unread messages: the divider at the top, the jump-to-bottom button with the count
+    private val unreadState = convState.copy(openUnread = 6, newMessages = 6)
+    @Test fun conversationUnreadLight() = shot("2c_conversation_unread_fab", false) { ConversationUnderTest(unreadState, rows = Fixtures.groupRowsUnread) }
+    @Test fun conversationUnreadDark() = shot("2c_conversation_unread_fab", true) { ConversationUnderTest(unreadState, rows = Fixtures.groupRowsUnread) }
+
+    @Test fun conversationOfflineLight() = shot("2d_conversation_offline", false) { ConversationUnderTest(convState.copy(connection = ConnectionUi.OFFLINE), Fixtures.playing) }
+    @Test fun conversationOfflineDark() = shot("2d_conversation_offline", true) { ConversationUnderTest(convState.copy(connection = ConnectionUi.OFFLINE), Fixtures.playing) }
+    @Test fun conversationConnectingLight() = shot("2e_conversation_connecting", false) { ConversationUnderTest(convState.copy(connection = ConnectionUi.CONNECTING), Fixtures.playing) }
+
+    @Test fun conversationsOfflineLight() = shot("1b_conversations_offline", false) {
+        ConversationsContent(Fixtures.conversationItems, false, {}, {}, {}, {}, connection = ConnectionUi.OFFLINE)
+    }
+
+    @Test fun conversationVerifiedLight() = shot("3b_conversation_verified", false) { ConversationUnderTest(directState.copy(safety = SafetyUi(SafetyState.VERIFIED))) }
+    @Test fun conversationVerifiedDark() = shot("3b_conversation_verified", true) { ConversationUnderTest(directState.copy(safety = SafetyUi(SafetyState.VERIFIED))) }
+    @Test fun conversationSafetyWarningLight() = shot("3c_conversation_safety_warning", false) {
+        ConversationUnderTest(directState.copy(safety = SafetyUi(SafetyState.WARNING, "bob")))
+    }
 
     @Test fun directLight() = shot("3_conversation_direct", false) { ConversationUnderTest(directState) }
     @Test fun directDark() = shot("3_conversation_direct", true) { ConversationUnderTest(directState) }

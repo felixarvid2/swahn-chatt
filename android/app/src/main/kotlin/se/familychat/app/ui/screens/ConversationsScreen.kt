@@ -65,6 +65,9 @@ import kotlinx.coroutines.launch
 import se.familychat.app.R
 import se.familychat.app.data.AppPrefs
 import se.familychat.app.data.ChatRepository
+import se.familychat.app.data.ConnectionStatus
+import se.familychat.app.ui.components.ConnectionBanner
+import se.familychat.app.ui.model.ConnectionUi
 import se.familychat.app.platform.work.WorkScheduler
 import se.familychat.app.ui.components.Avatar
 import se.familychat.app.ui.components.DeliveryIcon
@@ -81,7 +84,10 @@ class ConversationsViewModel @Inject constructor(
     private val engine: FamilyChatEngine,
     private val prefs: AppPrefs,
     private val work: WorkScheduler,
+    connectionStatus: ConnectionStatus,
 ) : ViewModel() {
+    val connection: StateFlow<ConnectionUi> = connectionStatus.state.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ConnectionUi.HIDDEN)
+
     /** null while the first read is pending. */
     val items: StateFlow<List<ConversationItemUi>?> =
         repo.conversationItems(context.getString(R.string.unknown_user)).map<List<ConversationItemUi>, List<ConversationItemUi>?> { it }
@@ -123,6 +129,7 @@ fun ConversationsScreen(
 ) {
     val items by vm.items.collectAsStateWithLifecycle()
     val refreshing by vm.refreshing.collectAsStateWithLifecycle()
+    val connection by vm.connection.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
     LaunchedEffect(Unit) {
@@ -133,7 +140,7 @@ fun ConversationsScreen(
             permission.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
     }
-    ConversationsContent(items, refreshing, vm::refresh, onOpen, onNew, onSettings)
+    ConversationsContent(items, refreshing, vm::refresh, onOpen, onNew, onSettings, connection = connection)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -146,6 +153,7 @@ fun ConversationsContent(
     onNew: () -> Unit,
     onSettings: () -> Unit,
     modifier: Modifier = Modifier,
+    connection: ConnectionUi = ConnectionUi.HIDDEN,
 ) {
     Scaffold(
         modifier = modifier,
@@ -165,7 +173,9 @@ fun ConversationsContent(
             }
         },
     ) { padding ->
-        PullToRefreshBox(isRefreshing = refreshing, onRefresh = onRefresh, modifier = Modifier.padding(padding).fillMaxSize()) {
+        Column(Modifier.padding(padding).fillMaxSize()) {
+        ConnectionBanner(connection)
+        PullToRefreshBox(isRefreshing = refreshing, onRefresh = onRefresh, modifier = Modifier.weight(1f).fillMaxWidth()) {
             if (items != null && items.isEmpty()) {
                 Column(Modifier.fillMaxSize().padding(32.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(stringResource(R.string.no_conversations_title), style = MaterialTheme.typography.titleMedium)
@@ -182,6 +192,7 @@ fun ConversationsContent(
                 }
             }
         }
+        }
     }
 }
 
@@ -189,6 +200,8 @@ fun ConversationsContent(
 fun ConversationRow(item: ConversationItemUi, onClick: () -> Unit, modifier: Modifier = Modifier) {
     val time = rememberListTimeFormatter()
     val unreadText = if (item.unread > 99) "99+" else item.unread.toString()
+    // a typing contact is more current than a draft; a draft replaces the last message
+    val showsDraft = item.draft != null && !item.typing
     val unreadDescription = if (item.unread > 0) pluralStringResource(R.plurals.unread_messages_description, item.unread, item.unread) else null
     Row(
         modifier.fillMaxWidth().heightIn(min = 72.dp).clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 10.dp),
@@ -201,12 +214,12 @@ fun ConversationRow(item: ConversationItemUi, onClick: () -> Unit, modifier: Mod
                 fontWeight = if (item.unread > 0) FontWeight.Bold else FontWeight.Medium,
             )
             Row(verticalAlignment = Alignment.CenterVertically) {
-                if (item.previewOwn && item.previewDelivery != se.familychat.app.ui.model.DeliveryUi.NONE) {
+                if (item.previewOwn && item.previewDelivery != se.familychat.app.ui.model.DeliveryUi.NONE && !showsDraft) {
                     DeliveryIcon(item.previewDelivery, MaterialTheme.colorScheme.onSurfaceVariant, Modifier.padding(end = 4.dp))
                 }
                 Text(
                     previewLine(item), maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyMedium,
-                    color = if (item.typing) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = if (item.typing || showsDraft) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                     fontStyle = if (item.typing || item.previewKind == PreviewKind.DELETED || item.previewKind == PreviewKind.UNDECRYPTABLE) FontStyle.Italic else FontStyle.Normal,
                 )
             }
@@ -234,6 +247,7 @@ fun ConversationRow(item: ConversationItemUi, onClick: () -> Unit, modifier: Mod
 @Composable
 private fun previewLine(item: ConversationItemUi): String {
     if (item.typing) return stringResource(R.string.typing)
+    if (item.draft != null) return stringResource(R.string.draft_preview, item.draft.replace('\n', ' '))
     val body = when (item.previewKind) {
         PreviewKind.NONE -> stringResource(R.string.no_messages_yet)
         PreviewKind.TEXT -> item.previewText.orEmpty().replace('\n', ' ')

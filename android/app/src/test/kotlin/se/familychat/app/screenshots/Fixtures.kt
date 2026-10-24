@@ -66,7 +66,10 @@ object Fixtures {
     val conversationItems = listOf(
         ConversationItemUi("g1", "Familjen Ek", true, AvatarUi("Familjen Ek"), PreviewKind.TEXT, "Vi grillar på lördag, vem kommer?", "Cecilia", false, DeliveryUi.NONE, at(10, 24, 15, 58), 3),
         ConversationItemUi("d1", "Bertil Ek", false, bob.avatar, PreviewKind.VOICE, null, null, false, DeliveryUi.NONE, at(10, 24, 12, 41), 1),
-        ConversationItemUi("d2", "Cecilia Ek", false, cia.avatar, PreviewKind.TEXT, "Perfekt, vi ses då!", null, true, DeliveryUi.READ, at(10, 23, 21, 5), 0),
+        ConversationItemUi(
+            "d2", "Cecilia Ek", false, cia.avatar, PreviewKind.TEXT, "Perfekt, vi ses då!", null, true, DeliveryUi.READ, at(10, 23, 21, 5), 0,
+            draft = "Jag kan hämta på fredag, passar det?",
+        ),
         ConversationItemUi("d3", "Emma Berg", false, emma.avatar, PreviewKind.PHOTO, null, null, true, DeliveryUi.DELIVERED, at(10, 22, 9, 15), 0, typing = false),
         ConversationItemUi("g2", "Semesterplanering", true, AvatarUi("Semesterplanering"), PreviewKind.FILE, "boende-kroatien.pdf", "David", false, DeliveryUi.NONE, at(10, 19, 18, 2), 0),
         ConversationItemUi("d4", "David Ek", false, david.avatar, PreviewKind.TEXT, "Skickas inte än …", null, true, DeliveryUi.PENDING, at(10, 14, 8, 30), 0, typing = false),
@@ -156,6 +159,9 @@ object Fixtures {
             msg("d", bob, "Fint foto! Vilken utsikt.", at(10, 24, 14, 40), group = false, undecryptable = null),
         ),
     )
+
+    /** The group conversation as it opens with six unread messages: the divider sits above the first of them (oldest first). */
+    val groupRowsUnread: List<ChatRow> = groupRows.flatMap { if (it is ChatRow.Message && it.message.id == "6") listOf(ChatRow.UnreadDivider, it) else listOf(it) }
 
     val idle = PlaybackUi()
     val playing = PlaybackUi("v1", playing = true, positionMs = 9_000, durationMs = 23_000)
