@@ -5,13 +5,14 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from app.migrate import code_head, db_revision
+from app.schemas import HealthOut, ReadyOut, UnavailableOut
 from app.services.stats import free_disk_bytes
 
 router = APIRouter(tags=["health"])
 log = logging.getLogger("familychat.health")
 
 
-@router.get("/healthz")
+@router.get("/healthz", response_model=HealthOut, summary="Liveness probe")
 def healthz() -> dict:
     return {"status": "ok"}
 
@@ -20,7 +21,17 @@ def _unavailable(code: str, **extra) -> JSONResponse:
     return JSONResponse({"status": "unavailable", "code": code, **extra}, 503)
 
 
-@router.get("/readyz")
+@router.get(
+    "/readyz",
+    response_model=ReadyOut,
+    summary="Readiness probe",
+    responses={
+        503: {
+            "model": UnavailableOut,
+            "description": "`database_unavailable`, `migration_mismatch` or `low_disk` (see `code`).",
+        }
+    },
+)
 def readyz(request: Request):
     """Ready = database answers, it is at the migration this code expects, and the data volume has room."""
     settings = request.app.state.settings

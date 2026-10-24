@@ -97,8 +97,8 @@ class PagedRowsTest {
         val sameDay = m("p", "bob", at(10, 1)).toChatRow(ctx)
         val next = m("q", "bob", at(11, 0)).toChatRow(ctx)
         assertNull(dateSeparatorBetween(null, old, zone), "nothing above the newest message")
-        assertNull(dateSeparatorBetween(sameDay.let { old }, sameDay, zone))
-        assertEquals(at(11, 0) / 1, (dateSeparatorBetween(next, old, zone) as ChatRow.DateHeader).dayStart)
+        assertNull(dateSeparatorBetween(old, sameDay, zone), "same day: no separator between")
+        assertEquals(at(11, 0), (dateSeparatorBetween(next, old, zone) as ChatRow.DateHeader).dayStart)
         assertEquals(at(10, 0), (dateSeparatorBetween(old, null, zone) as ChatRow.DateHeader).dayStart, "the oldest message gets its day")
     }
 

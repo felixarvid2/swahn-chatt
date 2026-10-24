@@ -83,6 +83,11 @@ def hash_invite_code(code: str) -> str:
     return hash_token(normalize_invite_code(code))
 
 
+def hash_reset_code(code: str) -> str:
+    """Password reset codes share the invitation alphabet but live in their own hash domain."""
+    return hash_token("password-reset:" + normalize_invite_code(code))
+
+
 def constant_time_equals(a: str, b: str) -> bool:
     return hmac.compare_digest(a.encode(), b.encode())
 

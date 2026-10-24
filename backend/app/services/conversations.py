@@ -117,17 +117,29 @@ def create_group(db: Session, me: str, name: str, member_ids: list[str], avatar_
     return conv.id
 
 
-def update_group(db: Session, conv: Conversation, user_id: str, fields: set[str], name, avatar_id) -> None:
+def update_conversation(db: Session, conv_id: str, user_id: str, body) -> Conversation:
+    """PATCH: `name` and `avatar_attachment_id` are for group admins; `disappearing_seconds` may be set by any member
+    of a direct chat and by group admins."""
+    conv, member = require_member(db, conv_id, user_id)
+    fields = body.model_fields_set
+    if conv.type == "group":
+        if member.role != "admin":
+            raise forbidden("group administrators only")
+    elif "disappearing_seconds" not in fields or fields & {"name", "avatar_attachment_id"}:
+        raise conflict("not a group conversation")
     if "name" in fields:
-        if name is None:
+        if body.name is None:
             raise invalid("name cannot be empty")
-        conv.name = name
+        conv.name = body.name
     if "avatar_attachment_id" in fields:
-        _check_avatar(db, avatar_id, user_id)
-        conv.avatar_attachment_id = avatar_id
+        _check_avatar(db, body.avatar_attachment_id, user_id)
+        conv.avatar_attachment_id = body.avatar_attachment_id
+    if "disappearing_seconds" in fields:
+        conv.disappearing_seconds = body.disappearing_seconds
     conv.updated_at = clock.now_ms()
     db.flush()
     emit_updated(db, conv.id)
+    return conv
 
 
 def add_members(db: Session, conv: Conversation, user_ids: list[str]) -> None:

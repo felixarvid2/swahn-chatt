@@ -31,7 +31,7 @@ class VoiceSpeedTest {
         prefs.setVoiceSpeed(VoiceSpeed.next(prefs.voiceSpeed.value))
         assertEquals(1.5f, prefs.voiceSpeed.value)
         assertEquals(1.5f, AppPrefs(context).voiceSpeed.value, "read back from the preference file")
-        prefs.setVoiceSpeed(3.3f)
-        assertEquals(1f, AppPrefs(context).voiceSpeed.value, "garbage in the file falls back to normal speed")
+        context.getSharedPreferences("familychat_prefs", Context.MODE_PRIVATE).edit().putFloat("voice_speed", 3.3f).commit()
+        assertEquals(1f, AppPrefs(context).voiceSpeed.value, "a damaged preference falls back to normal speed")
     }
 }

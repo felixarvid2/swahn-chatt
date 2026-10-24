@@ -13,10 +13,16 @@ The running server also serves a generated OpenAPI document at `/api/v1/openapi.
 - Authentication: `Authorization: Bearer <access_token>` on every endpoint except `/auth/*` (other than
   logout), `/healthz` and `/readyz`.
 - Errors: non-2xx responses have the body `{"code": "<machine_code>", "message": "<human text>"}`, sometimes
-  with extra fields (documented per endpoint). Common codes:
+  with extra fields (documented per endpoint) and, from this version on, `"request_id"` (see below). Common codes:
   `invalid_request` (422), `unauthorized` (401), `token_expired` (401), `forbidden` (403), `not_found` (404),
   `conflict` (409), `rate_limited` (429, with a `Retry-After` header in seconds), `payload_too_large` (413),
   `quota_exceeded` (413), `unsupported_media_type` (415).
+- Request IDs: every response carries `X-Request-ID`. A client may send its own (`^[A-Za-z0-9._-]{8,64}$`, anything
+  else is ignored and replaced); the server uses it in every log line of that request and puts it in error bodies as
+  `request_id`, so a user can quote it to the administrator. Clients ignore the field if they do not know it.
+- OpenAPI: every operation has a tag, a summary and its error responses (`401`/`403`/`404`/`409`/`413`/`422`/`429` as
+  applicable, all with the `{"code","message"}` model). Unknown JSON fields in responses must be ignored by clients:
+  new fields are only ever added.
 - Ordering: `seq` values are integers assigned by the server from one monotonic counter. Message `seq` orders
   messages; event `seq` is the sync cursor. They are different counters.
 
@@ -34,7 +40,8 @@ The running server also serves a generated OpenAPI document at `/api/v1/openapi.
 // Conversation
 {"id": "uuid", "type": "direct|group", "name": "string|null", "avatar_attachment_id": "uuid|null",
  "created_by": "uuid", "created_at": 0, "updated_at": 0, "last_message_at": 0 /*or null*/,
- "last_message_seq": 0 /*or null*/, "my_read_seq": 0, "unread_count": 0,
+ "last_message_seq": 0 /*or null*/, "disappearing_seconds": 3600 /*or null: server pruning timer, see below*/,
+ "my_read_seq": 0, "unread_count": 0,
  "members": [{"user_id": "uuid", "role": "admin|member", "joined_at": 0}]}
 
 // Envelope: one ciphertext addressed to one device
@@ -42,8 +49,8 @@ The running server also serves a generated OpenAPI document at `/api/v1/openapi.
 
 // Message (as returned to one device; `envelope` is that device's ciphertext, or null)
 {"id": "uuid", "conversation_id": "uuid", "sender_user_id": "uuid", "sender_device_id": "uuid",
- "kind": "message|edit|delete", "target_message_id": "uuid|null", "client_ts": 0, "server_ts": 0,
- "seq": 0, "attachment_ids": ["uuid"], "deleted": false,
+ "kind": "message|edit|delete|reaction", "target_message_id": "uuid|null", "client_ts": 0, "server_ts": 0,
+ "seq": 0, "attachment_ids": ["uuid"], "deleted": false, "expires_at": 0 /*or null: server pruning time*/,
  "envelope": {"type": "prekey|whisper", "body": "base64"}}
 ```
 
@@ -79,6 +86,7 @@ Display name: 1–64 characters. Device name: 1–64 characters.
 | POST | `/auth/login` | `{username, password, device_name}` | `200 AuthResponse`. Every login registers a **new device**. `401 invalid_credentials` (same answer for unknown user and wrong password). `409 device_limit` when the account already has the maximum number of active devices (default 10, `FAMILYCHAT_MAX_DEVICES_PER_USER`; the `message` says so: remove a device, then log in again). `429 rate_limited` while the username is locked after repeated failures (see below) |
 | POST | `/auth/refresh` | `{refresh_token}` | `200 AuthResponse` with a **new** refresh token; the old one stops working. Presenting **any** refresh token the session issued earlier (not only the previous one) revokes the whole session and its device (`401 token_reused`) |
 | POST | `/auth/logout` | – (auth) | `204`. Revokes the session and the device, deletes the device's public keys |
+| POST | `/auth/password/reset` | `{code, new_password, device_name}` | `200 AuthResponse`. Redeems a reset code an administrator issued (see below). `404 invalid_reset_code` for unknown, expired, used or replaced codes (or a removed account), `422` for a weak password, `429` like redeem |
 
 - Access tokens are JWT (HS256) valid for 15 minutes (`FAMILYCHAT_ACCESS_TOKEN_MINUTES`). Refresh tokens are
   random 256-bit values, stored hashed, valid for 60 days (`FAMILYCHAT_REFRESH_TOKEN_DAYS`), sliding on refresh.
@@ -86,6 +94,14 @@ Display name: 1–64 characters. Device name: 1–64 characters.
 - An expired access token returns `401 {"code":"token_expired"}`; the client refreshes and retries once.
 - Rate limits (in-process): per client IP (IPv6 clients per /64 prefix) login 10/min and 5/min per IP+username,
   redeem 10/min, refresh 30/min; key-bundle fetches 120/min per user. Exceeding returns `429` with `Retry-After`.
+- Password reset: an administrator issues a code (`POST /admin/users/{user_id}/password-reset`, or
+  `python -m app.cli reset-password <username>` on the server) and hands it to the user over a channel they trust.
+  The code has the format of an invitation code, works once, is valid for 24 hours and is stored hashed; issuing a
+  new code for the same user cancels the older ones. Redeeming it sets the new password, **revokes every session and
+  device of that user** (their public keys and queued messages are deleted, their WebSockets are closed, everyone
+  sharing a conversation gets `devices_changed`) and signs the caller in on a **new device** with new keys. Contacts
+  therefore see a "new device" notice for this person; that is intended. Messages already on the old phones stay
+  readable there but the phones are signed out. Rate limit: 10 per minute per client address, like redeem.
 - Per-username lockout: after 10 failed logins within an hour (or 30 within a day) for a username, from any
   addresses, further logins for that username get `429 rate_limited` (with `Retry-After`) until the failures age
   out, even with the right password. Unknown usernames behave identically. Signed-in devices are not affected.
@@ -99,13 +115,16 @@ Display name: 1–64 characters. Device name: 1–64 characters.
 | DELETE | `/admin/invitations/{id}` | – | `204` |
 | DELETE | `/admin/users/{user_id}` | – | `204`. Disables the account, revokes all sessions and devices, removes the user from all conversations. An admin cannot remove themselves (`409`) |
 | GET | `/admin/users` | – | `200 [{id, username, display_name, is_admin, created_at, disabled_at, last_seen_at, active_devices, attachment_bytes}]`, oldest account first, removed accounts included (`disabled_at` set). `last_seen_at` is the newest over all the user's devices (`null` if none), `attachment_bytes` the storage the user has uploaded |
+| POST | `/admin/users/{user_id}/password-reset` | – | `201 {code, expires_at}`. The `code` is shown only here (single use, 24 h, stored hashed). `404` for an unknown or removed user. Audit: `password_reset_issued` |
 | DELETE | `/admin/users/{user_id}/devices/{device_id}` | – | `204`. Lost phone: revokes that device with the same effects as the owner doing it (keys and queued data deleted, sessions revoked, `devices_changed` events sent, its WebSocket closed with `4401`). `404` if the device is not an active device of that user; `409` for the admin's own current device (use logout) |
 | GET | `/admin/stats` | – | `200 {users, active_devices, conversations, messages, undelivered_envelopes, attachments, db_bytes, attachments_bytes, disk_free_bytes, version, migration: {head, current}, uptime_seconds}`. `users` counts active accounts; `undelivered_envelopes` only those for active devices; `db_bytes` is the SQLite file with its WAL (`null` for other databases); `disk_free_bytes` is free space on the data volume |
 | GET | `/admin/audit?before_id=&limit=` | – | `200 [{id, at, actor_user_id, action, target_user_id, target_id, ip, details}]`, newest first. `limit` 1..200 (default 50); pass the smallest `id` of a page as `before_id` for the next (older) page. See "Audit log" in `SECURITY.md` for the actions |
 
 Bootstrap and server-side administration use the CLI (see `docs/RASPBERRY_PI_SETUP.md`):
 `python -m app.cli create-invite --admin`, `create-invite`, `list-users`, `remove-user <username>`,
-`audit [--limit N]`, `backup <dir>`, `restore <archive>`, `seed-dev`.
+`reset-password <username>` (prints a reset code; the last stdout line), `audit [--limit N]`, `backup <dir>`,
+`verify-backup <archive>` (checks an archive completely without restoring it; exit 0 = good), `restore <archive>`,
+`check-config` (effective non-secret settings and warnings; exit 1 on errors), `seed-dev`.
 
 ## Users and devices
 
@@ -168,7 +187,7 @@ devices that have uploaded keys are returned. The caller's own current device is
 | POST | `/conversations` | `{type: "direct", member_user_ids: [other_id]}` | `200` existing or `201` new `Conversation` |
 | POST | `/conversations` | `{type: "group", name: 1..64, member_user_ids: [...], avatar_attachment_id?}` | `201 Conversation`; creator becomes admin |
 | GET | `/conversations/{id}` | – | `200 Conversation`, `404` if not a member |
-| PATCH | `/conversations/{id}` | `{name?, avatar_attachment_id?}` | `200` (group admins only) |
+| PATCH | `/conversations/{id}` | `{name?, avatar_attachment_id?, disappearing_seconds?: null|300..31536000}` | `200 Conversation`. `name` and `avatar_attachment_id`: group admins only. `disappearing_seconds`: any member of a direct chat, group admins in a group; emits `conversation_updated`; `422` for other values; `409` for `name`/`avatar_attachment_id` on a direct chat |
 | POST | `/conversations/{id}/members` | `{user_ids: [...]}` | `200 Conversation` (group admins only) |
 | PATCH | `/conversations/{id}/members/{user_id}` | `{role: "admin|member"}` | `200 Conversation` (group admins only) |
 | DELETE | `/conversations/{id}/members/{user_id}` | – | `204`. Admins remove others; anyone may remove themselves (leave). When the last admin leaves, the longest-standing member becomes admin |
@@ -192,6 +211,13 @@ nothing on the server side; their devices are excluded from future envelopes.
   `{"code": "mismatched_devices", "message": "...", "missing_devices": [{"user_id", "device_id"}],
   "extra_devices": [{"user_id", "device_id"}]}`. The client refreshes device lists/keys and retries with the
   same message `id`.
+- `kind: "reaction"` needs `target_message_id` naming a non-deleted message of `kind: "message"` in the same
+  conversation, **by any member** (not only the sender). It carries envelopes for the full device set like a
+  message; the encrypted content holds the emoji and is bound to the target, the server never sees the emoji. No
+  attachments. A reaction is not a message for the server: it does not change `last_message_at`/`last_message_seq`
+  or unread counts. It is synchronised as an ordinary `message` event whose `data.kind` is `"reaction"` and is
+  part of the history (`GET /conversations/{id}/messages`). Deleting the target drops undelivered reaction
+  envelopes too (those events are then skipped). Old clients that do not know the kind ignore it.
 - `kind: "edit"` and `kind: "delete"` need `target_message_id` naming a non-deleted message by the same sender
   in the same conversation. Both carry envelopes for the full device set, like a normal message: an edit holds
   the new encrypted content, a delete holds an encrypted `{"v":2,"type":"delete","conversation_id","message_id","target_message_id"}` content. Recipients apply a delete
@@ -203,6 +229,13 @@ nothing on the server side; their devices are excluded from future envelopes.
   returns `200 {"message": Message, "duplicate": true}` without creating events. An `id` used by another
   sender returns `409 id_conflict`. A new message returns `201 {"message": Message, "duplicate": false}`
   (the returned `envelope` is `null`).
+- Disappearing messages (server side): when the conversation has `disappearing_seconds` at the moment a message of
+  any kind is stored, the message gets `expires_at = server_ts + disappearing_seconds * 1000` (fixed at insert;
+  later timer changes do not touch it). The hourly maintenance job deletes expired messages with their envelopes,
+  attachment links and receipts, together with edits and reactions that name them; attachments nothing references
+  any more are then removed by the usual garbage collection. **Clients must not delete local history because of
+  these fields**: the timer also travels as encrypted content between the phones, and only that is trusted
+  (SECURITY.md). The server column limits how long ciphertext stays on the server.
 - Limits: each envelope body ≤ 64 KiB decoded, ≤ 1000 envelopes, ≤ 10 attachments.
 
 ## Synchronisation
@@ -221,7 +254,7 @@ receives events created after the device was registered (use `GET /conversations
 
 | `type` | `data` |
 |---|---|
-| `message` | `Message` with this device's envelope (also used for edits and deletes) |
+| `message` | `Message` with this device's envelope (also used for edits, deletes and reactions: see `data.kind`) |
 | `receipt` | `{"conversation_id", "user_id", "type": "delivered", "message_ids": [...]}` or `{"conversation_id", "user_id", "type": "read", "up_to_seq": 0}` |
 | `conversation_updated` | `Conversation` (created, renamed, avatar, members or roles changed) |
 | `conversation_removed` | `{"conversation_id"}` — the user left or was removed |
@@ -277,4 +310,5 @@ redacted in server logs, but proxies and other logs may still record it.
 `GET /attachments/{id}` → the bytes, with `Range` support (`206`) for resumed downloads. Allowed for the
 uploader, for members of a conversation containing a non-deleted message that references the attachment, and
 for any authenticated user for avatars. Everyone else gets `404`. Unreferenced message attachments are deleted
-after 24 h.
+after 24 h, and so are avatars that no user and no conversation uses any more (for example the previous avatar
+after a change), by the hourly maintenance job.

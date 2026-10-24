@@ -23,6 +23,7 @@ def other_connection(app) -> sqlite3.Connection:
     return con
 
 
+@pytest.mark.sqlite_only
 def test_read_sessions_take_no_write_lock_but_normal_sessions_do(app, alice):
     with app.state.read_session_factory() as db:
         db.execute(select(User.id)).all()

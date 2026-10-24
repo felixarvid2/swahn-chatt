@@ -47,6 +47,20 @@ class Invitation(Base):
     revoked_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
 
 
+class PasswordReset(Base):
+    """Single-use code an administrator hands to a user who lost their password (stored hashed, like invitations)."""
+
+    __tablename__ = "password_resets"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    code_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    created_by: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True)  # NULL = CLI
+    created_at: Mapped[int] = mapped_column(BigInteger)
+    expires_at: Mapped[int] = mapped_column(BigInteger)
+    used_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    revoked_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+
+
 class Device(Base):
     __tablename__ = "devices"
     __table_args__ = (UniqueConstraint("user_id", "number", name="uq_devices_user_number"),)
@@ -127,6 +141,8 @@ class Conversation(Base):
     updated_at: Mapped[int] = mapped_column(BigInteger)
     last_message_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     last_message_seq: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    # Server-side pruning timer only; clients do not trust it (see docs/SECURITY.md). NULL = keep forever.
+    disappearing_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class ConversationMember(Base):
@@ -152,6 +168,8 @@ class Message(Base):
     server_ts: Mapped[int] = mapped_column(BigInteger)
     deleted_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     edited_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    # server_ts + the conversation's disappearing_seconds at send time; the maintenance job deletes the row after it.
+    expires_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)
 
 
 class MessageEnvelope(Base):

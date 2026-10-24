@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 
 from app.config import Settings
 from app.deps import Principal, get_db, get_ip, get_limiter, get_principal, get_read_db, get_settings_dep
-from app.errors import ApiError, conflict, invalid, not_found
+from app.errors import ApiError, conflict, error_responses, invalid, not_found
 from app.models import Attachment, Device, User
 from app.ratelimit import RateLimiter
 from app.schemas import DeviceOut, PasswordChange, ProfileUpdate, UserOut
@@ -12,20 +12,22 @@ from app.security import hash_password, verify_password
 from app.services import accounts, audit
 from app.services.views import devices_out_db, user_out
 
-router = APIRouter(prefix="/users", tags=["users"])
+router = APIRouter(prefix="/users", tags=["users"], responses=error_responses(401))
 
 
-@router.get("", response_model=list[UserOut])
+@router.get("", response_model=list[UserOut], summary="List active users")
 def list_users(_: Principal = Depends(get_principal), db: Session = Depends(get_read_db)):
     return [user_out(u) for u in db.scalars(select(User).where(User.disabled_at.is_(None)).order_by(User.created_at))]
 
 
-@router.get("/me", response_model=UserOut)
+@router.get("/me", response_model=UserOut, summary="Get the calling user")
 def me(p: Principal = Depends(get_principal), db: Session = Depends(get_read_db)):
     return user_out(db.get(User, p.user_id))
 
 
-@router.patch("/me", response_model=UserOut)
+@router.patch(
+    "/me", response_model=UserOut, summary="Update the calling user's profile", responses=error_responses(413, 422)
+)
 def update_me(body: ProfileUpdate, p: Principal = Depends(get_principal), db: Session = Depends(get_db)):
     user = db.get(User, p.user_id)
     fields = body.model_fields_set
@@ -46,7 +48,12 @@ def update_me(body: ProfileUpdate, p: Principal = Depends(get_principal), db: Se
     return user_out(user)
 
 
-@router.put("/me/password", status_code=204)
+@router.put(
+    "/me/password",
+    status_code=204,
+    summary="Change the calling user's password",
+    responses=error_responses(403, 409, 413, 422, 429),
+)
 def change_password(
     body: PasswordChange,
     p: Principal = Depends(get_principal),
@@ -73,7 +80,12 @@ def change_password(
     return Response(status_code=204)
 
 
-@router.get("/{user_id}/devices", response_model=list[DeviceOut])
+@router.get(
+    "/{user_id}/devices",
+    response_model=list[DeviceOut],
+    summary="List a user's active devices",
+    responses=error_responses(404),
+)
 def user_devices(user_id: str, _: Principal = Depends(get_principal), db: Session = Depends(get_read_db)):
     user = db.get(User, user_id)
     if user is None or user.disabled_at is not None:

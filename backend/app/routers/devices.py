@@ -3,22 +3,27 @@ from sqlalchemy.orm import Session
 
 from app.config import Settings
 from app.deps import Principal, get_db, get_ip, get_principal, get_read_db, get_settings_dep
-from app.errors import conflict, invalid, not_found
+from app.errors import conflict, error_responses, invalid, not_found
 from app.models import Device
 from app.schemas import DeviceOut, PushRegistration
 from app.services import accounts, audit
 from app.services.push import endpoint_allowed, parse_hosts
 from app.services.views import device_out_db
 
-router = APIRouter(prefix="/devices", tags=["devices"])
+router = APIRouter(prefix="/devices", tags=["devices"], responses=error_responses(401))
 
 
-@router.get("/me", response_model=DeviceOut)
+@router.get("/me", response_model=DeviceOut, summary="Get the calling device")
 def my_device(p: Principal = Depends(get_principal), db: Session = Depends(get_read_db)):
     return device_out_db(db, db.get(Device, p.device_id))
 
 
-@router.put("/me/push", status_code=204)
+@router.put(
+    "/me/push",
+    status_code=204,
+    summary="Register the UnifiedPush endpoint of this device",
+    responses=error_responses(409, 413, 422),
+)
 def set_push(
     body: PushRegistration,
     p: Principal = Depends(get_principal),
@@ -40,7 +45,7 @@ def set_push(
     return Response(status_code=204)
 
 
-@router.delete("/me/push", status_code=204)
+@router.delete("/me/push", status_code=204, summary="Remove the push endpoint of this device")
 def clear_push(p: Principal = Depends(get_principal), db: Session = Depends(get_db)):
     device = db.get(Device, p.device_id)
     device.push_kind = None
@@ -49,7 +54,9 @@ def clear_push(p: Principal = Depends(get_principal), db: Session = Depends(get_
     return Response(status_code=204)
 
 
-@router.delete("/{device_id}", status_code=204)
+@router.delete(
+    "/{device_id}", status_code=204, summary="Revoke one of the caller's own devices", responses=error_responses(404)
+)
 def delete_device(
     device_id: str, p: Principal = Depends(get_principal), addr: str = Depends(get_ip), db: Session = Depends(get_db)
 ):

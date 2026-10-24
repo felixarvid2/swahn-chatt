@@ -3,6 +3,8 @@ import os
 import uuid
 from pathlib import Path
 
+import pytest
+
 from app import clock
 from app.models import Attachment
 from app.services.attachments import collect_garbage
@@ -253,7 +255,8 @@ def test_download_refuses_tampered_storage_paths(alice, app, tmp_path):
 
 
 def test_garbage_collection_never_deletes_outside_the_attachments_dir(alice, app):
-    db_file = app.state.settings.sqlite_path
+    db_file = app.state.settings.data_dir / "familychat.db"  # (a stand-in file on PostgreSQL)
+    db_file.touch()
     victim = app.state.settings.data_dir / "outside.txt"
     victim.write_bytes(b"keep me")
     att = upload(alice, b"abc").json()
@@ -271,9 +274,8 @@ def test_garbage_collection_never_deletes_outside_the_attachments_dir(alice, app
     assert db_file.exists() and victim.read_bytes() == b"keep me" and own.exists()
 
 
+@pytest.mark.sqlite_only
 def test_restore_rejects_a_database_with_tampered_storage_paths(factory, alice, app, tmp_path):
-    import pytest
-
     from app.services.backup import BackupError, create_backup, restore_backup
     from tests.conftest import make_settings
 
@@ -284,3 +286,88 @@ def test_restore_rejects_a_database_with_tampered_storage_paths(factory, alice, 
     with pytest.raises(BackupError, match="invalid storage path"):
         restore_backup(make_settings(target), archive)
     assert not (target / "familychat.db").exists()
+
+
+# --- avatar garbage collection (previous avatars after a change)
+
+
+def _age(app, *attachment_ids, hours=25):
+    with app.state.session_factory() as db:
+        for aid in attachment_ids:
+            db.get(Attachment, aid).created_at = clock.now_ms() - hours * 3600 * 1000
+        db.commit()
+
+
+def _prune(app):
+    from app.services.maintenance import prune
+
+    with app.state.session_factory() as db:
+        return prune(db, app.state.settings)
+
+
+def _exists(app, att):
+    with app.state.session_factory() as db:
+        row = db.get(Attachment, att["id"]) is not None
+    on_disk = (app.state.settings.attachments_dir / att["id"][:2] / att["id"]).exists()
+    assert row == on_disk, "row and file must go together"
+    return row
+
+
+def test_replaced_user_avatar_is_collected_by_the_maintenance_job(alice, app):
+    first = upload(alice, PNG, "avatar", "image/png").json()
+    second = upload(alice, PNG, "avatar", "image/png").json()
+    assert alice.patch("/users/me", {"avatar_attachment_id": first["id"]}).status_code == 200
+    assert alice.patch("/users/me", {"avatar_attachment_id": second["id"]}).status_code == 200
+    _age(app, first["id"], second["id"])
+    assert _prune(app)["attachments"] == 1
+    assert not _exists(app, first) and _exists(app, second)
+    assert alice.get(f"/attachments/{first['id']}").status_code == 404
+    assert alice.get(f"/attachments/{second['id']}").status_code == 200
+    assert alice.get("/users/me").json()["avatar_attachment_id"] == second["id"]
+
+
+def test_cleared_user_avatar_and_never_used_uploads_are_collected(alice, app):
+    kept_for_now = upload(alice, PNG, "avatar", "image/png").json()
+    cleared = upload(alice, PNG, "avatar", "image/png").json()
+    never_used = upload(alice, PNG, "avatar", "image/png").json()
+    alice.patch("/users/me", {"avatar_attachment_id": cleared["id"]})
+    alice.patch("/users/me", {"avatar_attachment_id": None})
+    _age(app, cleared["id"], never_used["id"])  # kept_for_now stays young
+    assert _prune(app)["attachments"] == 2
+    assert _exists(app, kept_for_now) and not _exists(app, cleared) and not _exists(app, never_used)
+
+
+def test_group_avatar_replaced_or_removed_is_collected_but_a_used_one_stays(factory, alice, bob, app):
+    old = upload(alice, PNG, "avatar", "image/png").json()
+    new = upload(alice, PNG, "avatar", "image/png").json()
+    gid = factory.group(alice, [bob])
+    assert alice.patch(f"/conversations/{gid}", {"avatar_attachment_id": old["id"]}).status_code == 200
+    assert alice.patch(f"/conversations/{gid}", {"avatar_attachment_id": new["id"]}).status_code == 200
+    _age(app, old["id"], new["id"])
+    assert _prune(app)["attachments"] == 1
+    assert not _exists(app, old) and _exists(app, new)
+    assert bob.get(f"/attachments/{new['id']}").status_code == 200
+    alice.patch(f"/conversations/{gid}", {"avatar_attachment_id": None})
+    assert _prune(app)["attachments"] == 1
+    assert not _exists(app, new)
+
+
+def test_an_avatar_used_by_either_a_user_or_a_conversation_is_kept(factory, alice, bob, app):
+    user_only = upload(alice, PNG, "avatar", "image/png").json()
+    group_only = upload(alice, PNG, "avatar", "image/png").json()
+    alice.patch("/users/me", {"avatar_attachment_id": user_only["id"]})
+    gid = factory.group(alice, [bob])
+    alice.patch(f"/conversations/{gid}", {"avatar_attachment_id": group_only["id"]})
+    _age(app, user_only["id"], group_only["id"], hours=24 * 30)
+    assert _prune(app)["attachments"] == 0
+    assert _exists(app, user_only) and _exists(app, group_only)
+
+
+def test_avatar_collection_leaves_message_attachments_alone(factory, alice, bob, app):
+    cid = factory.direct(alice, bob)
+    att = upload(alice, b"cipher").json()
+    alice.send(cid, "x", attachment_ids=[att["id"]])
+    stale_avatar = upload(alice, PNG, "avatar", "image/png").json()
+    _age(app, att["id"], stale_avatar["id"])
+    assert _prune(app)["attachments"] == 1
+    assert _exists(app, att) and not _exists(app, stale_avatar)

@@ -115,7 +115,7 @@ class ScreenshotTest {
         firstVisible: Int = 0,
         rows: List<ChatRow> = if (state.isGroup) Fixtures.groupRows else Fixtures.directRows,
     ) {
-        val items = flowOf(PagingData.from(rows.asReversed())).collectAsLazyPagingItems()
+        val items = flowOf(Fixtures.pages(rows)).collectAsLazyPagingItems()
         ConversationContent(
             state.copy(latestId = (rows.lastOrNull { it is ChatRow.Message } as? ChatRow.Message)?.message?.id), items, playback,
             BubbleActions(), ConversationCallbacks(),

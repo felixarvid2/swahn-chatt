@@ -80,6 +80,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -91,6 +92,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.font.FontFamily
 import androidx.paging.LoadState
 import androidx.paging.compose.LazyPagingItems
@@ -346,7 +348,9 @@ private fun LinkConfirmDialog(url: String, onDismiss: () -> Unit, onConfirm: () 
 private fun openLink(context: Context, url: String) {
     val info = describeLink(url) ?: return
     val intent = Intent(if (info.kind == LinkKind.PHONE) Intent.ACTION_DIAL else Intent.ACTION_VIEW, Uri.parse(url))
-        .addCategory(Intent.CATEGORY_BROWSABLE).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    // a web address must only open an app that declares itself a browser; many mail apps do not declare BROWSABLE
+    if (info.kind == LinkKind.WEB) intent.addCategory(Intent.CATEGORY_BROWSABLE)
     try {
         context.startActivity(intent)
     } catch (e: Exception) {
@@ -552,8 +556,11 @@ private fun MessageList(
     }
     // The list is invisible until it is positioned: at the first unread message, else at the bottom.
     var ready by rememberSaveable { mutableStateOf(false) }
-    LaunchedEffect(state.loaded, state.openUnread, items.itemCount, items.loadState.refresh) {
-        if (ready || !state.loaded || state.openUnread < 0) return@LaunchedEffect
+    var viewport by remember { mutableIntStateOf(0) }
+    LaunchedEffect(state.loaded, state.openUnread, items.itemCount, items.loadState.refresh, viewport) {
+        if (ready || !state.loaded || state.openUnread < 0 || viewport == 0) return@LaunchedEffect
+        // not before the first page is there: an empty list would look "at the bottom" with older messages still to come
+        if (items.loadState.refresh !is LoadState.NotLoading) return@LaunchedEffect
         if (state.openUnread == 0) {
             ready = true
             return@LaunchedEffect
@@ -562,7 +569,6 @@ private fun MessageList(
         when {
             divider >= 0 -> {
                 // put the divider at the top of the screen; the list stops at the bottom when fewer messages follow it
-                val viewport = listState.layoutInfo.viewportSize.height
                 listState.scrollToItem(divider, -(viewport - with(density) { UNREAD_DIVIDER_HEIGHT.roundToPx() }).coerceAtLeast(0))
                 ready = true
             }
@@ -591,7 +597,7 @@ private fun MessageList(
     }
     val scope = rememberCoroutineScope()
 
-    Box(modifier) {
+    Box(modifier.onSizeChanged { viewport = it.height }) {
         if (state.loaded && state.latestId == null) {
             Text(
                 stringResource(R.string.conversation_empty), style = MaterialTheme.typography.bodyMedium,

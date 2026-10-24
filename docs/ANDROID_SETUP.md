@@ -99,7 +99,10 @@ reports as artifacts. It needs no `local.properties`: the Android SDK location c
 ```
 
 `:app` tests run on the JVM with Robolectric (no phone or emulator needed). The first run downloads Robolectric's
-Android jar. The screenshot tests write PNGs to `app/screenshots/` (light and dark, Swedish and English).
+Android jar. The screenshot tests write PNGs to `app/screenshots/` (light and dark, Swedish and English; also the
+conversation with the unread divider and jump-to-bottom button, the connection banner, drafts in the list and the
+verified header). They are a review aid: look at them after a UI change. The paging test fills a database with 10,000
+messages and checks pages, order and timing of the message list.
 SQLCipher itself cannot be loaded on a PC (its native library is built for Android), so the database tests use plain
 SQLite through the same Room code; the encryption layer has to be checked on a phone (section 8).
 
@@ -112,6 +115,14 @@ adb install -r app/build/outputs/apk/release/app-release.apk
 ```
 
 `-r` updates an existing install and keeps its data.
+
+**Updating a phone that already has the app:** install the new APK over the old one (same signing key) and do not
+uninstall first: uninstalling deletes the keys and the whole local history (see section 7). The app's local database
+carries a schema version and upgrades itself on the first start of the new build, with a tested migration, without
+losing messages, keys or sessions. Version 2 added the table for unsent drafts; the history is in
+`AppDatabase.MIGRATIONS` and `app/schemas/`. Whoever raises `AppDatabase.VERSION` must add a `Migration` and a case in
+`MigrationTest` in the same change (a build that cannot open the old file would otherwise leave the phone without its
+data).
 
 **Without a computer (sideloading):** send `app-release.apk` to the phone by a way you trust (a cable and file copy,
 your own Nextcloud, ...). Open it in the file manager. Android asks to allow *Install unknown apps* for that file

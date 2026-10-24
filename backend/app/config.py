@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     refresh_token_days: int = Field(60, ge=1)
     # Comma separated CIDRs whose X-Forwarded-For header is honoured (rate limiting only).
     trusted_proxies: str = ""
+    # Hint for `cli check-config`: true when a reverse proxy (Caddy, `tailscale serve`) sits in front of the server.
+    # Without trusted_proxies every client then appears with the proxy's address (shared rate limits).
+    behind_proxy: bool = False
     push_allow_http: bool = False
     # Comma separated host names push endpoints may use (e.g. "ntfy.example.ts.net"). Required in production:
     # empty means push registration is refused there (development: any host name, but never IP literals).

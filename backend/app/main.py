@@ -13,10 +13,12 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from app import __version__
 from app.config import Settings, get_settings
 from app.db import make_engine, make_read_session_factory, make_session_factory
-from app.errors import ApiError, install_error_handlers
+from app.errors import ApiError, error_body, install_error_handlers
 from app.hub import Hub
 from app.logging_setup import configure_logging
+from app.openapi import install_openapi
 from app.ratelimit import RateLimiter, client_ip
+from app.request_id import RequestIdMiddleware
 from app.routers import (
     admin,
     attachments,
@@ -66,7 +68,7 @@ class BodyLimitMiddleware:
         headers = dict(scope["headers"])
         length = headers.get(b"content-length")
         if length and length.isdigit() and int(length) > self.limit:
-            body = {"code": "payload_too_large", "message": "request body too large"}
+            body = error_body("payload_too_large", "request body too large")
             await JSONResponse(body, 413)(scope, receive, send)
             return
         seen = 0
@@ -88,7 +90,7 @@ class BodyLimitMiddleware:
             nonlocal swallow
             if exceeded and not swallow and message["type"] == "http.response.start":
                 swallow = True
-                body = {"code": "payload_too_large", "message": "request body too large"}
+                body = error_body("payload_too_large", "request body too large")
                 await JSONResponse(body, 413)(scope, receive, send)
                 return
             if not swallow:
@@ -194,11 +196,14 @@ def create_app(settings: Settings | None = None, push_transport=None) -> FastAPI
             )
         return response
 
-    app.include_router(health.router)
+    app.add_middleware(RequestIdMiddleware)  # added last = outermost: everything below sees the ID
+
+    app.include_router(health.router, include_in_schema=False)  # probes for the container runtime
     api = "/api/v1"
     app.include_router(health.router, prefix=api)
     for module in (auth, admin, users, devices, keys, conversations, messages, sync, attachments, ws):
         app.include_router(module.router, prefix=api)
+    install_openapi(app)
     return app
 
 

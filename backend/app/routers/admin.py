@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app import __version__, clock
 from app.config import Settings
 from app.deps import Principal, get_db, get_ip, get_read_db, get_settings_dep, require_admin
-from app.errors import conflict, not_found
+from app.errors import conflict, error_responses, not_found
 from app.migrate import code_head, db_revision
 from app.models import Attachment, Device, Invitation, User
 from app.schemas import (
@@ -18,11 +18,12 @@ from app.schemas import (
     InvitationCreate,
     InvitationCreated,
     InvitationOut,
+    PasswordResetCreated,
 )
 from app.security import hash_invite_code, new_invite_code
-from app.services import accounts, audit, stats
+from app.services import accounts, audit, password_reset, stats
 
-router = APIRouter(prefix="/admin", tags=["admin"])
+router = APIRouter(prefix="/admin", tags=["admin"], responses=error_responses(401, 403))
 
 
 def create_invitation(
@@ -45,7 +46,13 @@ def create_invitation(
     return inv, code
 
 
-@router.post("/invitations", status_code=201, response_model=InvitationCreated)
+@router.post(
+    "/invitations",
+    status_code=201,
+    response_model=InvitationCreated,
+    summary="Create an invitation",
+    responses=error_responses(413, 422),
+)
 def post_invitation(
     body: InvitationCreate,
     p: Principal = Depends(require_admin),
@@ -64,7 +71,7 @@ def post_invitation(
     }
 
 
-@router.get("/invitations", response_model=list[InvitationOut])
+@router.get("/invitations", response_model=list[InvitationOut], summary="List invitations")
 def list_invitations(_: Principal = Depends(require_admin), db: Session = Depends(get_read_db)):
     rows = db.scalars(select(Invitation).order_by(Invitation.created_at.desc())).all()
     return [
@@ -82,7 +89,9 @@ def list_invitations(_: Principal = Depends(require_admin), db: Session = Depend
     ]
 
 
-@router.delete("/invitations/{invitation_id}", status_code=204)
+@router.delete(
+    "/invitations/{invitation_id}", status_code=204, summary="Revoke an invitation", responses=error_responses(404)
+)
 def revoke_invitation(
     invitation_id: str,
     p: Principal = Depends(require_admin),
@@ -99,7 +108,7 @@ def revoke_invitation(
     return Response(status_code=204)
 
 
-@router.delete("/users/{user_id}", status_code=204)
+@router.delete("/users/{user_id}", status_code=204, summary="Remove a user", responses=error_responses(404, 409))
 def remove_user(
     user_id: str,
     p: Principal = Depends(require_admin),
@@ -117,7 +126,33 @@ def remove_user(
     return Response(status_code=204)
 
 
-@router.delete("/users/{user_id}/devices/{device_id}", status_code=204)
+@router.post(
+    "/users/{user_id}/password-reset",
+    status_code=201,
+    response_model=PasswordResetCreated,
+    summary="Issue a password reset code for a user",
+    responses=error_responses(404),
+)
+def issue_password_reset(
+    user_id: str,
+    p: Principal = Depends(require_admin),
+    ip: str = Depends(get_ip),
+    db: Session = Depends(get_db),
+):
+    user = db.get(User, user_id)
+    if user is None or user.disabled_at is not None:
+        raise not_found("user not found")
+    code, expires_at = password_reset.issue(db, user, p.user_id, ip)
+    db.commit()
+    return {"code": code, "expires_at": expires_at}
+
+
+@router.delete(
+    "/users/{user_id}/devices/{device_id}",
+    status_code=204,
+    summary="Revoke a user's device",
+    responses=error_responses(404, 409),
+)
 def revoke_user_device(
     user_id: str,
     device_id: str,
@@ -137,7 +172,7 @@ def revoke_user_device(
     return Response(status_code=204)
 
 
-@router.get("/users", response_model=list[AdminUserOut])
+@router.get("/users", response_model=list[AdminUserOut], summary="List all accounts with usage figures")
 def list_users(_: Principal = Depends(require_admin), db: Session = Depends(get_read_db)):
     devices = (
         select(
@@ -175,7 +210,7 @@ def list_users(_: Principal = Depends(require_admin), db: Session = Depends(get_
     ]
 
 
-@router.get("/stats", response_model=AdminStats)
+@router.get("/stats", response_model=AdminStats, summary="Server statistics")
 def get_stats(
     request: Request,
     _: Principal = Depends(require_admin),
@@ -193,9 +228,9 @@ def get_stats(
     }
 
 
-@router.get("/audit", response_model=list[AuditEventOut])
+@router.get("/audit", response_model=list[AuditEventOut], summary="Read the audit log", responses=error_responses(422))
 def get_audit(
-    before_id: int | None = Query(None, ge=1),
+    before_id: int | None = Query(None, ge=1, le=2**62),
     limit: int = Query(50, ge=1, le=200),
     _: Principal = Depends(require_admin),
     db: Session = Depends(get_read_db),

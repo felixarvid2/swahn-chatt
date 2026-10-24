@@ -164,9 +164,15 @@ class ConversationViewModel @Inject constructor(
 
     /** The unread state at the moment of opening; computed before anything marks the conversation read. */
     private val anchor: Deferred<OpenAnchor> = viewModelScope.async {
-        val readSeq = store.getConversation(conversationId)?.myReadSeq ?: 0L
-        val unread = store.unreadCount(conversationId)
-        OpenAnchor(readSeq, if (unread > 0) repo.firstUnreadId(conversationId, readSeq) else null, unread)
+        try {
+            val readSeq = store.getConversation(conversationId)?.myReadSeq ?: 0L
+            val unread = store.unreadCount(conversationId)
+            OpenAnchor(readSeq, if (unread > 0) repo.firstUnreadId(conversationId, readSeq) else null, unread)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            OpenAnchor(0L, null, 0) // no divider rather than no conversation
+        }
     }
 
     private val pagedEntities = pagerStart.flatMapLatest { start ->
@@ -223,7 +229,8 @@ class ConversationViewModel @Inject constructor(
         val latest: LatestMessageRow?, val newMessages: Int, val connection: ConnectionUi, val safety: SafetyUi, val openUnread: Int,
     )
 
-    private val openUnread = MutableStateFlow(0)
+    /** -1 until the unread state at opening is known (the screen keeps the list hidden meanwhile). */
+    private val openUnread = MutableStateFlow(-1)
 
     private val around = combine(
         repo.latestMessage(conversationId),
@@ -530,7 +537,14 @@ class ConversationViewModel @Inject constructor(
             try {
                 val size = attachment.size.takeIf { it > 0 }
                 engine.downloadAttachment(messageId, id) { bytes ->
-                    if (size != null) downloads.update { cur -> if (id in cur) cur + (id to (bytes.toFloat() / size).coerceIn(0f, 1f)) else cur }
+                    if (size != null) {
+                        val fraction = (bytes.toFloat() / size).coerceIn(0f, 1f)
+                        // every change rebuilds the visible rows: report in 2% steps, not per chunk
+                        downloads.update { cur ->
+                            val before = cur[id]
+                            if (id in cur && (before == null || fraction >= before + PROGRESS_STEP || fraction >= 1f)) cur + (id to fraction) else cur
+                        }
+                    }
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -613,6 +627,7 @@ class ConversationViewModel @Inject constructor(
         const val MAX_INITIAL_LOAD = 400
         const val LOAD_AROUND_CONTEXT = 10
         const val DRAFT_SAVE_DELAY_MS = 500L
+        const val PROGRESS_STEP = 0.02f
         const val MAX_ATTACHMENTS = 10
         const val AUTO_IMAGE_BYTES = 20L * 1024 * 1024
         const val AUTO_VOICE_BYTES = 8L * 1024 * 1024

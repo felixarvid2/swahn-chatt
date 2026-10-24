@@ -14,14 +14,14 @@ from sqlalchemy.orm import Session
 from app import clock
 from app.config import Settings
 from app.deps import Principal, get_principal, get_read_db, get_settings_dep
-from app.errors import ApiError, not_found
+from app.errors import ApiError, error_responses, not_found
 from app.models import Attachment
 from app.schemas import AttachmentOut
 from app.services import attachments as svc
 
 log = logging.getLogger("familychat.attachments")
 
-router = APIRouter(prefix="/attachments", tags=["attachments"])
+router = APIRouter(prefix="/attachments", tags=["attachments"], responses=error_responses(401))
 
 SHA_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 
@@ -30,7 +30,13 @@ def _reject(code: int, name: str, message: str) -> ApiError:
     return ApiError(code, name, message)
 
 
-@router.post("", status_code=201, response_model=AttachmentOut)
+@router.post(
+    "",
+    status_code=201,
+    response_model=AttachmentOut,
+    summary="Upload an attachment",
+    responses=error_responses(413, 415, 422),
+)
 async def upload(
     request: Request,
     purpose: Literal["message", "avatar"] = Query(...),
@@ -136,7 +142,18 @@ def _finish(request, settings, p, att_id, purpose, content_type, size, digest, t
         }
 
 
-@router.get("/{attachment_id}")
+@router.get(
+    "/{attachment_id}",
+    response_class=FileResponse,
+    response_model=None,
+    summary="Download an attachment",
+    responses={
+        **error_responses(404),
+        200: {"content": {"application/octet-stream": {}}, "description": "The stored bytes (`Range` supported)."},
+        206: {"content": {"application/octet-stream": {}}, "description": "Partial content for a `Range` request."},
+        416: {"description": "Range not satisfiable (`range_not_satisfiable`)."},
+    },
+)
 def download(
     attachment_id: str,
     p: Principal = Depends(get_principal),

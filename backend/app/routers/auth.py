@@ -17,13 +17,13 @@ from app.deps import (
     get_read_db,
     get_settings_dep,
 )
-from app.errors import ApiError, unauthorized
+from app.errors import ApiError, error_responses, unauthorized
 from app.models import Device, Invitation, SessionToken, User
 from app.models import Session as AuthSession
 from app.ratelimit import RateLimiter
-from app.schemas import AuthResponse, LoginRequest, RedeemRequest, RefreshRequest
+from app.schemas import AuthResponse, LoginRequest, PasswordResetRequest, RedeemRequest, RefreshRequest
 from app.security import hash_invite_code, hash_password, hash_token, verify_password
-from app.services import accounts, audit
+from app.services import accounts, audit, password_reset
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -51,7 +51,13 @@ def _record_failure(limiter: RateLimiter, username: str) -> None:
     limiter.record(_fail_key(username) + ":d", DAY_S)
 
 
-@router.post("/invite/redeem", status_code=201, response_model=AuthResponse)
+@router.post(
+    "/invite/redeem",
+    status_code=201,
+    response_model=AuthResponse,
+    summary="Redeem an invitation and create an account",
+    responses=error_responses(404, 409, 413, 422, 429),
+)
 def redeem(
     body: RedeemRequest,
     addr: str = Depends(get_ip),
@@ -109,6 +115,33 @@ def redeem(
     return result
 
 
+@router.post(
+    "/password/reset",
+    response_model=AuthResponse,
+    summary="Reset a forgotten password with an admin issued code",
+    responses=error_responses(404, 409, 413, 422, 429),
+)
+def reset_password(
+    body: PasswordResetRequest,
+    addr: str = Depends(get_ip),
+    ip: str = Depends(get_rate_ip),
+    limiter: RateLimiter = Depends(get_limiter),
+    settings: Settings = Depends(get_settings_dep),
+    rdb: Session = Depends(get_read_db),
+    db: Session = Depends(get_db),
+):
+    limiter.check(f"reset:{ip}", 10)
+    found = password_reset.find_usable(rdb, body.code)
+    rdb.rollback()  # no transaction while Argon2 runs
+    if found is None:
+        raise password_reset.invalid_code()
+    reset_id, user_id = found
+    password_hash = hash_password(settings, body.new_password)
+    result = password_reset.redeem(db, settings, reset_id, user_id, password_hash, body.device_name, addr)
+    db.commit()
+    return result
+
+
 def _usable_invite(now: int) -> tuple:
     return (Invitation.used_at.is_(None), Invitation.revoked_at.is_(None), Invitation.expires_at > now)
 
@@ -121,7 +154,12 @@ def _audit_login_failure(db: Session, addr: str, user_id: str | None, username: 
     db.commit()
 
 
-@router.post("/login", response_model=AuthResponse)
+@router.post(
+    "/login",
+    response_model=AuthResponse,
+    summary="Log in and register a new device",
+    responses=error_responses(401, 409, 413, 422, 429),
+)
 def login(
     body: LoginRequest,
     addr: str = Depends(get_ip),
@@ -157,7 +195,12 @@ def login(
     return result
 
 
-@router.post("/refresh", response_model=AuthResponse)
+@router.post(
+    "/refresh",
+    response_model=AuthResponse,
+    summary="Rotate the refresh token",
+    responses=error_responses(401, 413, 422, 429),
+)
 def refresh(
     body: RefreshRequest,
     addr: str = Depends(get_ip),
@@ -206,7 +249,9 @@ def refresh(
     return result
 
 
-@router.post("/logout", status_code=204)
+@router.post(
+    "/logout", status_code=204, summary="Log out: revoke this session and device", responses=error_responses(401)
+)
 def logout(p: Principal = Depends(get_principal), addr: str = Depends(get_ip), db: Session = Depends(get_db)):
     accounts.revoke_device(db, p.device_id)
     audit.record(db, "device_revoked", actor=p.user_id, target_user=p.user_id, target=p.device_id, ip=addr, by="logout")

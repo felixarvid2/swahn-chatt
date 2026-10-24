@@ -165,7 +165,26 @@ Administrators can also create and revoke invitations in the app. Each code work
 ```bash
 docker compose exec backend python -m app.cli list-users
 docker compose exec backend python -m app.cli remove-user <username>   # API access ends at once; open sockets close within ~1 min
+docker compose exec backend python -m app.cli check-config            # effective settings + warnings; exit 1 on errors
 ```
+
+**Forgotten password.** Issue a one-time code (valid 24 hours) and give it to the person over a channel you trust:
+
+```bash
+docker compose exec backend python -m app.cli reset-password <username>   # the code is the last line
+```
+
+Administrators can do the same in the app (`POST /api/v1/admin/users/{id}/password-reset`). The person enters the
+code and a new password in the app (*Forgot password* / `POST /api/v1/auth/password/reset`). This signs them out
+everywhere: every old device of that account is removed (its keys and queued messages are deleted) and the phone
+that used the code becomes a new device. Their contacts will see a "new device" notice, and old messages cannot be
+read on the new device. That is the same as a lost phone and intended. The code never appears in the audit log
+(`audit` shows `password_reset_issued` and `password_reset_used`).
+
+`check-config` is worth running after every change to `.env`: it prints the settings the server will use (never
+the secret key or database password) and warns about: production without `FAMILYCHAT_PUSH_ALLOWED_HOSTS`, a
+missing or short secret key (an error in production), API docs exposed in production, `FAMILYCHAT_BEHIND_PROXY=true`
+without `FAMILYCHAT_TRUSTED_PROXIES`, push over plain http in production and low disk space.
 
 Every login on a new phone is a new *device* with new encryption keys. Messages sent before a device existed
 cannot be read on it; that is how end-to-end encryption works here (see SECURITY.md).
@@ -280,6 +299,17 @@ starts the backend again. Delete the `pre-restore-*` folder when you are happy:
 `docker compose exec backend rm -rf /data/pre-restore-*`. The CLI equivalent is
 `python -m app.cli restore <archive> [--force]`; without `--force` it refuses to touch existing data.
 
+`./backup.sh` and `restore.sh` verify archives themselves; to check one you already have, anywhere, without
+touching any data:
+
+```bash
+docker compose exec backend python -m app.cli verify-backup /data/backups/familychat-backup-....tar.gz
+```
+
+It checks the entry names, the manifest and every checksum, runs SQLite's `integrity_check` on a temporary copy and
+validates the attachment paths stored in the database; exit status 0 means the archive is complete and restorable,
+1 means it is not (the reason is printed). Run it on the copy you keep off the Pi.
+
 Test your restore once, before you need it.
 
 ## 10. Logs, health and reboots
@@ -316,10 +346,67 @@ A lost or stolen phone: an administrator revokes it with `DELETE /api/v1/admin/u
 both run in the hourly maintenance job. When the server restarts, open apps are disconnected with code 1001 and
 reconnect by themselves.
 
+Every response carries an `X-Request-ID` header and error bodies a `request_id`; the same ID is in all log lines
+of that request (`docker compose logs backend | grep <id>`), so when someone reports an error, ask for the ID.
+
 Logs rotate automatically (10 MB x 5 files per service). All services use `restart: unless-stopped`, Docker starts
 at boot and `tailscale serve --bg` is remembered by Tailscale, so after `sudo reboot` everything comes back by
 itself: check with `docker compose ps` and `tailscale serve status`. Pull the power cord less often than that:
 SQLite in WAL mode survives it, but an SSD survives it better than an SD card.
+
+## 11. Optional: PostgreSQL instead of SQLite
+
+SQLite is the default and is enough for a family. PostgreSQL is supported (the test suite runs against both), for
+example when the data lives on a server that already runs it. The image already contains the driver. Do **not**
+edit `docker-compose.yml`; add an override file next to it, `deployment/docker-compose.postgres.yml`:
+
+```yaml
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: familychat
+      POSTGRES_DB: familychat
+      POSTGRES_PASSWORD: ${FAMILYCHAT_POSTGRES_PASSWORD:?set FAMILYCHAT_POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U familychat -d familychat"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    security_opt: ["no-new-privileges:true"]
+    # no "ports": only the backend container reaches it, over the compose network
+  backend:
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      FAMILYCHAT_DATABASE_URL: postgresql+psycopg://familychat:${FAMILYCHAT_POSTGRES_PASSWORD}@postgres:5432/familychat
+volumes:
+  postgres-data:
+```
+
+Put `FAMILYCHAT_POSTGRES_PASSWORD=<long random letters and digits>` in `.env` (avoid characters that need URL
+escaping: `@ : / ? #`), then start with both files:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d --build
+# make it permanent: COMPOSE_FILE=docker-compose.yml:docker-compose.postgres.yml in .env
+docker compose exec backend python -m app.cli check-config     # shows the database URL without the password
+```
+
+The entrypoint runs `alembic upgrade head` against PostgreSQL on every start, like for SQLite. Things that differ:
+
+- There is **no migration of existing SQLite data** to PostgreSQL. Decide before the family starts using it.
+- `backup.sh`, `restore.sh` and the CLI `backup`/`restore`/`verify-backup` handle SQLite only. Back up PostgreSQL
+  with `docker compose exec -T postgres pg_dump -U familychat familychat | gzip > familychat-db-$(date +%F).sql.gz`
+  **and** the attachments in the `familychat-data` volume (`/data/attachments`), taken at about the same time.
+- `GET /admin/stats` reports `db_bytes: null`; `/readyz` and the migration check work as before.
+- All writing transactions are serialised with an advisory lock so that the sync cursor stays correct (see
+  ARCHITECTURE.md, "Sync cursor and the database"); a request that cannot get it within 10 s fails with a server
+  error and the client retries. Keep one backend worker, as always.
 
 ## Troubleshooting
 

@@ -110,7 +110,11 @@ def test_login_errors_are_uniform(factory, alice, client):
         "/api/v1/auth/login", json={"username": "ghost", "password": "nope-nope-nope", "device_name": "x"}
     )
     assert wrong.status_code == unknown.status_code == 401
-    assert wrong.json() == unknown.json()
+
+    def same(r):
+        return {k: v for k, v in r.json().items() if k != "request_id"}  # differs per request by design
+
+    assert same(wrong) == same(unknown)
     assert wrong.json()["code"] == "invalid_credentials"
 
 

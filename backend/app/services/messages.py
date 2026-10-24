@@ -69,18 +69,19 @@ def send(db: Session, p: Principal, req: SendMessage) -> tuple[dict, bool]:
         return messages_out(db, [existing], None)[0], True
 
     if req.kind == "message" and req.target_message_id:
-        raise invalid("target_message_id is only for edit and delete")
+        raise invalid("target_message_id is only for edit, delete and reaction")
     if req.kind != "message" and not req.target_message_id:
-        raise invalid("target_message_id is required for edit and delete")
-    if req.kind == "delete" and req.attachment_ids:
-        raise invalid("a delete carries no attachments")
+        raise invalid("target_message_id is required for edit, delete and reaction")
+    if req.kind in ("delete", "reaction") and req.attachment_ids:
+        raise invalid(f"a {req.kind} carries no attachments")
 
     target = None
     if req.target_message_id:
         target = db.get(Message, req.target_message_id)
         if target is None or target.conversation_id != conv.id:
             raise not_found("target message not found")
-        if target.sender_user_id != p.user_id:
+        # Edits and deletes are the author's; a reaction may name any member's message.
+        if req.kind != "reaction" and target.sender_user_id != p.user_id:
             raise forbidden("you can only change your own messages")
         if target.kind != "message":
             raise invalid("target must be a regular message")
@@ -109,6 +110,8 @@ def send(db: Session, p: Principal, req: SendMessage) -> tuple[dict, bool]:
         target_message_id=req.target_message_id,
         client_ts=req.client_ts,
         server_ts=now,
+        # The conversation's timer as it is right now; later changes do not touch messages already stored.
+        expires_at=now + conv.disappearing_seconds * 1000 if conv.disappearing_seconds else None,
     )
     db.add(msg)
     db.flush()
@@ -123,16 +126,19 @@ def send(db: Session, p: Principal, req: SendMessage) -> tuple[dict, bool]:
         conv.updated_at = now
     elif req.kind == "edit":
         target.edited_at = now
-    else:
+    elif req.kind == "delete":
         target.deleted_at = now
-        # Drop ciphertext nobody has fetched yet (the target and edits of it).
-        edit_ids = select(Message.id).where(Message.target_message_id == target.id, Message.kind == "edit")
+        # Drop ciphertext nobody has fetched yet (the target, edits of it and reactions to it).
+        derived_ids = select(Message.id).where(
+            Message.target_message_id == target.id, Message.kind.in_(("edit", "reaction"))
+        )
         db.execute(
             delete(MessageEnvelope).where(
                 MessageEnvelope.delivered_at.is_(None),
-                (MessageEnvelope.message_id == target.id) | MessageEnvelope.message_id.in_(edit_ids),
+                (MessageEnvelope.message_id == target.id) | MessageEnvelope.message_id.in_(derived_ids),
             )
         )
+    # kind "reaction": nothing else changes; it is not a message for last_message_* or unread counts.
     db.flush()
 
     emit(db, [d for d, _u in recipients], "message", {"message_id": msg.id}, conv.id)

@@ -6,6 +6,9 @@ import android.graphics.Color
 import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.Shader
+import androidx.paging.LoadState
+import androidx.paging.LoadStates
+import androidx.paging.PagingData
 import se.familychat.app.platform.push.Distributor
 import se.familychat.app.platform.push.PushStatus
 import se.familychat.app.ui.components.PlaybackUi
@@ -156,12 +159,18 @@ object Fixtures {
             msg("a", bob, "Ska vi ses vid fyra?", at(10, 24, 14, 30), group = false),
             msg("b", null, "Gärna! Jag tar med kaffe.", at(10, 24, 14, 32), group = false, delivery = DeliveryUi.READ),
             msg("c", null, null, at(10, 24, 14, 33), group = false, delivery = DeliveryUi.SENT, attachments = listOf(photo("p2", TransferUi.Downloading(0.4f)))),
-            msg("d", bob, "Fint foto! Vilken utsikt.", at(10, 24, 14, 40), group = false, undecryptable = null),
+            msg("d", bob, "Fint foto! Vilken utsikt. Mer här: https://exempel.se/utsikt eller ring 070-123 45 67", at(10, 24, 14, 40), group = false, undecryptable = null),
         ),
     )
 
     /** The group conversation as it opens with six unread messages: the divider sits above the first of them (oldest first). */
     val groupRowsUnread: List<ChatRow> = groupRows.flatMap { if (it is ChatRow.Message && it.message.id == "6") listOf(ChatRow.UnreadDivider, it) else listOf(it) }
+
+    /** [rows] (oldest first) as a fully loaded page stream, newest first: what the conversation screen reads. */
+    fun pages(rows: List<ChatRow>): PagingData<ChatRow> {
+        val done = LoadState.NotLoading(endOfPaginationReached = true)
+        return PagingData.from(rows.asReversed(), LoadStates(refresh = LoadState.NotLoading(false), prepend = done, append = done))
+    }
 
     val idle = PlaybackUi()
     val playing = PlaybackUi("v1", playing = true, positionMs = 9_000, durationMs = 23_000)

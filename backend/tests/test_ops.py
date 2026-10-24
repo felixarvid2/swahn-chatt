@@ -17,7 +17,7 @@ from app.main import create_app
 from app.migrate import code_head
 from app.models import Attachment, AuditEvent, Device, DeviceKey, MessageEnvelope
 from app.services.maintenance import prune
-from tests.conftest import PASSWORD, Factory, make_settings
+from tests.conftest import PASSWORD, Factory
 
 DAY = 86_400_000
 WS = "/api/v1/ws"
@@ -124,7 +124,8 @@ def test_admin_stats(factory, app, admin, alice, bob):
     assert (s["users"], s["active_devices"], s["conversations"], s["messages"]) == (3, 3, 1, 2)
     assert s["undelivered_envelopes"] == 2  # bob's device has not synced yet
     assert s["attachments"] == 0 and s["attachments_bytes"] == 4321
-    assert s["db_bytes"] > 0 and s["disk_free_bytes"] > 0
+    assert s["disk_free_bytes"] > 0
+    assert (s["db_bytes"] is None) if not app.state.settings.is_sqlite else (s["db_bytes"] > 0)
     assert s["version"] == "1.0.0"
     assert s["migration"] == {"head": code_head(), "current": code_head()}
     assert 0 <= s["uptime_seconds"] < 300
@@ -396,9 +397,8 @@ def test_websocket_clients_see_close_1001_on_shutdown(client, app, alice):
     assert closed.value.code == 1001 and closed.value.reason == "server restarting"
 
 
-def test_lifespan_shutdown_stops_push_thread_and_maintenance(tmp_path, template_db):
-    shutil.copy(template_db, tmp_path / "familychat.db")
-    app = create_app(make_settings(tmp_path, background_tasks=True))
+def test_lifespan_shutdown_stops_push_thread_and_maintenance(tmp_path, new_settings):
+    app = create_app(new_settings(tmp_path, background_tasks=True))
     with TestClient(app) as client:
         f = Factory(app, client)
         alice = f.user("alice")

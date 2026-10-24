@@ -1,21 +1,32 @@
-"""Test fixtures: every test gets its own temp data dir, migrated SQLite database and app instance."""
+"""Test fixtures: every test gets its own temp data dir, migrated database and app instance.
+
+The database is SQLite by default. Set FAMILYCHAT_TEST_DATABASE_URL (postgresql+psycopg://user:pw@host:port/postgres,
+a role that may CREATE DATABASE) to run the suite against PostgreSQL instead: the migrations run once into a
+template database, and every test gets its own copy of it. Tests marked `sqlite_only` (they open the SQLite file
+directly, test SQLite locking, or the SQLite-only backup) are skipped there.
+"""
 
 import base64
 import os
 import shutil
 import uuid
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import httpx
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine, text
+from sqlalchemy.engine import make_url
+from sqlalchemy.pool import NullPool
 
 from app.config import Settings
 from app.main import create_app
 from app.migrate import upgrade
 from app.routers.admin import create_invitation
 
+PG_ADMIN_URL = os.environ.get("FAMILYCHAT_TEST_DATABASE_URL") or None
 SECRET = "test-secret-key-0123456789-abcdefghijklmnopqrstuvwxyz"
 PASSWORD = "correct horse battery"
 
@@ -39,23 +50,85 @@ def make_settings(data_dir: Path, **overrides) -> Settings:
     return Settings(**values)
 
 
+def pytest_configure(config):
+    config.addinivalue_line("markers", "sqlite_only: needs the SQLite database file itself; skipped on PostgreSQL")
+    config.addinivalue_line("markers", "pg_only: needs PostgreSQL (FAMILYCHAT_TEST_DATABASE_URL); skipped otherwise")
+
+
+def pytest_collection_modifyitems(config, items):
+    if not PG_ADMIN_URL:
+        skip_pg = pytest.mark.skip(reason="needs PostgreSQL (set FAMILYCHAT_TEST_DATABASE_URL)")
+        for item in items:
+            if "pg_only" in item.keywords:
+                item.add_marker(skip_pg)
+    if PG_ADMIN_URL:
+        skip = pytest.mark.skip(reason="SQLite only (FAMILYCHAT_TEST_DATABASE_URL is set)")
+        for item in items:
+            if "sqlite_only" in item.keywords:
+                item.add_marker(skip)
+
+
+def _admin_engine():
+    return create_engine(PG_ADMIN_URL, isolation_level="AUTOCOMMIT", poolclass=NullPool)
+
+
+def _pg_url(name: str) -> str:
+    return make_url(PG_ADMIN_URL).set(database=name).render_as_string(hide_password=False)
+
+
 @pytest.fixture(scope="session")
-def template_db(tmp_path_factory) -> Path:
-    """A freshly migrated database, built once through the real Alembic migration."""
+def template_db(tmp_path_factory) -> Iterator[Path | str]:
+    """A freshly migrated database, built once through the real Alembic migration (a file for SQLite, the name of a
+    template database for PostgreSQL)."""
+    if PG_ADMIN_URL:
+        name = f"fc_tpl_{uuid.uuid4().hex[:10]}"
+        admin = _admin_engine()
+        with admin.connect() as c:
+            c.execute(text(f'CREATE DATABASE "{name}"'))
+        settings = make_settings(tmp_path_factory.mktemp("template"), database_url=_pg_url(name))
+        upgrade(settings)
+        yield name
+        with admin.connect() as c:
+            c.execute(text(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
+        admin.dispose()
+        return
     d = tmp_path_factory.mktemp("template")
     upgrade(make_settings(d))
-    return d / "familychat.db"
+    yield d / "familychat.db"
 
 
 @pytest.fixture
-def make_app(tmp_path, template_db):
+def new_settings(template_db):
+    """Settings for a freshly migrated database of its own: `new_settings(data_dir, **overrides)`."""
+    pg_databases: list[str] = []
+
+    def build(data: Path, **overrides) -> Settings:
+        data.mkdir(parents=True, exist_ok=True)
+        if PG_ADMIN_URL:
+            name = f"fc_t_{uuid.uuid4().hex[:12]}"
+            with _admin_engine().connect() as c:
+                c.execute(text(f'CREATE DATABASE "{name}" TEMPLATE "{template_db}"'))
+            pg_databases.append(name)
+            overrides.setdefault("database_url", _pg_url(name))
+        else:
+            shutil.copy(template_db, data / "familychat.db")
+        return make_settings(data, **overrides)
+
+    yield build
+    if pg_databases:
+        admin = _admin_engine()
+        with admin.connect() as c:
+            for name in pg_databases:
+                c.execute(text(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
+        admin.dispose()
+
+
+@pytest.fixture
+def make_app(tmp_path, new_settings):
     created = []
 
     def factory(**overrides) -> tuple:
-        data = tmp_path / f"data{len(created)}"
-        data.mkdir()
-        shutil.copy(template_db, data / "familychat.db")
-        settings = make_settings(data, **overrides)
+        settings = new_settings(tmp_path / f"data{len(created)}", **overrides)
         pushes: list[httpx.Request] = []
 
         def handler(request: httpx.Request) -> httpx.Response:

@@ -1,14 +1,18 @@
 import sqlite3
+import uuid
 
+import pytest
 from alembic import command
 from alembic.autogenerate import compare_metadata
 from alembic.migration import MigrationContext
 from alembic.script import ScriptDirectory
-from sqlalchemy import create_engine, inspect
+from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.engine import make_url
+from sqlalchemy.pool import NullPool
 
 from app.migrate import alembic_config
 from app.models import Base
-from tests.conftest import make_settings
+from tests.conftest import PG_ADMIN_URL, make_settings
 
 
 def tables(path):
@@ -21,18 +25,48 @@ def tables(path):
         con.close()
 
 
-def test_upgrade_head_on_empty_database(tmp_path):
-    s = make_settings(tmp_path)
-    cfg = alembic_config(s.database_url)
+@pytest.fixture
+def blank_db(tmp_path):
+    """URL of an empty database: a SQLite file, or a new empty PostgreSQL database when the suite runs on PostgreSQL."""
+    if not PG_ADMIN_URL:
+        yield make_settings(tmp_path).database_url
+        return
+    name = f"fc_mig_{uuid.uuid4().hex[:10]}"
+    admin = create_engine(PG_ADMIN_URL, isolation_level="AUTOCOMMIT", poolclass=NullPool)
+    with admin.connect() as c:
+        c.execute(text(f'CREATE DATABASE "{name}"'))
+    yield make_url(PG_ADMIN_URL).set(database=name).render_as_string(hide_password=False)
+    with admin.connect() as c:
+        c.execute(text(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
+    admin.dispose()
+
+
+def table_names(url) -> set[str]:
+    engine = create_engine(url, poolclass=NullPool)
+    try:
+        return set(inspect(engine).get_table_names())
+    finally:
+        engine.dispose()
+
+
+def scalar(url, sql):
+    engine = create_engine(url, poolclass=NullPool)
+    try:
+        with engine.connect() as conn:
+            return conn.execute(text(sql)).scalar()
+    finally:
+        engine.dispose()
+
+
+def test_upgrade_head_on_empty_database(blank_db):
+    cfg = alembic_config(blank_db)
     command.upgrade(cfg, "head")
-    assert tables(tmp_path / "familychat.db") == set(Base.metadata.tables) | {"alembic_version"}
-    con = sqlite3.connect(tmp_path / "familychat.db")
-    assert con.execute("SELECT value FROM counters WHERE name='message_seq'").fetchone() == (0,)
+    assert table_names(blank_db) == set(Base.metadata.tables) | {"alembic_version"}
+    assert scalar(blank_db, "SELECT value FROM counters WHERE name='message_seq'") == 0
     assert (
-        con.execute("SELECT version_num FROM alembic_version").fetchone()[0]
+        scalar(blank_db, "SELECT version_num FROM alembic_version")
         == ScriptDirectory.from_config(cfg).get_current_head()
     )
-    con.close()
     command.upgrade(cfg, "head")  # idempotent
 
 
@@ -41,44 +75,63 @@ def test_single_migration_head():
     assert len(heads) == 1
 
 
-def test_models_match_migrations(tmp_path):
+def test_models_match_migrations(blank_db):
     """`alembic revision --autogenerate` would produce nothing: the models and the migrations agree."""
-    s = make_settings(tmp_path)
-    command.upgrade(alembic_config(s.database_url), "head")
-    engine = create_engine(s.database_url)
+    command.upgrade(alembic_config(blank_db), "head")
+    engine = create_engine(blank_db)
     with engine.connect() as conn:
         diff = compare_metadata(MigrationContext.configure(conn, opts={"compare_type": True}), Base.metadata)
     engine.dispose()
     assert diff == []
 
 
-def test_unique_and_index_constraints_exist(tmp_path):
-    s = make_settings(tmp_path)
-    command.upgrade(alembic_config(s.database_url), "head")
-    engine = create_engine(s.database_url)
+def test_unique_and_index_constraints_exist(blank_db):
+    command.upgrade(alembic_config(blank_db), "head")
+    engine = create_engine(blank_db)
     insp = inspect(engine)
     assert any(u["column_names"] == ["seq"] for u in insp.get_unique_constraints("messages")) or any(
         i["column_names"] == ["seq"] and i["unique"] for i in insp.get_indexes("messages")
     )
     assert any(u["column_names"] == ["user_id", "number"] for u in insp.get_unique_constraints("devices"))
     assert any(i["column_names"] == ["device_id", "seq"] for i in insp.get_indexes("events"))
+    assert any(i["column_names"] == ["expires_at"] for i in insp.get_indexes("messages"))
+    assert any(u["column_names"] == ["code_hash"] for u in insp.get_unique_constraints("password_resets"))
     engine.dispose()
-    con = sqlite3.connect(tmp_path / "familychat.db")
-    sql = con.execute("SELECT sql FROM sqlite_master WHERE name='events'").fetchone()[0]
-    assert "AUTOINCREMENT" in sql.upper()  # cursors are never reused after deletes
-    con.close()
+    if blank_db.startswith("sqlite"):
+        sql = scalar(blank_db, "SELECT sql FROM sqlite_master WHERE name='events'")
+        assert "AUTOINCREMENT" in sql.upper()  # cursors are never reused after deletes
 
 
-def test_downgrade_to_base_and_back(tmp_path):
-    s = make_settings(tmp_path)
-    cfg = alembic_config(s.database_url)
+def test_downgrade_to_base_and_back(blank_db):
+    cfg = alembic_config(blank_db)
     command.upgrade(cfg, "head")
     command.downgrade(cfg, "base")
-    assert tables(tmp_path / "familychat.db") <= {"alembic_version"}
+    assert table_names(blank_db) <= {"alembic_version"}
     command.upgrade(cfg, "head")
-    assert "messages" in tables(tmp_path / "familychat.db")
+    assert "messages" in table_names(blank_db)
 
 
+def test_0004_and_0005_add_and_drop_their_columns(blank_db):
+    cfg = alembic_config(blank_db)
+    command.upgrade(cfg, "0003")
+    assert "password_resets" not in table_names(blank_db)
+    command.upgrade(cfg, "head")
+    engine = create_engine(blank_db)
+    insp = inspect(engine)
+    assert "password_resets" in insp.get_table_names()
+    assert "disappearing_seconds" in {c["name"] for c in insp.get_columns("conversations")}
+    assert "expires_at" in {c["name"] for c in insp.get_columns("messages")}
+    engine.dispose()
+    command.downgrade(cfg, "0003")
+    engine = create_engine(blank_db)
+    insp = inspect(engine)
+    assert "password_resets" not in insp.get_table_names()
+    assert "disappearing_seconds" not in {c["name"] for c in insp.get_columns("conversations")}
+    assert "expires_at" not in {c["name"] for c in insp.get_columns("messages")}
+    engine.dispose()
+
+
+@pytest.mark.sqlite_only
 def test_sqlite_pragmas(app):
     with app.state.engine.connect() as conn:
         raw = conn.connection.dbapi_connection
@@ -87,51 +140,72 @@ def test_sqlite_pragmas(app):
         assert raw.execute("PRAGMA busy_timeout").fetchone()[0] >= 5000
 
 
-def test_0002_backfills_token_history_and_downgrades(tmp_path):
-    s = make_settings(tmp_path)
-    cfg = alembic_config(s.database_url)
+def execute(url, *statements):
+    engine = create_engine(url, poolclass=NullPool)
+    try:
+        with engine.begin() as conn:
+            for sql in statements:
+                conn.execute(text(sql))
+    finally:
+        engine.dispose()
+
+
+def rows(url, sql):
+    engine = create_engine(url, poolclass=NullPool)
+    try:
+        with engine.connect() as conn:
+            return {tuple(r) for r in conn.execute(text(sql))}
+    finally:
+        engine.dispose()
+
+
+def test_0002_backfills_token_history_and_downgrades(blank_db):
+    cfg = alembic_config(blank_db)
     command.upgrade(cfg, "0001")
-    con = sqlite3.connect(tmp_path / "familychat.db")
-    con.execute(
+    execute(
+        blank_db,
         "INSERT INTO users (id, username, display_name, password_hash, is_admin, created_at) "
-        "VALUES ('u','u','U','x',0,1)"
-    )
-    con.execute(
+        "VALUES ('u','u','U','x',false,1)",
         "INSERT INTO devices (id, user_id, number, name, created_at, last_seen_at, acked_cursor) "
-        "VALUES ('d','u',1,'n',1,1,0)"
-    )
-    con.execute(
+        "VALUES ('d','u',1,'n',1,1,0)",
         "INSERT INTO sessions "
         "(id, user_id, device_id, refresh_token_hash, previous_token_hash, created_at, expires_at) "
-        "VALUES ('s1','u','d','cur','prev',5,99), ('s2','u','d','only',NULL,6,99)"
+        "VALUES ('s1','u','d','cur','prev',5,99), ('s2','u','d','only',NULL,6,99)",
     )
-    con.commit()
-    con.close()
-    command.upgrade(cfg, "head")
-    con = sqlite3.connect(tmp_path / "familychat.db")
-    assert set(con.execute("SELECT token_hash, session_id FROM session_tokens")) == {
+    command.upgrade(cfg, "0002")
+    assert rows(blank_db, "SELECT token_hash, session_id FROM session_tokens") == {
         ("cur", "s1"),
         ("prev", "s1"),
         ("only", "s2"),
     }
-    assert "previous_token_hash" not in {r[1] for r in con.execute("PRAGMA table_info(sessions)")}
-    con.close()
+    engine = create_engine(blank_db, poolclass=NullPool)
+    assert "previous_token_hash" not in {c["name"] for c in inspect(engine).get_columns("sessions")}
+    engine.dispose()
     command.downgrade(cfg, "0001")
-    con = sqlite3.connect(tmp_path / "familychat.db")
-    assert con.execute("SELECT previous_token_hash FROM sessions WHERE id='s1'").fetchone() == ("prev",)
-    assert "session_tokens" not in tables(tmp_path / "familychat.db")
-    con.close()
+    assert rows(blank_db, "SELECT previous_token_hash FROM sessions WHERE id='s1'") == {("prev",)}
+    assert "session_tokens" not in table_names(blank_db)
+    command.upgrade(cfg, "head")  # and forward again, through every later revision
+    assert "session_tokens" in table_names(blank_db)
 
 
-def test_0003_adds_and_drops_the_audit_table(tmp_path):
-    s = make_settings(tmp_path)
-    cfg = alembic_config(s.database_url)
+def test_0003_adds_and_drops_the_audit_table(blank_db):
+    cfg = alembic_config(blank_db)
     command.upgrade(cfg, "0002")
-    assert "audit_events" not in tables(tmp_path / "familychat.db")
-    command.upgrade(cfg, "head")
-    con = sqlite3.connect(tmp_path / "familychat.db")
-    con.execute("INSERT INTO audit_events (at, action, details) VALUES (1, 'x', '{}')")
-    con.commit()
-    con.close()
+    assert "audit_events" not in table_names(blank_db)
+    command.upgrade(cfg, "0003")
+    execute(blank_db, "INSERT INTO audit_events (at, action, details) VALUES (1, 'x', '{}')")
     command.downgrade(cfg, "0002")
-    assert "audit_events" not in tables(tmp_path / "familychat.db")
+    assert "audit_events" not in table_names(blank_db)
+
+
+def test_0004_0005_keep_existing_rows(blank_db):
+    cfg = alembic_config(blank_db)
+    command.upgrade(cfg, "0003")
+    execute(
+        blank_db,
+        "INSERT INTO users (id, username, display_name, password_hash, is_admin, created_at) "
+        "VALUES ('u','u','U','x',false,1)",
+        "INSERT INTO conversations (id, type, created_by, created_at, updated_at) VALUES ('c','group','u',1,1)",
+    )
+    command.upgrade(cfg, "head")
+    assert rows(blank_db, "SELECT id, disappearing_seconds FROM conversations") == {("c", None)}

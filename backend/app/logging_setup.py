@@ -6,6 +6,8 @@ import re
 import sys
 import time
 
+from app.request_id import current_request_id
+
 _URL_QUERY = re.compile(r"(/[^\s\"?]*)\?[^\s\"]*")
 _TOKEN_PARAM = re.compile(r"(access_token|refresh_token|token)=[^&\s\"]+", re.IGNORECASE)
 
@@ -32,6 +34,9 @@ class JsonFormatter(logging.Formatter):
             "logger": record.name,
             "msg": record.getMessage(),
         }
+        request_id = current_request_id()
+        if request_id:
+            out["request_id"] = request_id
         extra = getattr(record, "fields", None)
         if extra:
             out.update(extra)

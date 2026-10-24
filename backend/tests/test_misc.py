@@ -155,11 +155,8 @@ def test_prune_removes_expired_sessions_and_invitations(factory, app, alice):
     assert expired_code != live_code
 
 
-def test_background_tasks_run_in_lifespan(tmp_path, template_db):
-    import shutil
-
-    shutil.copy(template_db, tmp_path / "familychat.db")
-    app = create_app(make_settings(tmp_path, background_tasks=True))
+def test_background_tasks_run_in_lifespan(tmp_path, new_settings):
+    app = create_app(new_settings(tmp_path, background_tasks=True))
     with TestClient(app) as client:
         f = Factory(app, client)
         a = f.user("alice")
