@@ -1,6 +1,6 @@
 # FamilyChat handover
 
-Last updated: 2026-10-24. Branch `ccr-187bef76-iz1nsw` (PR #54 merged; security fixes on top).
+Last updated: 2026-10-24. Branch `ccr-187bef76-iz1nsw` (PR #54: first version; PR #55: security fixes).
 
 ## State in one paragraph
 
