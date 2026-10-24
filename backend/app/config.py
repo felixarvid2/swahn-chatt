@@ -54,6 +54,8 @@ class Settings(BaseSettings):
     # Housekeeping (hourly job): delivered ciphertext is useless after delivery; audit rows are kept this long.
     envelope_retention_days: int = Field(30, ge=1)
     audit_retention_days: int = Field(180, ge=1)
+    # Presence (opt-in per user): seconds between announcements of one user's online/offline changes to contacts.
+    presence_debounce_seconds: float = Field(10.0, ge=0.0)
     # /readyz answers 503 "low_disk" when the data volume has less free space than this (0 disables the check).
     min_free_disk_mb: int = Field(200, ge=0)
 

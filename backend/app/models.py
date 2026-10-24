@@ -11,6 +11,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    false,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -31,6 +32,11 @@ class User(Base):
     avatar_attachment_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     created_at: Mapped[int] = mapped_column(BigInteger)
     disabled_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    # Admin suspension: the account keeps its data, devices and memberships but cannot sign in or use the API.
+    suspended_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    # Presence is opt-in: nothing about when this user is online leaves the server unless this is true.
+    share_presence: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    presence_last_seen_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)  # only kept while sharing
 
 
 class Invitation(Base):
@@ -45,6 +51,9 @@ class Invitation(Base):
     used_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     used_by: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     revoked_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    # Multi-use invitations: `uses` counts redemptions; used_at/used_by mean "exhausted" / the last redeemer.
+    max_uses: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    uses: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
 
 
 class PasswordReset(Base):
@@ -241,3 +250,29 @@ class AuditEvent(Base):
     target_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
     details: Mapped[dict] = mapped_column(SAJSON, default=dict)
+
+
+class LoginFailure(Base):
+    """One failed password guess, so per-username lockouts survive a restart. `key_hash` is an HMAC of the username
+    (never the name itself: unknown accounts must not be stored); rows older than a day are pruned."""
+
+    __tablename__ = "login_failures"
+    __table_args__ = (Index("ix_login_failures_key_at", "key_hash", "at"),)
+    id: Mapped[int] = mapped_column(BigIntPK, primary_key=True, autoincrement=True)
+    key_hash: Mapped[str] = mapped_column(String(64))
+    at: Mapped[int] = mapped_column(BigInteger)
+
+
+class UploadSession(Base):
+    """A resumable attachment upload. `id` becomes the attachment id on completion. `size` is reserved quota until
+    the session is finished or expires; the bytes so far live in `.tmp/uploads/<id>.part` under the attachments dir."""
+
+    __tablename__ = "upload_sessions"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    purpose: Mapped[str] = mapped_column(String(10))
+    size: Mapped[int] = mapped_column(BigInteger)
+    sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    offset: Mapped[int] = mapped_column(BigInteger, default=0)
+    created_at: Mapped[int] = mapped_column(BigInteger)
+    expires_at: Mapped[int] = mapped_column(BigInteger, index=True)

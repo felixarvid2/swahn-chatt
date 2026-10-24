@@ -100,8 +100,9 @@ reports as artifacts. It needs no `local.properties`: the Android SDK location c
 
 `:app` tests run on the JVM with Robolectric (no phone or emulator needed). The first run downloads Robolectric's
 Android jar. The screenshot tests write PNGs to `app/screenshots/` (light and dark, Swedish and English; also the
-conversation with the unread divider and jump-to-bottom button, the connection banner, drafts in the list and the
-verified header). They are a review aid: look at them after a UI change. The paging test fills a database with 10,000
+conversation with the unread divider and jump-to-bottom button, the connection banner, drafts in the list, the
+verified header, the list with pinned, muted and archived conversations, the privacy and security section of the settings,
+the search and the lock screen). They are a review aid: look at them after a UI change. The paging test fills a database with 10,000
 messages and checks pages, order and timing of the message list.
 SQLCipher itself cannot be loaded on a PC (its native library is built for Android), so the database tests use plain
 SQLite through the same Room code; the encryption layer has to be checked on a phone (section 8).
@@ -119,7 +120,7 @@ adb install -r app/build/outputs/apk/release/app-release.apk
 **Updating a phone that already has the app:** install the new APK over the old one (same signing key) and do not
 uninstall first: uninstalling deletes the keys and the whole local history (see section 7). The app's local database
 carries a schema version and upgrades itself on the first start of the new build, with a tested migration, without
-losing messages, keys or sessions. Version 2 added the table for unsent drafts; the history is in
+losing messages, keys or sessions. Version 2 added the table for unsent drafts; version 3 (app 0.2.0) added the full-text search index of the messages (built from the existing messages during the upgrade) and the local pin/mute/archive settings; the history is in
 `AppDatabase.MIGRATIONS` and `app/schemas/`. Whoever raises `AppDatabase.VERSION` must add a `Migration` and a case in
 `MigrationTest` in the same change (a build that cannot open the old file would otherwise leave the phone without its
 data).
@@ -241,3 +242,21 @@ the notification arrives (ntfy) and that the conversation opens with the message
 | Messages appear only when the app is opened | Section 4: distributor chosen? battery optimisation off for ntfy and FamilyChat? |
 | "Det gick inte att avkryptera meddelandet" | The message was sent to a device that did not exist yet, or its key changed. Tap *Granska* if shown; otherwise ask the sender to send it again |
 | Red warning "Säkerhetsnumret … har ändrats" | Compare the number with the person (section 6) before accepting |
+
+## App 0.2.0: search, privacy, lock, pin/mute/archive (what to know when testing on a phone)
+
+- **Search** (magnifier in the conversation list: all conversations, results grouped by conversation; magnifier in a
+  conversation: only that one). The index is an FTS4 table inside the encrypted database; nothing leaves the phone.
+  Words match by their beginning, all words must occur, `å`/`ä`/`ö` are not folded to `a`/`o`.
+- **Settings > Integritet och säkerhet**: notification content (*Namn och meddelande* / *Endast namn* / *Ingen information*),
+  block screenshots (FLAG_SECURE, default off, immediate), app lock with a timeout (immediately, 1, 5, 30 minutes).
+  The app lock needs a screen lock or biometrics on the phone (BIOMETRIC_STRONG or screen lock on Android 11+; on Android
+  9 and 10 a weak-or-better biometric or the screen lock; on Android 8 the screen lock). Turning it on or off asks for the
+  authentication first. While the app is locked the window is secure and nothing of the app is drawn behind the lock
+  screen. Pickers and share sheets the app starts itself do not count as leaving the app (2 minutes of grace).
+- **Inline reply** in the notification goes through the normal outbox. It is not offered when notification content is
+  *Ingen information* (nobody is named, so a reply could go to the wrong person) or while the app lock is on (a reply would
+  send without the unlock). Replying always needs the phone to be unlocked.
+- **Pin / mute / archive**: long-press a conversation. Up to 5 pinned; mute for 1 hour, 8 hours, 1 week or always (no
+  notification, unread count kept); archived conversations sit under *Arkiverade* and come back on a new message unless muted.
+  All local to the phone, not synced between devices.

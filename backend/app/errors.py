@@ -48,6 +48,10 @@ def invalid(message: str) -> ApiError:
     return ApiError(422, "invalid_request", message)
 
 
+def account_suspended() -> ApiError:
+    return ApiError(403, "account_suspended", "this account is suspended; contact the administrator")
+
+
 def unauthorized(message: str = "authentication required", code: str = "unauthorized") -> ApiError:
     return ApiError(401, code, message, headers={"WWW-Authenticate": "Bearer"})
 

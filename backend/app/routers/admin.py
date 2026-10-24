@@ -8,12 +8,13 @@ from sqlalchemy.orm import Session
 from app import __version__, clock
 from app.config import Settings
 from app.deps import Principal, get_db, get_ip, get_read_db, get_settings_dep, require_admin
-from app.errors import conflict, error_responses, not_found
+from app.errors import conflict, error_responses, invalid, not_found
 from app.migrate import code_head, db_revision
 from app.models import Attachment, Device, Invitation, User
 from app.schemas import (
     AdminStats,
     AdminUserOut,
+    AdminUserUpdate,
     AuditEventOut,
     InvitationCreate,
     InvitationCreated,
@@ -27,7 +28,13 @@ router = APIRouter(prefix="/admin", tags=["admin"], responses=error_responses(40
 
 
 def create_invitation(
-    db: Session, created_by: str | None, note: str | None, hours: int, is_admin: bool, ip: str | None = None
+    db: Session,
+    created_by: str | None,
+    note: str | None,
+    hours: int,
+    is_admin: bool,
+    ip: str | None = None,
+    max_uses: int = 1,
 ) -> tuple[Invitation, str]:
     code = new_invite_code()
     now = clock.now_ms()
@@ -39,10 +46,14 @@ def create_invitation(
         created_by=created_by,
         created_at=now,
         expires_at=now + hours * 3_600_000,
+        max_uses=max_uses,
+        uses=0,
     )
     db.add(inv)
     db.flush()
-    audit.record(db, "invitation_created", actor=created_by, target=inv.id, ip=ip, is_admin=is_admin, hours=hours)
+    audit.record(
+        db, "invitation_created", actor=created_by, target=inv.id, ip=ip, is_admin=is_admin, hours=hours, max_uses=max_uses
+    )
     return inv, code
 
 
@@ -59,7 +70,9 @@ def post_invitation(
     ip: str = Depends(get_ip),
     db: Session = Depends(get_db),
 ):
-    inv, code = create_invitation(db, p.user_id, body.note, body.expires_in_hours, body.is_admin, ip)
+    if body.is_admin and body.max_uses > 1:
+        raise invalid("administrator invitations are single use (max_uses must be 1)")
+    inv, code = create_invitation(db, p.user_id, body.note, body.expires_in_hours, body.is_admin, ip, body.max_uses)
     db.commit()
     return {
         "id": inv.id,
@@ -68,12 +81,14 @@ def post_invitation(
         "is_admin": inv.is_admin,
         "expires_at": inv.expires_at,
         "created_at": inv.created_at,
+        "max_uses": inv.max_uses,
     }
 
 
 @router.get("/invitations", response_model=list[InvitationOut], summary="List invitations")
 def list_invitations(_: Principal = Depends(require_admin), db: Session = Depends(get_read_db)):
     rows = db.scalars(select(Invitation).order_by(Invitation.created_at.desc())).all()
+    now = clock.now_ms()
     return [
         {
             "id": i.id,
@@ -84,6 +99,9 @@ def list_invitations(_: Principal = Depends(require_admin), db: Session = Depend
             "used_at": i.used_at,
             "used_by": i.used_by,
             "revoked_at": i.revoked_at,
+            "max_uses": i.max_uses,
+            "uses": i.uses,
+            "remaining": 0 if i.revoked_at is not None or i.expires_at <= now else max(i.max_uses - i.uses, 0),
         }
         for i in rows
     ]
@@ -172,8 +190,7 @@ def revoke_user_device(
     return Response(status_code=204)
 
 
-@router.get("/users", response_model=list[AdminUserOut], summary="List all accounts with usage figures")
-def list_users(_: Principal = Depends(require_admin), db: Session = Depends(get_read_db)):
+def _admin_users(db: Session, user_id: str | None = None) -> list[dict]:
     devices = (
         select(
             Device.user_id.label("user_id"),
@@ -188,12 +205,14 @@ def list_users(_: Principal = Depends(require_admin), db: Session = Depends(get_
         .group_by(Attachment.uploader_id)
         .subquery()
     )
-    rows = db.execute(
+    query = (
         select(User, devices.c.last_seen_at, devices.c.active, files.c.bytes)
         .outerjoin(devices, devices.c.user_id == User.id)
         .outerjoin(files, files.c.user_id == User.id)
         .order_by(User.created_at, User.id)
-    ).all()
+    )
+    if user_id is not None:
+        query = query.where(User.id == user_id)
     return [
         {
             "id": u.id,
@@ -202,12 +221,103 @@ def list_users(_: Principal = Depends(require_admin), db: Session = Depends(get_
             "is_admin": u.is_admin,
             "created_at": u.created_at,
             "disabled_at": u.disabled_at,
+            "suspended_at": u.suspended_at,
             "last_seen_at": last_seen,
             "active_devices": int(active or 0),
             "attachment_bytes": int(size or 0),
         }
-        for u, last_seen, active, size in rows
+        for u, last_seen, active, size in db.execute(query).all()
     ]
+
+
+@router.get("/users", response_model=list[AdminUserOut], summary="List all accounts with usage figures")
+def list_users(_: Principal = Depends(require_admin), db: Session = Depends(get_read_db)):
+    return _admin_users(db)
+
+
+def _active_target(db: Session, user_id: str) -> User:
+    user = db.get(User, user_id)
+    if user is None or user.disabled_at is not None:
+        raise not_found("user not found")
+    return user
+
+
+@router.post(
+    "/users/{user_id}/suspend",
+    status_code=204,
+    summary="Suspend a user",
+    responses=error_responses(404, 409),
+)
+def suspend_user(
+    user_id: str,
+    p: Principal = Depends(require_admin),
+    ip: str = Depends(get_ip),
+    db: Session = Depends(get_db),
+):
+    """Sign-in and API use are refused (`403 account_suspended`) and open sockets are closed; data, memberships and
+    devices stay, so unsuspending restores everything. Idempotent."""
+    if user_id == p.user_id:
+        raise conflict("administrators cannot suspend themselves")
+    user = _active_target(db, user_id)
+    if accounts.suspend_user(db, user):
+        audit.record(db, "user_suspended", actor=p.user_id, target_user=user.id, ip=ip, is_admin=user.is_admin)
+        db.commit()
+    return Response(status_code=204)
+
+
+@router.post(
+    "/users/{user_id}/unsuspend",
+    status_code=204,
+    summary="Unsuspend a user",
+    responses=error_responses(404),
+)
+def unsuspend_user(
+    user_id: str,
+    p: Principal = Depends(require_admin),
+    ip: str = Depends(get_ip),
+    db: Session = Depends(get_db),
+):
+    user = _active_target(db, user_id)
+    if accounts.unsuspend_user(db, user):
+        audit.record(db, "user_unsuspended", actor=p.user_id, target_user=user.id, ip=ip)
+        db.commit()
+    return Response(status_code=204)
+
+
+@router.patch(
+    "/users/{user_id}",
+    response_model=AdminUserOut,
+    summary="Promote or demote a user",
+    responses=error_responses(404, 409, 413, 422),
+)
+def update_user(
+    user_id: str,
+    body: AdminUserUpdate,
+    p: Principal = Depends(require_admin),
+    ip: str = Depends(get_ip),
+    db: Session = Depends(get_db),
+):
+    """Set `is_admin`. The last active administrator (not removed, not suspended) cannot be demoted, yourself
+    included (`409 last_admin`). Writers are serialised by the database lock, so two admins demoting each other at
+    once cannot both succeed."""
+    user = _active_target(db, user_id)
+    if bool(user.is_admin) != body.is_admin:
+        if not body.is_admin and user.suspended_at is None and accounts.active_admin_count(db, excluding=user.id) == 0:
+            raise conflict("the last administrator cannot be demoted", "last_admin")
+        user.is_admin = body.is_admin
+        db.flush()
+        audit.record(
+            db,
+            "admin_granted" if body.is_admin else "admin_revoked",
+            actor=p.user_id,
+            target_user=user.id,
+            ip=ip,
+            via="admin",
+        )
+        accounts.broadcast_user_updated(db, user)
+        db.commit()
+    (out,) = _admin_users(db, user.id)
+    return out
 
 
 @router.get("/stats", response_model=AdminStats, summary="Server statistics")

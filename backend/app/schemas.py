@@ -124,6 +124,17 @@ class UserOut(BaseModel):
     created_at: int
 
 
+class UserListItemOut(UserOut):
+    """GET /users: `online` and `last_seen_at` are set only for users who opted in to sharing presence."""
+
+    online: bool | None = None
+    last_seen_at: int | None = None
+
+
+class UserSettingsOut(BaseModel):
+    share_presence: bool
+
+
 class DeviceOut(BaseModel):
     id: str
     user_id: str
@@ -221,6 +232,7 @@ class InvitationCreated(BaseModel):
     is_admin: bool
     expires_at: int
     created_at: int
+    max_uses: int = 1
 
 
 class InvitationOut(BaseModel):
@@ -232,6 +244,9 @@ class InvitationOut(BaseModel):
     used_at: int | None
     used_by: str | None
     revoked_at: int | None
+    max_uses: int = 1
+    uses: int = 0
+    remaining: int = 1  # 0 once used up, revoked or expired
 
 
 class AdminUserOut(BaseModel):
@@ -241,6 +256,7 @@ class AdminUserOut(BaseModel):
     is_admin: bool
     created_at: int
     disabled_at: int | None
+    suspended_at: int | None = None
     last_seen_at: int | None  # newest last_seen_at over all of the user's devices
     active_devices: int
     attachment_bytes: int
@@ -264,6 +280,18 @@ class AdminStats(BaseModel):
     version: str
     migration: MigrationInfo
     uptime_seconds: int
+
+
+class UploadSessionOut(BaseModel):
+    upload_id: str
+    offset: int
+    size: int
+    expires_at: int
+    max_chunk_bytes: int
+
+
+class UploadProgressOut(BaseModel):
+    offset: int
 
 
 class AuditEventOut(BaseModel):
@@ -338,6 +366,25 @@ class InvitationCreate(Req):
     note: Annotated[str, StringConstraints(max_length=200)] | None = None
     expires_in_hours: int = Field(72, ge=1, le=720)
     is_admin: bool = False
+    max_uses: int = Field(1, ge=1, le=20)
+
+
+class AdminUserUpdate(Req):
+    is_admin: bool
+
+
+class SelfDelete(Req):
+    password: Annotated[str, StringConstraints(max_length=256)]
+
+
+class UserSettingsUpdate(Req):
+    share_presence: bool | None = None
+
+
+class UploadCreate(Req):
+    size: int = Field(ge=1, le=2**62)
+    purpose: Literal["message"]
+    sha256: Annotated[str, StringConstraints(pattern=r"^[0-9a-fA-F]{64}$")] | None = None
 
 
 class PasswordResetRequest(Req):

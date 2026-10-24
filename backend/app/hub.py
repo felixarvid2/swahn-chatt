@@ -64,6 +64,14 @@ class Hub:
         with self._lock:
             return sum(len(c) for c in self._by_device.values())
 
+    @property
+    def loop(self) -> asyncio.AbstractEventLoop | None:
+        return self._loop
+
+    def connected_user_ids(self) -> set[str]:
+        with self._lock:
+            return {c.user_id for conns in self._by_device.values() for c in conns}
+
     def _connections(self, device_id: str) -> list[Connection]:
         with self._lock:
             return list(self._by_device.get(device_id, ()))

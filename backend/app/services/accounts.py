@@ -157,10 +157,42 @@ def revoke_other_sessions(db: Session, user_id: str, keep_device_id: str) -> Non
         revoke_device(db, did)
 
 
+def active_admin_count(db: Session, excluding: str | None = None) -> int:
+    """Administrators who can act: not removed, not suspended. Optionally leaving one user out of the count."""
+    query = select(func.count()).select_from(User).where(
+        User.is_admin.is_(True), User.disabled_at.is_(None), User.suspended_at.is_(None)
+    )
+    if excluding is not None:
+        query = query.where(User.id != excluding)
+    return db.scalar(query) or 0
+
+
+def suspend_user(db: Session, user: User) -> bool:
+    """Block the account without touching its data, memberships, devices or sessions; open sockets are closed.
+    Returns False when it was already suspended."""
+    if user.suspended_at is not None:
+        return False
+    user.suspended_at = clock.now_ms()
+    db.flush()
+    kick_devices(db, active_device_ids(db, [user.id]))
+    return True
+
+
+def unsuspend_user(db: Session, user: User) -> bool:
+    if user.suspended_at is None:
+        return False
+    user.suspended_at = None
+    db.flush()
+    return True
+
+
 def disable_user(db: Session, user: User) -> None:
-    """Admin removal: account disabled, devices revoked, removed from every conversation."""
+    """Admin removal (or self-deletion): account disabled, devices revoked, removed from every conversation.
+    The avatar is unlinked so the garbage collector can delete it, and so can the account's other attachments
+    that no message references (see attachments.collect_garbage)."""
     if user.disabled_at is not None:
         return
+    user.avatar_attachment_id = None
     for did in db.scalars(select(Device.id).where(Device.user_id == user.id, Device.revoked_at.is_(None))).all():
         revoke_device(db, did, notify=False)
     user.disabled_at = clock.now_ms()
