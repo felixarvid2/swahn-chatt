@@ -20,6 +20,14 @@ family's Android phones. Everything runs in Docker; the backend is one Python pr
 3. Give the Pi a fixed address in your router (DHCP reservation). Only needed for the public-HTTPS option.
 4. Prefer an SSD over an SD card: SQLite writes and attachments wear cards out.
 
+**Shortcut:** steps 2 to 4 and 6 (first administrator) are automated by `deployment/install-pi.sh`. Clone the
+repository (step 3), then run `cd familychat/deployment && ./install-pi.sh`. It checks the architecture, RAM, disk and
+Docker, writes `.env` with a generated secret (an existing `.env` and secret are never overwritten), asks how the
+phones will reach the server (Tailscale on the host, Tailscale container, Caddy domain, or later) and whether to enable
+push, builds, starts, waits until the backend is healthy and prints the first administrator invitation. It does not
+install Docker unless you confirm (or pass `--install-docker`). `./install-pi.sh --help` lists the options for
+unattended use. You then only do the Tailscale or router part of step 5 and set up backups (step 9).
+
 ## 2. Install Docker
 
 ```bash
@@ -92,6 +100,33 @@ Notes: `tailscale serve` talks to the container through Docker's bridge, so the 
 the peer. `.env` already trusts `172.16.0.0/12` for `X-Forwarded-For`; if the proxy sends no such header all
 family members share one rate-limit bucket (login: 10 attempts per minute in total), which is fine for a family.
 Do not use `tailscale funnel` for this: it would put the login API on the public internet.
+
+### Option A2: Tailscale as a container (no Tailscale on the host)
+
+The `tailscale` compose profile runs Tailscale as a sidecar container. It joins your tailnet as its own node and
+serves HTTPS itself, so the Pi needs no host-level Tailscale and no `tailscale serve` command. Use it instead of
+Option A, not together with it (same ports).
+
+1. In the Tailscale admin console enable **MagicDNS** and **HTTPS Certificates** (DNS page) and create an **auth key**
+   (Settings, Keys). It is only used for the first login.
+2. In `.env` set `TS_AUTHKEY=tskey-auth-...` and, if you like, `TS_HOSTNAME=familychat` (the node name).
+3. ```bash
+   docker compose --profile tailscale up -d
+   docker compose logs tailscale          # "Startup complete" / the node's address
+   ```
+   Add `COMPOSE_PROFILES=tailscale` (or `caddy,ntfy,tailscale`, ...) to `.env` to make the profile permanent, so that
+   a plain `docker compose up -d` keeps it. Remove `TS_AUTHKEY` from `.env` after the first start; the node state is
+   in the `tailscale-state` volume (do not delete it, or the node registers again under a new name).
+4. The address is `https://<TS_HOSTNAME>.<tailnet>.ts.net` (port 443 -> `backend:8000`). `tailscale-serve.json`
+   defines the mapping; the container fills in the node's own name. Without an auth key the container logs a login
+   link instead (`docker compose logs tailscale`). Then continue at step 4 of Option A (phones, health check).
+
+For push, the same node also serves **port 8443 -> `ntfy:80`**, so the ntfy URL is
+`https://<TS_HOSTNAME>.<tailnet>.ts.net:8443`: set `NTFY_BASE_URL` to it and start the `ntfy` profile as in section 7;
+you do not run `tailscale serve --https=8443`. One limit: the backend container itself is not on the tailnet, so it
+reaches ntfy only if it can resolve and reach that name. If pushes never arrive, use a public ntfy host through Caddy
+(section 7) or Option A with the host's Tailscale. This sidecar setup was parsed by `docker compose config` and the
+image tag was pulled, but a real tailnet login has not been tested in this repository's environment.
 
 ### Option B: Caddy with a public domain
 
@@ -194,7 +229,9 @@ version changed the database, `./restore.sh` the backup taken in step one (migra
 
 `./backup.sh [dest-dir]` asks the running container for one consistent snapshot (`sqlite3` online backup API, so
 it is safe while the server is in use), copies the `.tar.gz` to the host (default `deployment/backups/`, mode 600),
-verifies it can be read and keeps the newest 14 (`KEEP=30 ./backup.sh` changes that). The archive contains:
+verifies it can be read and keeps the newest 14 (`FAMILYCHAT_BACKUP_KEEP=30` in `.env` or in the environment changes
+that; the older `KEEP=30 ./backup.sh` still works; `./backup.sh --prune` only applies the retention rule). The
+archive contains:
 `familychat.db`, all attachments and a `manifest.json` with counts and SHA-256 checksums.
 
 **What a backup contains:** accounts, password hashes, public keys, conversation membership, message metadata and
@@ -210,8 +247,26 @@ sudo systemctl daemon-reload && sudo systemctl enable --now familychat-backup.ti
 systemctl list-timers familychat-backup.timer
 ```
 
-or with cron, see `deployment/systemd/crontab.example`. Copy the backup directory to another machine
-(`rsync`, a USB disk, ...): a backup on the same SD card does not survive the card.
+or with cron, see `deployment/systemd/crontab.example`. A backup on the same SD card does not survive the card, so
+copy it elsewhere. `backup.sh` can do that with [rclone](https://rclone.org) (installed on the Pi, not in Docker):
+
+```bash
+sudo apt install rclone        # or: curl https://rclone.org/install.sh | sudo bash
+rclone config                  # as the user that runs the backup: first a normal remote (Drive, S3, SFTP, ...),
+                               # then a "crypt" remote layered on top of it, e.g. named familychat-crypt
+```
+
+Use a **crypt** remote: the archive holds metadata and password hashes, and crypt encrypts file names and content
+before they leave the Pi (keep the crypt passwords somewhere other than the Pi). Then set in `.env`:
+
+```bash
+FAMILYCHAT_BACKUP_RCLONE_REMOTE=familychat-crypt:familychat-backups
+```
+
+After each successful local backup `backup.sh` runs `rclone copy <backup dir> <remote>` (new archives only; older ones
+that are missing remotely are uploaded too). If the upload fails the run exits with status 3, so the systemd unit shows
+as failed, but the local backup stays. The remote is not pruned automatically: use a bucket lifecycle rule or
+`rclone delete <remote> --min-age 60d`. Test it once with `./backup.sh` and `rclone ls <remote>`.
 
 Restore, for example onto a new Pi after step 4:
 

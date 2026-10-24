@@ -52,6 +52,45 @@ The result is `app/build/outputs/apk/release/app-release.apk` (about 30 MB, arm6
 `-Pfamilychat.*` properties the release APK is signed with the debug key: fine to check that minification works, not
 something to hand to other people. You can also put the properties in `~/.gradle/gradle.properties`.
 
+`make apk` and `make apk-release` (in `familychat/`) wrap these commands; `make apk-release` signs when you pass
+`KEYSTORE=... KEYSTORE_PASSWORD=... KEY_ALIAS=... KEY_PASSWORD=...`.
+
+### Releases on GitHub (signed APK from CI)
+
+Pushing a tag that starts with `familychat-v` runs `.github/workflows/familychat-release.yml`. It builds the release
+APK, signs it with your key, and creates a GitHub release with `familychat-<version>.apk` and a `.sha256` file:
+
+```bash
+git tag familychat-v1.0.0 && git push origin familychat-v1.0.0
+```
+
+One-time setup. Create the keystore as above (once; keep it and its passwords outside the repository and in a password
+manager, because every future update must be signed with the same key), then store it as repository secrets
+(*Settings, Secrets and variables, Actions*; or with the `gh` CLI):
+
+```bash
+base64 -w0 ~/familychat-release.jks | gh secret set FAMILYCHAT_KEYSTORE_BASE64     # macOS: base64 -i file | tr -d '\n'
+gh secret set FAMILYCHAT_KEYSTORE_PASSWORD
+gh secret set FAMILYCHAT_KEY_ALIAS            # familychat, the -alias used with keytool
+gh secret set FAMILYCHAT_KEY_PASSWORD
+```
+
+The workflow writes the keystore to a temporary file on the runner and passes it as `-Pfamilychat.keystore`,
+`-Pfamilychat.keystorePassword`, `-Pfamilychat.keyAlias` and `-Pfamilychat.keyPassword` (the properties
+`app/build.gradle.kts` reads). If any of the four secrets is missing, the workflow still runs but signs with the public
+debug key, names the file `familychat-<version>-DEBUG-SIGNED.apk` and marks the release as a pre-release: that file is
+only for checking the pipeline. Check a download with `sha256sum -c familychat-<version>.apk.sha256`, and the signing
+key with `apksigner verify --print-certs`. The GitHub release is public if the repository is public: see the note in
+section 2 about the AGPL and who may get the APK. Use a private repository, or delete the release and hand out the
+artifact yourself, if the family's app should not be downloadable by everybody.
+
+The tag does not set the app's version: raise `versionCode` and `versionName` in `app/build.gradle.kts` before tagging.
+
+Continuous integration (`familychat-android.yml`) builds, tests and lints on every push or pull request touching
+`familychat/android/` or `familychat/backend/`, runs `scripts/run-e2e.sh`, and uploads the debug APK and the test
+reports as artifacts. It needs no `local.properties`: the Android SDK location comes from `ANDROID_HOME`, which
+`android-actions/setup-android` sets. Locally, `ANDROID_HOME` (or `ANDROID_SDK_ROOT`) works the same instead of `local.properties`.
+
 ### Run the tests
 
 ```bash

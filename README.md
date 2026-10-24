@@ -48,6 +48,9 @@ cd ../android
 ./scripts/run-e2e.sh                       # starts a real backend; two users exchange E2EE messages
 ```
 
+`make help` lists shortcuts for all of this (`make dev`, `make test-backend`, `make lint`, `make e2e`, `make apk`, `make up`,
+`make backup`, `make invite`, ...). CI runs in `.github/workflows/familychat-*.yml`.
+
 A debug build may talk plain `http://` to a LAN or localhost address. It then shows a red "Osäker anslutning
 (endast utveckling)" banner. Release builds accept HTTPS only.
 
@@ -60,7 +63,10 @@ docker compose up -d --build
 docker compose exec backend python -m app.cli create-invite --admin   # first account
 ```
 
-Reach the server through Tailscale (`tailscale serve`, recommended) or Caddy with a public domain. Never expose
+On a fresh Raspberry Pi OS 64-bit, `deployment/install-pi.sh` does these steps interactively (checks, `.env` with a generated
+secret, build, start, first admin invitation).
+
+Reach the server through Tailscale (`tailscale serve`, or the `tailscale` compose profile; recommended) or Caddy with a public domain. Never expose
 port 8000 directly. The full guide, including backups, upgrades and push, is in
 [docs/RASPBERRY_PI_SETUP.md](docs/RASPBERRY_PI_SETUP.md).
 
