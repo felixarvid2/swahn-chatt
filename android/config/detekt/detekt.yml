@@ -1,0 +1,96 @@
+# detekt (+ detekt-formatting, the ktlint rules) for all modules; ./gradlew detekt. Built upon detekt's defaults.
+# Existing findings are in each module's detekt-baseline.xml (regenerate with ./gradlew detektBaseline); new code must be clean.
+build:
+  maxIssues: 0
+
+# Jetpack Compose conventions
+naming:
+  FunctionNaming:
+    # @Composable functions that return Unit are PascalCase nouns
+    ignoreAnnotated: ["Composable"]
+    functionPattern: "[a-z][a-zA-Z0-9]*"
+  TopLevelPropertyNaming:
+    constantPattern: "[A-Z][A-Za-z0-9_]*"
+  # `fun \`test names with spaces\`()` are the style of the unit tests
+  InvalidPackageDeclaration:
+    active: false
+  MatchingDeclarationName:
+    active: false
+
+complexity:
+  LongMethod:
+    threshold: 80
+    ignoreAnnotated: ["Composable", "Preview"]
+  LongParameterList:
+    functionThreshold: 8
+    constructorThreshold: 12
+    ignoreDefaultParameters: true
+    ignoreAnnotated: ["Composable", "Preview", "Inject"]
+  CyclomaticComplexMethod:
+    threshold: 25
+    ignoreAnnotated: ["Composable"]
+  TooManyFunctions:
+    active: false
+  LargeClass:
+    threshold: 800
+  NestedBlockDepth:
+    threshold: 5
+  ComplexCondition:
+    threshold: 6
+
+style:
+  MagicNumber:
+    active: false
+  MaxLineLength:
+    maxLineLength: 160
+    excludeCommentStatements: true
+  ReturnCount:
+    max: 4
+  UnusedPrivateMember:
+    ignoreAnnotated: ["Preview"]
+  UnusedPrivateProperty:
+    ignoreAnnotated: ["Preview"]
+  WildcardImport:
+    active: false
+  ThrowsCount:
+    max: 4
+  UseCheckOrError:
+    active: false
+
+exceptions:
+  TooGenericExceptionCaught:
+    active: false # the engine catches Exception on purpose where a failure must not end the sync loop
+  SwallowedException:
+    active: false
+
+performance:
+  SpreadOperator:
+    active: false
+
+formatting:
+  MaximumLineLength:
+    active: false # MaxLineLength above
+  MultiLineIfElse:
+    active: false
+  NoWildcardImports:
+    active: false
+  Filename:
+    active: false
+  FunctionNaming:
+    active: false
+  ParameterListWrapping:
+    active: false
+  TrailingCommaOnCallSite:
+    active: false
+  TrailingCommaOnDeclarationSite:
+    active: false
+  ArgumentListWrapping:
+    active: false
+  Wrapping:
+    active: false
+  ImportOrdering:
+    active: false
+  ChainWrapping:
+    active: false
+  SpacingBetweenDeclarationsWithComments:
+    active: false
