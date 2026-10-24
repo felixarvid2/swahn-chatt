@@ -9,6 +9,7 @@ import android.net.Uri
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.Person
+import androidx.core.app.RemoteInput
 import androidx.core.net.toUri
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
@@ -18,6 +19,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import se.familychat.app.MainActivity
 import se.familychat.app.R
+import se.familychat.app.data.AppPrefs
+import se.familychat.app.data.NotificationPrivacy
+import se.familychat.app.data.isMuted
 import se.familychat.app.data.db.AppDatabase
 import se.familychat.app.data.db.MessageEntity
 import se.familychat.app.data.db.toModel
@@ -34,7 +38,8 @@ import javax.inject.Singleton
 
 /**
  * Local notifications. Text and sender come from the decrypted messages in the database, never from a push. A notification
- * is shown for a conversation with unread incoming messages unless that conversation is open in the foreground.
+ * is shown for a conversation with unread incoming messages unless that conversation is open in the foreground or is muted.
+ * What it reveals follows [NotificationPrivacy] (the same for the lock-screen version).
  */
 @Singleton
 class Notifier @Inject constructor(
@@ -44,12 +49,16 @@ class Notifier @Inject constructor(
     private val db: AppDatabase,
     private val foreground: AppForeground,
     private val active: ActiveConversation,
+    private val prefs: AppPrefs,
     @ApplicationScope private val scope: CoroutineScope,
 ) {
     private val manager = NotificationManagerCompat.from(context)
     private val pending = LinkedHashSet<String>()
     private val flushRequests = Channel<Unit>(Channel.CONFLATED)
     private val lastNotifiedSeq = HashMap<String, Long>()
+
+    /** Conversations whose notification currently shows a sent inline reply (it must not be cancelled as "read"). */
+    private val replied = java.util.Collections.synchronizedSet(HashSet<String>())
 
     fun createChannels() {
         val nm = context.getSystemService(NotificationManager::class.java)
@@ -78,7 +87,7 @@ class Notifier @Inject constructor(
                     is EngineEvent.ConversationRemoved -> cancel(event.conversationId)
                     is EngineEvent.ConversationChanged -> {
                         // read on another device or in the app: the unread count dropped to zero
-                        if (store.unreadCount(event.conversationId) == 0) cancel(event.conversationId)
+                        if (store.unreadCount(event.conversationId) == 0 && event.conversationId !in replied) cancel(event.conversationId)
                     }
                     else -> Unit
                 }
@@ -106,6 +115,10 @@ class Notifier @Inject constructor(
     internal suspend fun notifyNow(ids: Collection<String>) {
         for (id in ids) {
             if (foreground.isForeground.value && active.current.value == id) continue // the user is looking at it
+            if (db.storeDao().settings(id)?.let { isMuted(it.mutedUntil, System.currentTimeMillis()) } == true) {
+                cancel(id) // muted: no notification, the unread count stays
+                continue
+            }
             val unread = db.uiDao().unreadMessages(id, MAX_LINES).map { it.toModel() }
             if (unread.isEmpty()) {
                 cancel(id)
@@ -125,40 +138,61 @@ class Notifier @Inject constructor(
         else conversation.members.firstOrNull { it.userId != me.userId }?.let { store.getUser(it.userId)?.displayName }
             ?: context.getString(R.string.app_name)
 
+        val privacy = prefs.notificationPrivacy.value
+        val appName = context.getString(R.string.app_name)
+        val shownTitle = if (privacy == NotificationPrivacy.HIDDEN) appName else title
+        val countText = context.resources.getQuantityString(R.plurals.notification_new_messages, unread.size, unread.size)
+
         val style = NotificationCompat.MessagingStyle(Person.Builder().setName(context.getString(R.string.you)).setKey(me.userId).build())
-        if (group) style.setConversationTitle(title).setGroupConversation(true)
-        val people = HashMap<String, Person>()
-        for (m in unread) {
-            val sender = people.getOrPut(m.senderUserId) {
-                Person.Builder().setKey(m.senderUserId)
-                    .setName(store.getUser(m.senderUserId)?.displayName ?: context.getString(R.string.unknown_user))
-                    .build()
+        if (privacy == NotificationPrivacy.HIDDEN) {
+            style.addMessage(NotificationCompat.MessagingStyle.Message(countText, unread.maxOf { it.serverTs ?: it.clientTs }, Person.Builder().setName(appName).build()))
+        } else {
+            if (group) style.setConversationTitle(title).setGroupConversation(true)
+            val people = HashMap<String, Person>()
+            for (m in unread) {
+                val sender = people.getOrPut(m.senderUserId) {
+                    Person.Builder().setKey(m.senderUserId)
+                        .setName(store.getUser(m.senderUserId)?.displayName ?: context.getString(R.string.unknown_user))
+                        .build()
+                }
+                val text = if (privacy == NotificationPrivacy.FULL) previewText(m) else context.getString(R.string.notification_new_message)
+                style.addMessage(NotificationCompat.MessagingStyle.Message(text, m.serverTs ?: m.clientTs, sender))
             }
-            style.addMessage(NotificationCompat.MessagingStyle.Message(previewText(m), m.serverTs ?: m.clientTs, sender))
         }
 
         val newest = unread.maxOf { it.seq ?: 0L }
         val alert = newest > (lastNotifiedSeq[conversationId] ?: 0L)
         lastNotifiedSeq[conversationId] = maxOf(newest, lastNotifiedSeq[conversationId] ?: 0L)
+        replied.remove(conversationId)
 
-        val notification = NotificationCompat.Builder(context, CHANNEL_MESSAGES)
+        // What the lock screen shows when the phone hides sensitive notification content: never the text; the name only
+        // if the setting allows names.
+        val publicVersion = NotificationCompat.Builder(context, CHANNEL_MESSAGES)
             .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle(title)
+            .setContentTitle(shownTitle)
+            .setContentText(countText)
+            .build()
+
+        val builder = NotificationCompat.Builder(context, CHANNEL_MESSAGES)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle(shownTitle)
             .setStyle(style)
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setPublicVersion(publicVersion)
             .setOnlyAlertOnce(!alert)
             .setAutoCancel(true)
             .setGroup(GROUP_KEY)
             .setContentIntent(openIntent(conversationId))
-            .addAction(
-                NotificationCompat.Action.Builder(R.drawable.ic_notification, context.getString(R.string.action_mark_read), markReadIntent(conversationId))
-                    .setSemanticAction(NotificationCompat.Action.SEMANTIC_ACTION_MARK_AS_READ)
-                    .setShowsUserInterface(false)
-                    .build(),
-            )
-            .build()
+        if (replyAllowed()) builder.addAction(replyAction(conversationId, shownTitle))
+        builder.addAction(
+            NotificationCompat.Action.Builder(R.drawable.ic_notification, context.getString(R.string.action_mark_read), markReadIntent(conversationId))
+                .setSemanticAction(NotificationCompat.Action.SEMANTIC_ACTION_MARK_AS_READ)
+                .setShowsUserInterface(false)
+                .build(),
+        )
+        val notification = builder.build()
         manager.notify(idFor(conversationId), notification)
         manager.notify(
             ID_SUMMARY,
@@ -168,6 +202,51 @@ class Notifier @Inject constructor(
                 .setGroupSummary(true)
                 .setAutoCancel(true)
                 .setOnlyAlertOnce(true)
+                .build(),
+        )
+    }
+
+    /**
+     * Inline reply is offered unless the notification names nobody ([NotificationPrivacy.HIDDEN]: answering a message you
+     * cannot attribute is how replies end up in the wrong conversation) or the app lock is on (a reply would send as the
+     * user without the unlock).
+     */
+    internal fun replyAllowed(): Boolean = prefs.notificationPrivacy.value != NotificationPrivacy.HIDDEN && !prefs.appLockEnabled.value
+
+    private fun replyAction(conversationId: String, title: String): NotificationCompat.Action {
+        val input = RemoteInput.Builder(ReplyReceiver.KEY_TEXT).setLabel(context.getString(R.string.action_reply)).build()
+        return NotificationCompat.Action.Builder(R.drawable.ic_notification, context.getString(R.string.action_reply), replyIntent(conversationId))
+            .addRemoteInput(input)
+            .setSemanticAction(NotificationCompat.Action.SEMANTIC_ACTION_REPLY)
+            .setShowsUserInterface(false)
+            .setAllowGeneratedReplies(false)
+            .setAuthenticationRequired(true)
+            .build()
+    }
+
+    /**
+     * After an inline reply was handed to the outbox: replaces the notification (this also ends the reply field's progress
+     * indicator) with a short confirmation that removes itself.
+     */
+    @android.annotation.SuppressLint("MissingPermission") // checked with areNotificationsEnabled()
+    internal fun showReplied(conversationId: String, text: String) {
+        if (!manager.areNotificationsEnabled()) return
+        replied += conversationId
+        val shown = if (prefs.notificationPrivacy.value == NotificationPrivacy.FULL) text.take(MAX_TEXT) else context.getString(R.string.reply_sent)
+        val me = Person.Builder().setName(context.getString(R.string.you)).build()
+        val style = NotificationCompat.MessagingStyle(me).addMessage(NotificationCompat.MessagingStyle.Message(shown, System.currentTimeMillis(), null as Person?))
+        manager.notify(
+            idFor(conversationId),
+            NotificationCompat.Builder(context, CHANNEL_MESSAGES)
+                .setSmallIcon(R.drawable.ic_notification)
+                .setStyle(style)
+                .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+                .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+                .setOnlyAlertOnce(true)
+                .setSilent(true)
+                .setGroup(GROUP_KEY)
+                .setTimeoutAfter(REPLIED_TIMEOUT_MS)
+                .setContentIntent(openIntent(conversationId))
                 .build(),
         )
     }
@@ -186,6 +265,7 @@ class Notifier @Inject constructor(
     }
 
     fun cancel(conversationId: String) {
+        replied.remove(conversationId)
         manager.cancel(idFor(conversationId))
         lastNotifiedSeq.remove(conversationId)
     }
@@ -201,6 +281,18 @@ class Notifier @Inject constructor(
         val intent = Intent(Intent.ACTION_VIEW, deepLink(conversationId), context, MainActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         return PendingIntent.getActivity(context, idFor(conversationId), intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+    }
+
+    /**
+     * The one mutable PendingIntent of the app: the system must be able to add the typed text (RemoteInput) to it. Hence
+     * an explicit intent for our own non-exported receiver, so no other app can redirect or fill it.
+     */
+    private fun replyIntent(conversationId: String): PendingIntent {
+        val intent = Intent(context, ReplyReceiver::class.java)
+            .setAction(ReplyReceiver.ACTION)
+            .putExtra(ReplyReceiver.EXTRA_CONVERSATION, conversationId)
+        val mutable = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0
+        return PendingIntent.getBroadcast(context, idFor(conversationId), intent, mutable or PendingIntent.FLAG_UPDATE_CURRENT)
     }
 
     private fun markReadIntent(conversationId: String): PendingIntent {
@@ -220,6 +312,7 @@ class Notifier @Inject constructor(
         private const val MAX_LINES = 8
         private const val MAX_TEXT = 400
         private const val DEBOUNCE_MS = 400L
+        private const val REPLIED_TIMEOUT_MS = 8_000L
 
         fun deepLink(conversationId: String): Uri = "familychat://conversation/$conversationId".toUri()
     }

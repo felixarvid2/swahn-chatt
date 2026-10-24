@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app import clock
 from app.config import Settings
-from app.errors import ApiError, unauthorized
+from app.errors import ApiError, account_suspended, unauthorized
 from app.models import Device, User
 from app.models import Session as AuthSession
 from app.ratelimit import RateLimiter, client_ip, rate_key
@@ -86,6 +86,7 @@ def check_session(app, claims: AccessClaims) -> tuple[Principal, bool]:
                 User.username,
                 User.is_admin,
                 User.disabled_at,
+                User.suspended_at,
                 AuthSession.revoked_at,
                 AuthSession.expires_at,
                 Device.revoked_at.label("device_revoked"),
@@ -107,6 +108,8 @@ def check_session(app, claims: AccessClaims) -> tuple[Principal, bool]:
         or row.expires_at <= now
     ):
         raise unauthorized("session is no longer valid")
+    if row.suspended_at is not None:
+        raise account_suspended()
     principal = Principal(row.id, claims.device_id, claims.session_id, row.username, bool(row.is_admin))
     return principal, now - row.last_seen_at > LAST_SEEN_GRANULARITY_MS
 

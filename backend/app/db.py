@@ -1,4 +1,6 @@
-"""Engine and session factory. SQLite is tuned (WAL, busy timeout, foreign keys); nothing else is SQLite-only."""
+"""Engine and session factory. SQLite is tuned (WAL, busy timeout, foreign keys). On PostgreSQL every writing
+transaction takes one advisory lock first, which gives the same guarantee SQLite's BEGIN IMMEDIATE does: writers
+queue, so event `seq` values become visible in commit order (see docs/ARCHITECTURE.md, "Sync cursor")."""
 
 import logging
 from collections.abc import Callable
@@ -13,6 +15,9 @@ from app.config import Settings
 log = logging.getLogger("familychat.db")
 
 READ_ONLY_OPTION = "familychat_read_only"
+# pg_advisory_xact_lock key shared by all writing transactions; held until commit or rollback.
+PG_WRITE_LOCK_KEY = 0x46414D43  # "FAMC"
+PG_LOCK_TIMEOUT = "10s"  # like SQLite's busy timeout: fail instead of waiting forever
 
 
 def make_engine(url: str) -> Engine:
@@ -45,7 +50,20 @@ def make_engine(url: str) -> Engine:
                 conn.exec_driver_sql("BEGIN IMMEDIATE")
 
         return engine
-    return create_engine(url, pool_pre_ping=True)
+    engine = create_engine(url, pool_pre_ping=True)
+    if engine.dialect.name == "postgresql":
+
+        @event.listens_for(engine, "begin")
+        def _pg_on_begin(conn):
+            # The events table's seq comes from a sequence, which hands out numbers in insert order, not commit
+            # order: with concurrent writers a device could read seq 11, move its cursor past it, and never see 10
+            # when that transaction commits a moment later. Serialising writers makes commit order = seq order.
+            # Strictly read-only work opts out, exactly as on SQLite.
+            if not conn.get_execution_options().get(READ_ONLY_OPTION):
+                conn.exec_driver_sql(f"SET LOCAL lock_timeout = '{PG_LOCK_TIMEOUT}'")
+                conn.exec_driver_sql(f"SELECT pg_advisory_xact_lock({PG_WRITE_LOCK_KEY})")
+
+    return engine
 
 
 def make_session_factory(engine: Engine, info: dict[str, Any] | None = None) -> sessionmaker[Session]:

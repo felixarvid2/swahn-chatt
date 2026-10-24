@@ -18,6 +18,7 @@ class Connection:
     queue: asyncio.Queue = field(default_factory=lambda: asyncio.Queue(maxsize=QUEUE_LIMIT))
     closed: asyncio.Event = field(default_factory=asyncio.Event)
     close_code: int = 1000
+    close_reason: str = ""
 
     def offer(self, message: dict) -> None:
         """Queue a message (event loop only). A full queue means the peer stopped reading: close with 1008
@@ -34,12 +35,17 @@ class Hub:
         self._lock = threading.Lock()
         self._by_device: dict[str, set[Connection]] = {}
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._closing: tuple[int, str] | None = None
 
     # --- called on the event loop ---
     def register(self, conn: Connection) -> None:
         self._loop = asyncio.get_running_loop()
         with self._lock:
             self._by_device.setdefault(conn.device_id, set()).add(conn)
+            closing = self._closing
+        if closing:  # accepted while the server is shutting down: send it away at once
+            conn.close_code, conn.close_reason = closing
+            conn.closed.set()
 
     def unregister(self, conn: Connection) -> None:
         with self._lock:
@@ -57,6 +63,14 @@ class Hub:
     def connected_count(self) -> int:
         with self._lock:
             return sum(len(c) for c in self._by_device.values())
+
+    @property
+    def loop(self) -> asyncio.AbstractEventLoop | None:
+        return self._loop
+
+    def connected_user_ids(self) -> set[str]:
+        with self._lock:
+            return {c.user_id for conns in self._by_device.values() for c in conns}
 
     def _connections(self, device_id: str) -> list[Connection]:
         with self._lock:
@@ -83,6 +97,21 @@ class Hub:
                     loop.call_soon_threadsafe(conn.closed.set)
                 except RuntimeError:
                     pass
+
+    async def close_all(self, code: int = 1001, reason: str = "server restarting", timeout: float = 3.0) -> None:
+        """Server shutdown (event loop only): close every socket with `code` so clients reconnect at once, then
+        give the connection handlers up to `timeout` seconds to send the close frames and unregister."""
+        with self._lock:
+            self._closing = (code, reason)
+            conns = [c for group in self._by_device.values() for c in group]
+        for conn in conns:
+            conn.close_code, conn.close_reason = code, reason
+            conn.closed.set()
+        deadline = asyncio.get_running_loop().time() + timeout
+        while self.connected_count() and asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(0.02)
+        if self.connected_count():
+            log.warning("%d websocket(s) still open after the shutdown grace period", self.connected_count())
 
     def user_devices_connected(self, user_ids: set[str]) -> list[Connection]:
         with self._lock:

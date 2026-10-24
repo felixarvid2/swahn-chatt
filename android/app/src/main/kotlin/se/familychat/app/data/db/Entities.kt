@@ -1,6 +1,8 @@
 package se.familychat.app.data.db
 
 import androidx.room.Entity
+import androidx.room.Fts4
+import androidx.room.FtsOptions
 import androidx.room.Index
 import androidx.room.PrimaryKey
 
@@ -132,6 +134,46 @@ data class OutboxEntity(
     val lastError: String?,
     val createdAt: Long,
 )
+
+/**
+ * The unsent composer text of a conversation (added in database version 2). A separate table, not a column of
+ * `conversations`: the sync rewrites conversation rows and must never touch what the user is typing.
+ */
+@Entity(tableName = "drafts")
+data class DraftEntity(
+    @PrimaryKey val conversationId: String,
+    val text: String,
+    val updatedAt: Long,
+)
+
+/**
+ * Full-text index over the decrypted message text (added in database version 3). An external-content FTS4 table: the
+ * text is not stored twice, the index only holds the tokens and refers to `messages` by rowid; Room keeps it in step
+ * with triggers (so every insert, edit and delete of a message, however it is written, updates the index). It lives in
+ * the same SQLCipher file as the messages. The `unicode61` tokenizer folds case for all letters (the default `simple`
+ * one only for ASCII, which would make a search for "åsa" miss "Åsa"); diacritics are kept (`far` is not `får`).
+ */
+@Fts4(contentEntity = MessageEntity::class, tokenizer = FtsOptions.TOKENIZER_UNICODE61, tokenizerArgs = ["remove_diacritics=0"])
+@Entity(tableName = "message_fts")
+data class MessageFtsEntity(val text: String?)
+
+/**
+ * Local-only settings of a conversation (added in database version 3): pinned, muted, archived. A separate table, like
+ * [DraftEntity], because the sync rewrites the `conversations` rows. No row means the defaults.
+ */
+@Entity(tableName = "conversation_settings")
+data class ConversationSettingsEntity(
+    @PrimaryKey val conversationId: String,
+    /** When the conversation was pinned (null: not pinned). */
+    val pinnedAt: Long?,
+    /** Muted until this time in epoch milliseconds; [MUTED_ALWAYS] for good, 0 or in the past: not muted. */
+    val mutedUntil: Long,
+    val archived: Boolean,
+) {
+    companion object {
+        const val MUTED_ALWAYS = Long.MAX_VALUE
+    }
+}
 
 // --- libsignal state (ProtocolStorage) ---------------------------------------------------------------------------
 

@@ -112,6 +112,7 @@ def conversations_out(db: Session, conversation_ids: Iterable[str], viewer_id: s
                 "updated_at": c.updated_at,
                 "last_message_at": c.last_message_at,
                 "last_message_seq": c.last_message_seq,
+                "disappearing_seconds": c.disappearing_seconds,
                 "my_read_seq": mine.read_seq,
                 "unread_count": unread.get(c.id, 0),
                 "members": [{"user_id": m.user_id, "role": m.role, "joined_at": m.joined_at} for m in ms],
@@ -160,6 +161,7 @@ def messages_out(db: Session, messages: list[Message], device_id: str | None) ->
                 "seq": m.seq,
                 "attachment_ids": [] if deleted else atts.get(m.id, []),
                 "deleted": deleted,
+                "expires_at": m.expires_at,
                 "envelope": None
                 if env is None or deleted
                 else {"type": env.type, "body": base64.b64encode(env.body).decode()},

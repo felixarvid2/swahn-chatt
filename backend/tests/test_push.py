@@ -4,7 +4,7 @@ import time
 import httpx
 
 from app.main import create_app
-from tests.conftest import Factory, make_settings
+from tests.conftest import Factory
 
 ENDPOINT = "https://ntfy.example.org/upABCDEF123?up=1"
 
@@ -67,17 +67,14 @@ def test_push_for_other_events_and_cleared_registration(factory, app, alice, bob
     assert len(app.state.pushes) == n
 
 
-def test_gone_endpoint_is_forgotten(tmp_path, template_db):
-    import shutil
-
-    shutil.copy(template_db, tmp_path / "familychat.db")
+def test_gone_endpoint_is_forgotten(tmp_path, new_settings):
     calls = []
 
     def handler(request):
         calls.append(request)
         return httpx.Response(410)
 
-    app = create_app(make_settings(tmp_path), push_transport=httpx.MockTransport(handler))
+    app = create_app(new_settings(tmp_path), push_transport=httpx.MockTransport(handler))
     from fastapi.testclient import TestClient
 
     with TestClient(app) as client:
@@ -94,10 +91,7 @@ def test_gone_endpoint_is_forgotten(tmp_path, template_db):
         assert len(calls) == n  # endpoint was dropped after the 410
 
 
-def test_push_never_blocks_requests_and_survives_failures(tmp_path, template_db):
-    import shutil
-
-    shutil.copy(template_db, tmp_path / "familychat.db")
+def test_push_never_blocks_requests_and_survives_failures(tmp_path, new_settings):
     calls = []
 
     def slow_failing(request):
@@ -105,7 +99,7 @@ def test_push_never_blocks_requests_and_survives_failures(tmp_path, template_db)
         time.sleep(1.5)
         raise httpx.ConnectTimeout("simulated timeout", request=request)
 
-    app = create_app(make_settings(tmp_path), push_transport=httpx.MockTransport(slow_failing))
+    app = create_app(new_settings(tmp_path), push_transport=httpx.MockTransport(slow_failing))
     from fastapi.testclient import TestClient
 
     with TestClient(app) as client:

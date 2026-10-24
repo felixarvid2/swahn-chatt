@@ -2,6 +2,11 @@ package se.familychat.app.ui.components
 
 import android.text.format.DateFormat
 import android.text.format.Formatter
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -10,6 +15,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -17,6 +24,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -27,6 +36,9 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -34,6 +46,7 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import se.familychat.app.R
 import se.familychat.app.ui.model.AvatarUi
+import se.familychat.app.ui.model.ConnectionUi
 import se.familychat.app.ui.theme.LocalStatusColors
 import java.io.File
 import java.time.Instant
@@ -97,6 +110,37 @@ fun InsecureBanner(modifier: Modifier = Modifier) {
             style = MaterialTheme.typography.labelLarge,
             modifier = Modifier.padding(start = 8.dp),
         )
+    }
+}
+
+/**
+ * "Ansluter…" / "Offline – …" strip under the top bar; nothing while connected. The container stays in the tree and is a
+ * polite live region, so a screen reader announces the text when it appears or changes without taking focus.
+ */
+@Composable
+fun ConnectionBanner(state: ConnectionUi, modifier: Modifier = Modifier) {
+    // keep the last text while the strip animates away
+    var shown by remember { mutableStateOf(state) }
+    if (state != ConnectionUi.HIDDEN) shown = state
+    Box(modifier.fillMaxWidth().semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite }) {
+        AnimatedVisibility(visible = state != ConnectionUi.HIDDEN, enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
+            val offline = shown == ConnectionUi.OFFLINE
+            Row(
+                Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                    .padding(horizontal = 16.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    if (offline) Icons.Filled.CloudOff else Icons.Filled.Sync, contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(16.dp),
+                )
+                Text(
+                    stringResource(if (offline) R.string.connection_offline else R.string.connection_connecting),
+                    style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = 8.dp),
+                )
+            }
+        }
     }
 }
 

@@ -15,16 +15,24 @@ class AppForeground @Inject constructor() {
     private val _isForeground = MutableStateFlow(false)
     val isForeground: StateFlow<Boolean> = _isForeground.asStateFlow()
 
+    private val listeners = java.util.concurrent.CopyOnWriteArrayList<(Boolean) -> Unit>()
+
+    /** Called on the main thread, in the same call that changes [isForeground] (before the next frame is drawn). */
+    fun addListener(listener: (foreground: Boolean) -> Unit) { listeners += listener }
+
     /** Must be called on the main thread (Application.onCreate). */
     fun attach() {
         ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
-            override fun onStart(owner: LifecycleOwner) { _isForeground.value = true }
-            override fun onStop(owner: LifecycleOwner) { _isForeground.value = false }
+            override fun onStart(owner: LifecycleOwner) { set(true) }
+            override fun onStop(owner: LifecycleOwner) { set(false) }
         })
     }
 
     /** For tests. */
-    fun set(foreground: Boolean) { _isForeground.value = foreground }
+    fun set(foreground: Boolean) {
+        _isForeground.value = foreground
+        listeners.forEach { it(foreground) }
+    }
 }
 
 /** The conversation currently on screen, for the notification suppression. */

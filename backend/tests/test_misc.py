@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from app import clock
 from app.config import ConfigError, Settings
 from app.main import create_app
+from app.migrate import code_head
 from app.models import Device, Invitation
 from app.models import Session as AuthSession
 from app.services.maintenance import prune
@@ -15,7 +16,8 @@ from tests.conftest import SECRET, Factory, make_settings
 
 def test_health_and_ready(client):
     assert client.get("/healthz").json() == {"status": "ok"}
-    assert client.get("/readyz").json() == {"status": "ready"}
+    ready = client.get("/readyz").json()
+    assert ready["status"] == "ready" and ready["migration"] == code_head()
     assert client.get("/api/v1/healthz").status_code == 200
     assert client.get("/api/v1/readyz").status_code == 200
 
@@ -110,7 +112,9 @@ def test_every_documented_route_exists(client):
     documented = {
         ("post", "/auth/invite/redeem"), ("post", "/auth/login"), ("post", "/auth/refresh"), ("post", "/auth/logout"),
         ("post", "/admin/invitations"), ("get", "/admin/invitations"), ("delete", "/admin/invitations/{invitation_id}"),
-        ("delete", "/admin/users/{user_id}"), ("get", "/users"), ("get", "/users/me"), ("patch", "/users/me"),
+        ("delete", "/admin/users/{user_id}"), ("get", "/admin/users"), ("get", "/admin/stats"),
+        ("get", "/admin/audit"), ("delete", "/admin/users/{user_id}/devices/{device_id}"),
+        ("get", "/users"), ("get", "/users/me"), ("patch", "/users/me"),
         ("put", "/users/me/password"), ("get", "/users/{user_id}/devices"), ("get", "/devices/me"),
         ("put", "/devices/me/push"), ("delete", "/devices/me/push"), ("delete", "/devices/{device_id}"),
         ("put", "/keys"), ("get", "/keys/status"), ("get", "/keys/{user_id}"), ("get", "/conversations"),
@@ -151,11 +155,8 @@ def test_prune_removes_expired_sessions_and_invitations(factory, app, alice):
     assert expired_code != live_code
 
 
-def test_background_tasks_run_in_lifespan(tmp_path, template_db):
-    import shutil
-
-    shutil.copy(template_db, tmp_path / "familychat.db")
-    app = create_app(make_settings(tmp_path, background_tasks=True))
+def test_background_tasks_run_in_lifespan(tmp_path, new_settings):
+    app = create_app(new_settings(tmp_path, background_tasks=True))
     with TestClient(app) as client:
         f = Factory(app, client)
         a = f.user("alice")

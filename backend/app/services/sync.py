@@ -45,7 +45,7 @@ def read_events(db: Session, p: Principal, after: int, limit: int) -> dict:
             data = rendered.get(r.payload["message_id"])
             if data is None or data["conversation_id"] not in member_of:
                 data = None
-            elif data["kind"] == "edit" and data["envelope"] is None:
+            elif data["kind"] in ("edit", "reaction") and data["envelope"] is None:
                 data = None  # its target was deleted before delivery
         elif r.type == "conversation_updated":
             data = convs.get(r.payload["conversation_id"])

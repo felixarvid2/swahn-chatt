@@ -10,12 +10,15 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from app import __version__, metrics
 from app.config import Settings, get_settings
 from app.db import make_engine, make_read_session_factory, make_session_factory
-from app.errors import ApiError, install_error_handlers
+from app.errors import ApiError, error_body, install_error_handlers
 from app.hub import Hub
 from app.logging_setup import configure_logging
+from app.openapi import install_openapi
 from app.ratelimit import RateLimiter, client_ip
+from app.request_id import RequestIdMiddleware
 from app.routers import (
     admin,
     attachments,
@@ -29,24 +32,29 @@ from app.routers import (
     users,
     ws,
 )
+from app.services import lockout
 from app.services.events import Dispatcher
 from app.services.maintenance import prune
+from app.services.presence import Presence
 from app.services.push import PushService, parse_hosts
 
 log = logging.getLogger("familychat")
 
 JSON_BODY_LIMIT = 8 * 1024 * 1024
 MAINTENANCE_INTERVAL_S = 3600
+MAINTENANCE_STOP_TIMEOUT_S = 30.0
 
 
 UPLOAD_PATH = "/api/v1/attachments"
 
 
 def is_upload(scope: Scope) -> bool:
-    """Only POST of the attachment upload endpoint streams to disk and enforces its own (larger) limit."""
+    """Attachment uploads (POST, and PATCH chunks of a resumable upload) stream to disk and enforce their own limits."""
     path = scope["path"]
     if path.endswith("/"):
         path = path[:-1]
+    if scope["method"] == "PATCH" and path.startswith(UPLOAD_PATH + "/uploads/"):
+        return True  # resumable upload chunks: the route enforces its own (8 MiB) limit
     return scope["method"] == "POST" and path == UPLOAD_PATH
 
 
@@ -64,7 +72,7 @@ class BodyLimitMiddleware:
         headers = dict(scope["headers"])
         length = headers.get(b"content-length")
         if length and length.isdigit() and int(length) > self.limit:
-            body = {"code": "payload_too_large", "message": "request body too large"}
+            body = error_body("payload_too_large", "request body too large")
             await JSONResponse(body, 413)(scope, receive, send)
             return
         seen = 0
@@ -86,7 +94,7 @@ class BodyLimitMiddleware:
             nonlocal swallow
             if exceeded and not swallow and message["type"] == "http.response.start":
                 swallow = True
-                body = {"code": "payload_too_large", "message": "request body too large"}
+                body = error_body("payload_too_large", "request body too large")
                 await JSONResponse(body, 413)(scope, receive, send)
                 return
             if not swallow:
@@ -121,26 +129,40 @@ def create_app(settings: Settings | None = None, push_transport=None) -> FastAPI
             "the push server's host name"
         )
     info["dispatcher"] = Dispatcher(hub, push)
+    _restore_lockouts(session_factory, limiter)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         push.start()
-        task = asyncio.create_task(_maintenance_loop(app)) if settings.background_tasks else None
+        stop = asyncio.Event()
+        task = asyncio.create_task(_maintenance_loop(app, stop)) if settings.background_tasks else None
         log.info("familychat started env=%s", settings.env)
         try:
             yield
         finally:
+            # Each step is isolated: a failure must not leave the push thread running or the engine open.
+            try:
+                await hub.close_all(1001, "server restarting")  # clients reconnect at once
+            except Exception:
+                log.exception("closing websockets failed")
+            stop.set()
             if task:
-                task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await task
-            push.stop()
-            engine.dispose()
+                try:
+                    await asyncio.wait_for(task, MAINTENANCE_STOP_TIMEOUT_S)  # lets a running prune finish
+                except (TimeoutError, asyncio.CancelledError):
+                    log.warning("maintenance did not stop in time; cancelled")
+                except Exception:
+                    log.exception("maintenance task failed while stopping")
+            presence.stop()
+            try:
+                push.stop()
+            finally:
+                engine.dispose()
 
     docs = settings.docs_enabled
     app = FastAPI(
         title="FamilyChat",
-        version="1.0.0",
+        version=__version__,
         lifespan=lifespan,
         docs_url="/api/v1/docs" if docs else None,
         openapi_url="/api/v1/openapi.json" if docs else None,
@@ -153,6 +175,10 @@ def create_app(settings: Settings | None = None, push_transport=None) -> FastAPI
     app.state.hub = hub
     app.state.limiter = limiter
     app.state.push = push
+    app.state.http_metrics = http_metrics = metrics.HttpMetrics()
+    app.state.started_at = time.monotonic()
+    app.state.uploads_busy = set()  # upload ids with a chunk being written (single process)
+    app.state.presence = presence = Presence(app, settings.presence_debounce_seconds)
 
     install_error_handlers(app)
     app.add_middleware(BodyLimitMiddleware)
@@ -179,23 +205,40 @@ def create_app(settings: Settings | None = None, push_transport=None) -> FastAPI
             )
         return response
 
-    app.include_router(health.router)
+    app.add_middleware(metrics.MetricsMiddleware, metrics=http_metrics)
+    app.add_middleware(RequestIdMiddleware)  # added last = outermost: everything below sees the ID
+
+    app.include_router(health.router, include_in_schema=False)  # probes for the container runtime
+    app.include_router(metrics.router)  # Prometheus; local or admin only, see app/metrics.py
     api = "/api/v1"
     app.include_router(health.router, prefix=api)
     for module in (auth, admin, users, devices, keys, conversations, messages, sync, attachments, ws):
         app.include_router(module.router, prefix=api)
+    install_openapi(app)
     return app
 
 
-async def _maintenance_loop(app: FastAPI) -> None:
+def _restore_lockouts(session_factory, limiter: RateLimiter) -> None:
+    """Replay persisted login failures so a restart does not reset the per-username lockouts."""
+    try:
+        with session_factory() as db:
+            restored = lockout.restore(db, limiter)
+        if restored:
+            log.info("restored %d recent login failures", restored)
+    except Exception:  # e.g. the database was not migrated yet: readiness reports that, startup goes on
+        log.warning("could not restore login failure counters", exc_info=True)
+
+
+async def _maintenance_loop(app: FastAPI, stop: asyncio.Event) -> None:
     def run() -> None:
         with app.state.session_factory() as db:
             prune(db, app.state.settings)
         app.state.limiter.cleanup()
 
-    while True:
+    while not stop.is_set():
         try:
             await asyncio.to_thread(run)
         except Exception:
             log.exception("maintenance failed")
-        await asyncio.sleep(MAINTENANCE_INTERVAL_S)
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(stop.wait(), MAINTENANCE_INTERVAL_S)

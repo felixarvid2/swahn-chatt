@@ -10,5 +10,8 @@ After=docker.service
 Type=oneshot
 User=pi
 WorkingDirectory=/home/pi/familychat/deployment
-Environment=KEEP=14
+# Retention and the optional rclone upload come from deployment/.env (FAMILYCHAT_BACKUP_KEEP, FAMILYCHAT_BACKUP_RCLONE_REMOTE).
+# rclone reads its config from ~/.config/rclone of User=. Uncomment to set them here instead:
+#Environment=FAMILYCHAT_BACKUP_KEEP=30
+#Environment=FAMILYCHAT_BACKUP_RCLONE_REMOTE=familychat-crypt:backups
 ExecStart=/home/pi/familychat/deployment/backup.sh /home/pi/familychat-backups

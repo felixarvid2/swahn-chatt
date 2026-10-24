@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -75,7 +76,16 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import se.familychat.app.R
+import se.familychat.app.data.LockTimeout
+import se.familychat.app.data.NotificationPrivacy
 import se.familychat.app.data.ThemeMode
+import se.familychat.app.platform.security.Authenticator
+import androidx.fragment.app.FragmentActivity
+import androidx.activity.compose.LocalActivity
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material.icons.filled.Timer
+import androidx.compose.material.icons.filled.PhoneAndroid
 import se.familychat.app.platform.push.PushStatus
 import se.familychat.app.ui.components.Avatar
 import java.time.Instant
@@ -92,6 +102,14 @@ class SettingsCallbacks(
     val onRevokeDevice: (String) -> Unit = {},
     val onSelectDistributor: (String) -> Unit = {},
     val onTheme: (ThemeMode) -> Unit = {},
+    val onNotificationPrivacy: (NotificationPrivacy) -> Unit = {},
+    val onBlockScreenshots: (Boolean) -> Unit = {},
+    val onLockTimeout: (LockTimeout) -> Unit = {},
+    /** Turn the app lock on or off; the screen has already checked that the user can authenticate. */
+    val onAppLock: (Boolean) -> Unit = {},
+    /** Asks the user to authenticate, then calls back (the real screen shows the system prompt). */
+    val onAuthenticate: (onSuccess: () -> Unit) -> Unit = { it() },
+    val lockAvailable: Boolean = true,
     val onCreateInvitation: (note: String, hours: Int, admin: Boolean) -> Unit = { _, _, _ -> },
     val onDismissInvitation: () -> Unit = {},
     val onDismissPasswordChanged: () -> Unit = {},
@@ -110,13 +128,18 @@ fun SettingsScreen(onBack: () -> Unit, onOpenSafety: (userId: String) -> Unit = 
     val context = LocalContext.current
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri -> uri?.let(vm::setAvatar) }
     LifecycleResumeEffect(vm) { vm.onShown(); onPauseOrDispose {} }
+    val activity = LocalActivity.current as? FragmentActivity
+    val promptTitle = stringResource(R.string.lock_prompt_title)
     SettingsContent(
         state,
         SettingsCallbacks(
             onBack = onBack, onSetName = vm::setDisplayName,
             onPickAvatar = { pick.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
             onClearAvatar = vm::clearAvatar, onChangePassword = vm::changePassword, onRevokeDevice = vm::revokeDevice,
-            onSelectDistributor = vm::selectDistributor, onTheme = vm::setTheme, onCreateInvitation = vm::createInvitation,
+            onSelectDistributor = vm::selectDistributor, onTheme = vm::setTheme,
+            onNotificationPrivacy = vm::setNotificationPrivacy, onBlockScreenshots = vm::setBlockScreenshots,
+            onLockTimeout = vm::setLockTimeout, onAppLock = vm::setAppLock, lockAvailable = Authenticator.isAvailable(context),
+            onAuthenticate = { done -> if (activity != null) Authenticator.prompt(activity, promptTitle, null) { ok -> if (ok) done() } }, onCreateInvitation = vm::createInvitation,
             onDismissInvitation = vm::dismissInvitation, onDismissPasswordChanged = vm::dismissPasswordChanged, onLogout = vm::logout,
             onOpenSystemNotificationSettings = {
                 context.startActivity(
@@ -151,6 +174,9 @@ fun SettingsContent(state: SettingsUiState, cb: SettingsCallbacks, modifier: Mod
     var changePassword by remember { mutableStateOf(false) }
     var pickDistributor by remember { mutableStateOf(false) }
     var pickTheme by remember { mutableStateOf(false) }
+    var pickPrivacy by remember { mutableStateOf(false) }
+    var pickTimeout by remember { mutableStateOf(false) }
+    var lockUnavailable by remember { mutableStateOf(false) }
     var createInvite by remember { mutableStateOf(false) }
     var confirmLogout by remember { mutableStateOf(false) }
     var revoke by remember { mutableStateOf<DeviceUi?>(null) }
@@ -205,6 +231,28 @@ fun SettingsContent(state: SettingsUiState, cb: SettingsCallbacks, modifier: Mod
                 stringResource(if (notificationsOn) R.string.notifications_on else R.string.notifications_off), onClick = cb.onOpenSystemNotificationSettings,
             )
             SettingRow(Icons.Filled.Apps, stringResource(R.string.push_title), pushSummary(state), onClick = { pickDistributor = true })
+
+            // --- privacy and security ---
+            Section(R.string.settings_privacy)
+            SettingRow(
+                Icons.Filled.VisibilityOff, stringResource(R.string.notification_privacy), stringResource(privacyLabel(state.notificationPrivacy)),
+                onClick = { pickPrivacy = true },
+            )
+            SwitchRow(
+                Icons.Filled.PhoneAndroid, stringResource(R.string.block_screenshots), stringResource(R.string.block_screenshots_hint),
+                state.blockScreenshots, cb.onBlockScreenshots,
+            )
+            SwitchRow(
+                Icons.Filled.Lock, stringResource(R.string.app_lock), stringResource(R.string.app_lock_hint), state.appLockEnabled,
+            ) { on ->
+                if (on && !cb.lockAvailable) lockUnavailable = true else cb.onAuthenticate { cb.onAppLock(on) }
+            }
+            if (state.appLockEnabled) {
+                SettingRow(
+                    Icons.Filled.Timer, stringResource(R.string.lock_after), stringResource(timeoutLabel(state.lockTimeout)),
+                    onClick = { pickTimeout = true },
+                )
+            }
 
             // --- appearance ---
             Section(R.string.settings_appearance)
@@ -270,6 +318,27 @@ fun SettingsContent(state: SettingsUiState, cb: SettingsCallbacks, modifier: Mod
             confirmButton = { TextButton(onClick = { pickTheme = false }) { Text(stringResource(R.string.action_close)) } },
         )
     }
+    if (pickPrivacy) {
+        ChoiceDialog(
+            R.string.notification_privacy, NotificationPrivacy.entries, state.notificationPrivacy, ::privacyLabel,
+            explanation = R.string.notification_privacy_hint,
+            onPick = { cb.onNotificationPrivacy(it); pickPrivacy = false }, onDismiss = { pickPrivacy = false },
+        )
+    }
+    if (pickTimeout) {
+        ChoiceDialog(
+            R.string.lock_after, LockTimeout.entries, state.lockTimeout, ::timeoutLabel,
+            onPick = { cb.onLockTimeout(it); pickTimeout = false }, onDismiss = { pickTimeout = false },
+        )
+    }
+    if (lockUnavailable) {
+        AlertDialog(
+            onDismissRequest = { lockUnavailable = false },
+            title = { Text(stringResource(R.string.app_lock)) },
+            text = { Text(stringResource(R.string.app_lock_unavailable)) },
+            confirmButton = { TextButton(onClick = { lockUnavailable = false }) { Text(stringResource(R.string.action_ok)) } },
+        )
+    }
     if (createInvite) {
         InvitationDialog(onDismiss = { createInvite = false }, onCreate = { n, h, a -> cb.onCreateInvitation(n, h, a); createInvite = false })
     }
@@ -316,6 +385,62 @@ fun SettingsContent(state: SettingsUiState, cb: SettingsCallbacks, modifier: Mod
             confirmButton = { TextButton(onClick = { cb.onRevokeDevice(device.id); revoke = null }) { Text(stringResource(R.string.action_revoke)) } },
             dismissButton = { TextButton(onClick = { revoke = null }) { Text(stringResource(R.string.action_cancel)) } },
         )
+    }
+}
+
+internal fun privacyLabel(value: NotificationPrivacy): Int = when (value) {
+    NotificationPrivacy.FULL -> R.string.privacy_full
+    NotificationPrivacy.NAME_ONLY -> R.string.privacy_name_only
+    NotificationPrivacy.HIDDEN -> R.string.privacy_hidden
+}
+
+internal fun timeoutLabel(value: LockTimeout): Int = when (value) {
+    LockTimeout.IMMEDIATELY -> R.string.lock_immediately
+    LockTimeout.MINUTE_1 -> R.string.lock_1_minute
+    LockTimeout.MINUTES_5 -> R.string.lock_5_minutes
+    LockTimeout.MINUTES_30 -> R.string.lock_30_minutes
+}
+
+@Composable
+private fun <T> ChoiceDialog(
+    title: Int, options: List<T>, selected: T, label: (T) -> Int, onPick: (T) -> Unit, onDismiss: () -> Unit, explanation: Int? = null,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(title)) },
+        text = {
+            Column {
+                if (explanation != null) Text(stringResource(explanation), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(bottom = 8.dp))
+                options.forEach { option ->
+                    Row(
+                        Modifier.fillMaxWidth().heightIn(min = 48.dp).selectable(selected = selected == option, role = Role.RadioButton) { onPick(option) },
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(selected = selected == option, onClick = null)
+                        Text(stringResource(label(option)), modifier = Modifier.padding(start = 12.dp))
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_close)) } },
+    )
+}
+
+@Composable
+private fun SwitchRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector, title: String, subtitle: String, checked: Boolean, onChange: (Boolean) -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 56.dp).toggleable(value = checked, role = Role.Switch, onValueChange = onChange)
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        Column(Modifier.weight(1f).padding(horizontal = 16.dp)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge)
+            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Switch(checked = checked, onCheckedChange = null)
     }
 }
 

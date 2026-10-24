@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     refresh_token_days: int = Field(60, ge=1)
     # Comma separated CIDRs whose X-Forwarded-For header is honoured (rate limiting only).
     trusted_proxies: str = ""
+    # Hint for `cli check-config`: true when a reverse proxy (Caddy, `tailscale serve`) sits in front of the server.
+    # Without trusted_proxies every client then appears with the proxy's address (shared rate limits).
+    behind_proxy: bool = False
     push_allow_http: bool = False
     # Comma separated host names push endpoints may use (e.g. "ntfy.example.ts.net"). Required in production:
     # empty means push registration is refused there (development: any host name, but never IP literals).
@@ -48,6 +51,13 @@ class Settings(BaseSettings):
     argon2_memory_kb: int = Field(65536, ge=8)
     argon2_parallelism: int = Field(4, ge=1)
     background_tasks: bool = True
+    # Housekeeping (hourly job): delivered ciphertext is useless after delivery; audit rows are kept this long.
+    envelope_retention_days: int = Field(30, ge=1)
+    audit_retention_days: int = Field(180, ge=1)
+    # Presence (opt-in per user): seconds between announcements of one user's online/offline changes to contacts.
+    presence_debounce_seconds: float = Field(10.0, ge=0.0)
+    # /readyz answers 503 "low_disk" when the data volume has less free space than this (0 disables the check).
+    min_free_disk_mb: int = Field(200, ge=0)
 
     @model_validator(mode="after")
     def _finish(self) -> "Settings":

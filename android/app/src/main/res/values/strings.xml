@@ -245,4 +245,90 @@
         <item quantity="one">%1$d vald</item>
         <item quantity="other">%1$d valda</item>
     </plurals>
+
+    <!-- connection banner -->
+    <string name="connection_connecting">Ansluter…</string>
+    <string name="connection_offline">Offline – meddelanden skickas när du är online igen</string>
+    <!-- conversation: unread divider, jump to latest -->
+    <string name="unread_divider">Olästa meddelanden</string>
+    <string name="scroll_to_latest">Gå till senaste meddelandet</string>
+    <plurals name="scroll_to_latest_new">
+        <item quantity="one">Gå till senaste meddelandet, %1$d nytt meddelande</item>
+        <item quantity="other">Gå till senaste meddelandet, %1$d nya meddelanden</item>
+    </plurals>
+    <!-- drafts -->
+    <string name="draft_preview">Utkast: %1$s</string>
+    <!-- links -->
+    <string name="link_confirm_title">Öppna länk?</string>
+    <string name="link_confirm_text">Du lämnar FamilyChat. Kontrollera hela adressen innan du fortsätter.</string>
+    <string name="link_confirm_open">Öppna</string>
+    <string name="link_target_web">Webbplats: %1$s</string>
+    <string name="link_target_email">E-postadress: %1$s</string>
+    <string name="link_target_phone">Telefonnummer: %1$s</string>
+    <string name="link_suspicious">Adressen innehåller ovanliga tecken eller dolda delar. Dubbelkolla den.</string>
+    <string name="link_open_action">Öppna länk: %1$s</string>
+    <string name="error_open_link">Ingen app kunde öppna länken</string>
+    <!-- voice playback speed -->
+    <string name="voice_speed_description">Uppspelningshastighet %1$s</string>
+    <string name="voice_speed_change">Ändra uppspelningshastighet</string>
+    <!-- header: safety numbers -->
+    <string name="safety_verified_description">Alla enheter är verifierade. Öppna säkerhetsnummer.</string>
+    <string name="safety_warning_description">Säkerhetsnyckeln har ändrats eller en ny enhet väntar på ditt godkännande. Granska.</string>
+    <!-- screen reader description of a message bubble -->
+    <string name="bubble_reply_to">svar till %1$s</string>
+    <!-- privacy, lock, search, pinned/muted/archived (0.2.0) -->
+    <string name="settings_privacy">Integritet och säkerhet</string>
+    <string name="notification_privacy">Innehåll i aviseringar</string>
+    <string name="notification_privacy_hint">Gäller aviseringar och låsskärmen. Svar direkt i aviseringen finns inte när inget namn visas eller när applåset är på.</string>
+    <string name="privacy_full">Namn och meddelande</string>
+    <string name="privacy_name_only">Endast namn</string>
+    <string name="privacy_hidden">Ingen information</string>
+    <string name="block_screenshots">Blockera skärmbilder</string>
+    <string name="block_screenshots_hint">Ingen skärmdump och ingen förhandsvisning bland senaste appar</string>
+    <string name="app_lock">Applås</string>
+    <string name="app_lock_hint">Lås upp med fingeravtryck, ansikte eller skärmlås</string>
+    <string name="app_lock_unavailable">Ställ in skärmlås eller biometri på telefonen först.</string>
+    <string name="lock_after">Lås efter</string>
+    <string name="lock_immediately">Direkt</string>
+    <string name="lock_1_minute">1 minut</string>
+    <string name="lock_5_minutes">5 minuter</string>
+    <string name="lock_30_minutes">30 minuter</string>
+    <string name="lock_title">FamilyChat är låst</string>
+    <string name="lock_text">Lås upp för att se dina meddelanden.</string>
+    <string name="lock_unlock">Lås upp</string>
+    <string name="lock_prompt_title">Lås upp FamilyChat</string>
+    <string name="lock_prompt_subtitle">Bekräfta att det är du</string>
+    <plurals name="notification_new_messages">
+        <item quantity="one">Nytt meddelande</item>
+        <item quantity="other">%1$d nya meddelanden</item>
+    </plurals>
+    <string name="reply_sent">Svar skickat</string>
+    <string name="search">Sök</string>
+    <string name="search_messages_hint">Sök i meddelanden</string>
+    <string name="search_in_conversation">Sök i konversationen</string>
+    <string name="search_close">Stäng sökningen</string>
+    <string name="search_empty">Sök i alla meddelanden. Sökningen görs bara på den här telefonen.</string>
+    <string name="search_no_results">Inga träffar</string>
+    <plurals name="search_hits">
+        <item quantity="one">%1$d träff</item>
+        <item quantity="other">%1$d träffar</item>
+    </plurals>
+    <string name="archived_section">Arkiverade (%1$d)</string>
+    <string name="archived_expand">Visa arkiverade konversationer</string>
+    <string name="archived_collapse">Dölj arkiverade konversationer</string>
+    <string name="conversation_pin">Fäst överst</string>
+    <string name="conversation_unpin">Lossa</string>
+    <string name="conversation_mute">Tysta</string>
+    <string name="conversation_unmute">Slå på ljud</string>
+    <string name="conversation_archive">Arkivera</string>
+    <string name="conversation_unarchive">Flytta tillbaka</string>
+    <string name="pin_limit">Du kan fästa högst %1$d konversationer.</string>
+    <string name="mute_title">Tysta konversationen</string>
+    <string name="mute_text">Inga aviseringar. Olästa meddelanden räknas ändå.</string>
+    <string name="mute_1_hour">1 timme</string>
+    <string name="mute_8_hours">8 timmar</string>
+    <string name="mute_1_week">1 vecka</string>
+    <string name="mute_always">Alltid</string>
+    <string name="state_pinned">Fäst</string>
+    <string name="state_muted">Tystad</string>
 </resources>

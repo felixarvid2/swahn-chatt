@@ -14,6 +14,8 @@ from app.main import create_app
 from app.services.backup import BackupError, create_backup, restore_backup
 from tests.conftest import make_settings
 
+pytestmark = pytest.mark.sqlite_only  # backups are SQLite only (PostgreSQL: pg_dump)
+
 NAME_RE = re.compile(r"^familychat-backup-\d{8}-\d{6}(-\d+)?\.tar\.gz$")
 
 

@@ -40,6 +40,9 @@
         <!-- Notification "mark as read" action; only our own PendingIntent reaches it -->
         <receiver android:name=".platform.notify.MarkReadReceiver" android:exported="false" />
 
+        <!-- Notification inline reply (RemoteInput); only our own explicit PendingIntent reaches it -->
+        <receiver android:name=".platform.notify.ReplyReceiver" android:exported="false" />
+
         <!-- UnifiedPush: the distributor binds to this service to deliver endpoints and wake-ups -->
         <service
             android:name=".platform.push.FamilyChatPushService"

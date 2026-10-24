@@ -9,7 +9,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import androidx.sqlite.db.SupportSQLiteOpenHelper
 
 /**
- * The one database of the app. Version 1.
+ * The one database of the app. Version 3 (1: first release; 2: `drafts`; 3: `message_fts` search index, `conversation_settings`).
  *
  * Schema changes: bump [version], add a `Migration` to [MIGRATIONS], and extend `MigrationTest` (the exported schema JSON
  * files in `app/schemas/` are the test fixtures: commit the new one).
@@ -20,7 +20,7 @@ import androidx.sqlite.db.SupportSQLiteOpenHelper
     entities = [
         AccountEntity::class, MetaEntity::class, TokenEntity::class, SyncStateEntity::class,
         UserEntity::class, DeviceEntity::class, ConversationEntity::class, MemberEntity::class,
-        MessageEntity::class, OutboxEntity::class,
+        MessageEntity::class, OutboxEntity::class, DraftEntity::class, MessageFtsEntity::class, ConversationSettingsEntity::class,
         SignalIdentityEntity::class, SignalPreKeyEntity::class, SignalSignedPreKeyEntity::class,
         SignalKyberPreKeyEntity::class, SignalLastResortUsedEntity::class, SignalSessionEntity::class,
         SignalRemoteIdentityEntity::class, SignalCounterEntity::class,
@@ -33,11 +33,35 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun uiDao(): UiDao
 
     companion object {
-        const val VERSION = 1
+        const val VERSION = 3
         const val FILE_NAME = "familychat.db"
 
-        /** Migrations from older versions; empty while the schema is at version 1. */
-        val MIGRATIONS: Array<Migration> = emptyArray()
+        /** 1 -> 2: the unsent composer text per conversation. Nothing else changes, so no existing row is touched. */
+        val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS `drafts` (`conversationId` TEXT NOT NULL, `text` TEXT NOT NULL, `updatedAt` INTEGER NOT NULL, PRIMARY KEY(`conversationId`))")
+            }
+        }
+
+        /**
+         * 2 -> 3: the search index and the local conversation settings. No existing row is changed. The index is filled from
+         * the messages that are already there (`rebuild`), the sync triggers (the very ones Room creates on a new database,
+         * copied from the exported `3.json`) keep it current from then on.
+         */
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS `conversation_settings` (`conversationId` TEXT NOT NULL, `pinnedAt` INTEGER, `mutedUntil` INTEGER NOT NULL, `archived` INTEGER NOT NULL, PRIMARY KEY(`conversationId`))")
+                db.execSQL("CREATE VIRTUAL TABLE IF NOT EXISTS `message_fts` USING FTS4(`text` TEXT, tokenize=unicode61 `remove_diacritics=0`, content=`messages`)")
+                db.execSQL("CREATE TRIGGER IF NOT EXISTS room_fts_content_sync_message_fts_BEFORE_UPDATE BEFORE UPDATE ON `messages` BEGIN DELETE FROM `message_fts` WHERE `docid`=OLD.`rowid`; END")
+                db.execSQL("CREATE TRIGGER IF NOT EXISTS room_fts_content_sync_message_fts_BEFORE_DELETE BEFORE DELETE ON `messages` BEGIN DELETE FROM `message_fts` WHERE `docid`=OLD.`rowid`; END")
+                db.execSQL("CREATE TRIGGER IF NOT EXISTS room_fts_content_sync_message_fts_AFTER_UPDATE AFTER UPDATE ON `messages` BEGIN INSERT INTO `message_fts`(`docid`, `text`) VALUES (NEW.`rowid`, NEW.`text`); END")
+                db.execSQL("CREATE TRIGGER IF NOT EXISTS room_fts_content_sync_message_fts_AFTER_INSERT AFTER INSERT ON `messages` BEGIN INSERT INTO `message_fts`(`docid`, `text`) VALUES (NEW.`rowid`, NEW.`text`); END")
+                db.execSQL("INSERT INTO `message_fts`(`message_fts`) VALUES ('rebuild')")
+            }
+        }
+
+        /** Migrations from older versions; every shipped version needs one (see `MigrationTest`). */
+        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3)
 
         /** Durable ratchet writes: a lost libsignal step cannot be recovered, so never trade `synchronous` for speed. */
         private val durability = object : Callback() {

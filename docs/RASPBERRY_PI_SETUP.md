@@ -20,6 +20,14 @@ family's Android phones. Everything runs in Docker; the backend is one Python pr
 3. Give the Pi a fixed address in your router (DHCP reservation). Only needed for the public-HTTPS option.
 4. Prefer an SSD over an SD card: SQLite writes and attachments wear cards out.
 
+**Shortcut:** steps 2 to 4 and 6 (first administrator) are automated by `deployment/install-pi.sh`. Clone the
+repository (step 3), then run `cd familychat/deployment && ./install-pi.sh`. It checks the architecture, RAM, disk and
+Docker, writes `.env` with a generated secret (an existing `.env` and secret are never overwritten), asks how the
+phones will reach the server (Tailscale on the host, Tailscale container, Caddy domain, or later) and whether to enable
+push, builds, starts, waits until the backend is healthy and prints the first administrator invitation. It does not
+install Docker unless you confirm (or pass `--install-docker`). `./install-pi.sh --help` lists the options for
+unattended use. You then only do the Tailscale or router part of step 5 and set up backups (step 9).
+
 ## 2. Install Docker
 
 ```bash
@@ -93,6 +101,33 @@ the peer. `.env` already trusts `172.16.0.0/12` for `X-Forwarded-For`; if the pr
 family members share one rate-limit bucket (login: 10 attempts per minute in total), which is fine for a family.
 Do not use `tailscale funnel` for this: it would put the login API on the public internet.
 
+### Option A2: Tailscale as a container (no Tailscale on the host)
+
+The `tailscale` compose profile runs Tailscale as a sidecar container. It joins your tailnet as its own node and
+serves HTTPS itself, so the Pi needs no host-level Tailscale and no `tailscale serve` command. Use it instead of
+Option A, not together with it (same ports).
+
+1. In the Tailscale admin console enable **MagicDNS** and **HTTPS Certificates** (DNS page) and create an **auth key**
+   (Settings, Keys). It is only used for the first login.
+2. In `.env` set `TS_AUTHKEY=tskey-auth-...` and, if you like, `TS_HOSTNAME=familychat` (the node name).
+3. ```bash
+   docker compose --profile tailscale up -d
+   docker compose logs tailscale          # "Startup complete" / the node's address
+   ```
+   Add `COMPOSE_PROFILES=tailscale` (or `caddy,ntfy,tailscale`, ...) to `.env` to make the profile permanent, so that
+   a plain `docker compose up -d` keeps it. Remove `TS_AUTHKEY` from `.env` after the first start; the node state is
+   in the `tailscale-state` volume (do not delete it, or the node registers again under a new name).
+4. The address is `https://<TS_HOSTNAME>.<tailnet>.ts.net` (port 443 -> `backend:8000`). `tailscale-serve.json`
+   defines the mapping; the container fills in the node's own name. Without an auth key the container logs a login
+   link instead (`docker compose logs tailscale`). Then continue at step 4 of Option A (phones, health check).
+
+For push, the same node also serves **port 8443 -> `ntfy:80`**, so the ntfy URL is
+`https://<TS_HOSTNAME>.<tailnet>.ts.net:8443`: set `NTFY_BASE_URL` to it and start the `ntfy` profile as in section 7;
+you do not run `tailscale serve --https=8443`. One limit: the backend container itself is not on the tailnet, so it
+reaches ntfy only if it can resolve and reach that name. If pushes never arrive, use a public ntfy host through Caddy
+(section 7) or Option A with the host's Tailscale. This sidecar setup was parsed by `docker compose config` and the
+image tag was pulled, but a real tailnet login has not been tested in this repository's environment.
+
 ### Option B: Caddy with a public domain
 
 1. Get a domain (a dynamic DNS name works) and point an A/AAAA record at your home IP. Forward TCP 80 and 443
@@ -125,12 +160,33 @@ enter the server URL, choose *Redeem invitation* and pick a username and passwor
 docker compose exec backend python -m app.cli create-invite --note "Grandma" --hours 168
 ```
 
-Administrators can also create and revoke invitations in the app. Each code works once. Other commands:
+Administrators can also create and revoke invitations in the app. A code works once unless it was created with
+`max_uses` (1 to 20; `create-invite --max-uses 5` or `POST /api/v1/admin/invitations`), e.g. for a family dinner
+where five people sign up with the same code; every use is audited and revoking stops the rest. Other commands:
 
 ```bash
 docker compose exec backend python -m app.cli list-users
 docker compose exec backend python -m app.cli remove-user <username>   # API access ends at once; open sockets close within ~1 min
+docker compose exec backend python -m app.cli check-config            # effective settings + warnings; exit 1 on errors
 ```
+
+**Forgotten password.** Issue a one-time code (valid 24 hours) and give it to the person over a channel you trust:
+
+```bash
+docker compose exec backend python -m app.cli reset-password <username>   # the code is the last line
+```
+
+Administrators can do the same in the app (`POST /api/v1/admin/users/{id}/password-reset`). The person enters the
+code and a new password in the app (*Forgot password* / `POST /api/v1/auth/password/reset`). This signs them out
+everywhere: every old device of that account is removed (its keys and queued messages are deleted) and the phone
+that used the code becomes a new device. Their contacts will see a "new device" notice, and old messages cannot be
+read on the new device. That is the same as a lost phone and intended. The code never appears in the audit log
+(`audit` shows `password_reset_issued` and `password_reset_used`).
+
+`check-config` is worth running after every change to `.env`: it prints the settings the server will use (never
+the secret key or database password) and warns about: production without `FAMILYCHAT_PUSH_ALLOWED_HOSTS`, a
+missing or short secret key (an error in production), API docs exposed in production, `FAMILYCHAT_BEHIND_PROXY=true`
+without `FAMILYCHAT_TRUSTED_PROXIES`, push over plain http in production and low disk space.
 
 Every login on a new phone is a new *device* with new encryption keys. Messages sent before a device existed
 cannot be read on it; that is how end-to-end encryption works here (see SECURITY.md).
@@ -194,7 +250,9 @@ version changed the database, `./restore.sh` the backup taken in step one (migra
 
 `./backup.sh [dest-dir]` asks the running container for one consistent snapshot (`sqlite3` online backup API, so
 it is safe while the server is in use), copies the `.tar.gz` to the host (default `deployment/backups/`, mode 600),
-verifies it can be read and keeps the newest 14 (`KEEP=30 ./backup.sh` changes that). The archive contains:
+verifies it can be read and keeps the newest 14 (`FAMILYCHAT_BACKUP_KEEP=30` in `.env` or in the environment changes
+that; the older `KEEP=30 ./backup.sh` still works; `./backup.sh --prune` only applies the retention rule). The
+archive contains:
 `familychat.db`, all attachments and a `manifest.json` with counts and SHA-256 checksums.
 
 **What a backup contains:** accounts, password hashes, public keys, conversation membership, message metadata and
@@ -210,8 +268,26 @@ sudo systemctl daemon-reload && sudo systemctl enable --now familychat-backup.ti
 systemctl list-timers familychat-backup.timer
 ```
 
-or with cron, see `deployment/systemd/crontab.example`. Copy the backup directory to another machine
-(`rsync`, a USB disk, ...): a backup on the same SD card does not survive the card.
+or with cron, see `deployment/systemd/crontab.example`. A backup on the same SD card does not survive the card, so
+copy it elsewhere. `backup.sh` can do that with [rclone](https://rclone.org) (installed on the Pi, not in Docker):
+
+```bash
+sudo apt install rclone        # or: curl https://rclone.org/install.sh | sudo bash
+rclone config                  # as the user that runs the backup: first a normal remote (Drive, S3, SFTP, ...),
+                               # then a "crypt" remote layered on top of it, e.g. named familychat-crypt
+```
+
+Use a **crypt** remote: the archive holds metadata and password hashes, and crypt encrypts file names and content
+before they leave the Pi (keep the crypt passwords somewhere other than the Pi). Then set in `.env`:
+
+```bash
+FAMILYCHAT_BACKUP_RCLONE_REMOTE=familychat-crypt:familychat-backups
+```
+
+After each successful local backup `backup.sh` runs `rclone copy <backup dir> <remote>` (new archives only; older ones
+that are missing remotely are uploaded too). If the upload fails the run exits with status 3, so the systemd unit shows
+as failed, but the local backup stays. The remote is not pruned automatically: use a bucket lifecycle rule or
+`rclone delete <remote> --min-age 60d`. Test it once with `./backup.sh` and `rclone ls <remote>`.
 
 Restore, for example onto a new Pi after step 4:
 
@@ -222,10 +298,35 @@ Restore, for example onto a new Pi after step 4:
 It stops the backend, verifies every checksum in the manifest (a damaged or modified archive is rejected and
 nothing is changed), moves any existing data to `/data/pre-restore-<time>` inside the volume, restores, and
 starts the backend again. Delete the `pre-restore-*` folder when you are happy:
-`docker compose exec backend rm -rf /data/pre-restore-*`. The CLI equivalent is
+`docker compose exec backend sh -c 'rm -rf /data/pre-restore-*'`. The CLI equivalent is
 `python -m app.cli restore <archive> [--force]`; without `--force` it refuses to touch existing data.
 
+`./backup.sh` and `restore.sh` verify archives themselves; to check one you already have, anywhere, without
+touching any data:
+
+```bash
+docker compose exec backend python -m app.cli verify-backup /data/backups/familychat-backup-....tar.gz
+```
+
+It checks the entry names, the manifest and every checksum, runs SQLite's `integrity_check` on a temporary copy and
+validates the attachment paths stored in the database; exit status 0 means the archive is complete and restorable,
+1 means it is not (the reason is printed). Run it on the copy you keep off the Pi.
+
 Test your restore once, before you need it.
+
+**Monthly automatic check.** `./backup.sh --verify-latest [dir]` runs that same verification on the newest archive in
+the backup directory (it streams the file from the host into the container, so no path juggling) and exits non-zero
+if the archive is damaged, missing, or older than `FAMILYCHAT_BACKUP_MAX_AGE_DAYS` (default 3: the nightly backup has
+stopped). A systemd timer runs it on the first of every month; a failure shows in `systemctl --failed`:
+
+```bash
+sudo cp deployment/systemd/familychat-verify-backup.{service,timer} /etc/systemd/system/   # edit User= and paths first
+sudo systemctl daemon-reload && sudo systemctl enable --now familychat-verify-backup.timer
+sudo systemctl start familychat-verify-backup.service && journalctl -u familychat-verify-backup -n 20
+```
+
+To be told about a failure, see `deployment/systemd/familychat-notify-failure@.service` (optional `OnFailure=` hook
+that posts to a private ntfy topic). Day-to-day operation in Swedish: [DRIFTHANDBOK.md](DRIFTHANDBOK.md).
 
 ## 10. Logs, health and reboots
 
@@ -233,14 +334,109 @@ Test your restore once, before you need it.
 docker compose logs -f backend          # JSON lines; tokens, passwords and message bodies are never logged
 docker compose logs --since 1h backend | grep -i error
 curl -s http://127.0.0.1:8000/healthz   # process alive
-curl -s http://127.0.0.1:8000/readyz    # database answers (503 otherwise)
+curl -s http://127.0.0.1:8000/readyz    # ready only if the database answers, is migrated and the disk has room
 docker compose ps                       # health status from the container healthcheck
 ```
+
+### Monitoring
+
+`/readyz` answers `503` with a `code` when something needs your attention: `migration_mismatch` (the database is
+not at the version this image expects: run the upgrade steps in section 8), `low_disk` (less than
+`FAMILYCHAT_MIN_FREE_DISK_MB`, default 200, free on the data volume: free space or enlarge the disk before
+SQLite fails writes) or `database_unavailable`. Point an uptime monitor at it. `/healthz` only says the process
+is alive.
+
+Administrators get the numbers from `GET /api/v1/admin/stats` (needs an admin access token, so use the admin's
+phone or a tool that can log in): counts of users, devices, conversations, messages, undelivered envelopes and
+attachments, the size of the database and the attachments folder, free disk space, the server version and
+migration, and uptime. `GET /api/v1/admin/users` shows each person's last activity, device count and
+storage use; `GET /api/v1/admin/audit` or the command below shows the security log.
+
+```bash
+docker compose exec backend python -m app.cli audit --limit 50   # logins, invitations, device and user changes
+```
+
+Prometheus can scrape `GET /metrics` (request counts and latency by route, sockets, queues, database size, free
+disk; no per-user data). It answers only requests from the Pi itself (no proxy in between) or with an administrator's
+bearer token, everybody else gets `404`:
+
+```bash
+curl -s http://127.0.0.1:8000/metrics | head          # on the Pi, bypassing Caddy / tailscale serve
+```
+
+Administrator tasks in the API (no CLI needed): `POST /api/v1/admin/users/{id}/suspend` and `/unsuspend` block and
+restore an account without deleting anything (e.g. a lost phone while you decide), and
+`PATCH /api/v1/admin/users/{id}` with `{"is_admin": true|false}` promotes or demotes; the last active administrator
+cannot be demoted. Users can delete their own account from the app (`DELETE /api/v1/users/me`, needs their password);
+the last administrator must promote someone else first. All of these are in the audit log.
+
+A lost or stolen phone: an administrator revokes it with `DELETE /api/v1/admin/users/{user_id}/devices/{device_id}`
+(the owner can do the same from another device). Delivered messages are deleted from the server after
+`FAMILYCHAT_ENVELOPE_RETENTION_DAYS` (30) days and audit entries after `FAMILYCHAT_AUDIT_RETENTION_DAYS` (180);
+both run in the hourly maintenance job. When the server restarts, open apps are disconnected with code 1001 and
+reconnect by themselves.
+
+Every response carries an `X-Request-ID` header and error bodies a `request_id`; the same ID is in all log lines
+of that request (`docker compose logs backend | grep <id>`), so when someone reports an error, ask for the ID.
 
 Logs rotate automatically (10 MB x 5 files per service). All services use `restart: unless-stopped`, Docker starts
 at boot and `tailscale serve --bg` is remembered by Tailscale, so after `sudo reboot` everything comes back by
 itself: check with `docker compose ps` and `tailscale serve status`. Pull the power cord less often than that:
 SQLite in WAL mode survives it, but an SSD survives it better than an SD card.
+
+## 11. Optional: PostgreSQL instead of SQLite
+
+SQLite is the default and is enough for a family. PostgreSQL is supported (the test suite runs against both), for
+example when the data lives on a server that already runs it. The image already contains the driver. Do **not**
+edit `docker-compose.yml`; add an override file next to it, `deployment/docker-compose.postgres.yml`:
+
+```yaml
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: familychat
+      POSTGRES_DB: familychat
+      POSTGRES_PASSWORD: ${FAMILYCHAT_POSTGRES_PASSWORD:?set FAMILYCHAT_POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U familychat -d familychat"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    security_opt: ["no-new-privileges:true"]
+    # no "ports": only the backend container reaches it, over the compose network
+  backend:
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      FAMILYCHAT_DATABASE_URL: postgresql+psycopg://familychat:${FAMILYCHAT_POSTGRES_PASSWORD}@postgres:5432/familychat
+volumes:
+  postgres-data:
+```
+
+Put `FAMILYCHAT_POSTGRES_PASSWORD=<long random letters and digits>` in `.env` (avoid characters that need URL
+escaping: `@ : / ? #`), then start with both files:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d --build
+# make it permanent: COMPOSE_FILE=docker-compose.yml:docker-compose.postgres.yml in .env
+docker compose exec backend python -m app.cli check-config     # shows the database URL without the password
+```
+
+The entrypoint runs `alembic upgrade head` against PostgreSQL on every start, like for SQLite. Things that differ:
+
+- There is **no migration of existing SQLite data** to PostgreSQL. Decide before the family starts using it.
+- `backup.sh`, `restore.sh` and the CLI `backup`/`restore`/`verify-backup` handle SQLite only. Back up PostgreSQL
+  with `docker compose exec -T postgres pg_dump -U familychat familychat | gzip > familychat-db-$(date +%F).sql.gz`
+  **and** the attachments in the `familychat-data` volume (`/data/attachments`), taken at about the same time.
+- `GET /admin/stats` reports `db_bytes: null`; `/readyz` and the migration check work as before.
+- All writing transactions are serialised with an advisory lock so that the sync cursor stays correct (see
+  ARCHITECTURE.md, "Sync cursor and the database"); a request that cannot get it within 10 s fails with a server
+  error and the client retries. Keep one backend worker, as always.
 
 ## Troubleshooting
 

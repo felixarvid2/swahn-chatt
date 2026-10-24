@@ -2,31 +2,38 @@ from fastapi import APIRouter, Depends, Response
 from sqlalchemy.orm import Session
 
 from app.deps import Principal, get_db, get_limiter, get_principal, get_read_db
-from app.errors import invalid, not_found
+from app.errors import error_responses, invalid, not_found
 from app.models import User
 from app.ratelimit import RateLimiter
-from app.schemas import UUID_RE, KeyStatus, KeyUpload
+from app.schemas import UUID_RE, KeyBundlesOut, KeyStatus, KeyUpload
 from app.services import keys
 
-router = APIRouter(prefix="/keys", tags=["keys"])
+router = APIRouter(prefix="/keys", tags=["keys"], responses=error_responses(401))
 
 KEY_FETCHES_PER_MINUTE = 120
 KEY_BUNDLES_PER_TARGET_HOUR = 10
 
 
-@router.put("", status_code=204)
+@router.put(
+    "", status_code=204, summary="Upload key material for this device", responses=error_responses(409, 413, 422)
+)
 def put_keys(body: KeyUpload, p: Principal = Depends(get_principal), db: Session = Depends(get_db)):
     keys.upload(db, p.device_id, body)
     db.commit()
     return Response(status_code=204)
 
 
-@router.get("/status", response_model=KeyStatus)
+@router.get("/status", response_model=KeyStatus, summary="Count the remaining one-time prekeys of this device")
 def key_status(p: Principal = Depends(get_principal), db: Session = Depends(get_read_db)):
     return keys.status(db, p.device_id)
 
 
-@router.get("/{user_id}")
+@router.get(
+    "/{user_id}",
+    response_model=KeyBundlesOut,
+    summary="Fetch the key bundles of a user's devices",
+    responses=error_responses(404, 422, 429),
+)
 def get_bundles(
     user_id: str,
     device_id: str | None = None,

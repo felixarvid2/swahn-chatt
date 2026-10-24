@@ -3,8 +3,9 @@
 import base64
 import logging
 import os
-import sqlite3
 import uuid
+
+from sqlalchemy import inspect, text
 
 from tests.conftest import b64
 
@@ -31,25 +32,33 @@ def test_stored_database_holds_envelope_bytes_verbatim_and_no_plaintext(factory,
         )
     assert bob.events("message") and alice2.events("message")
 
-    path = app.state.settings.sqlite_path
-    con = sqlite3.connect(path)
-    rows = {(m, d): bytes(b) for m, d, b in con.execute("SELECT message_id, device_id, body FROM message_envelopes")}
+    with app.state.engine.connect() as conn:
+        rows = {
+            (m, d): bytes(b)
+            for m, d, b in conn.execute(text("SELECT message_id, device_id, body FROM message_envelopes"))
+        }
     assert rows == sent  # byte-exact, nothing added, nothing transformed
 
+    # the schema has exactly one column that can hold message content, and it is binary
+    columns = {
+        (t, c["name"]): str(c["type"]).upper()
+        for t in inspect(app.state.engine).get_table_names()
+        for c in inspect(app.state.engine).get_columns(t)
+    }
+    for (table, name), typ in columns.items():
+        if name in {"body", "text", "content", "plaintext", "message", "ciphertext"}:
+            assert (table, name) == ("message_envelopes", "body") and typ in {"BLOB", "BYTEA"}
+
+    if not app.state.settings.is_sqlite:
+        return
     # no plaintext anywhere in the files on disk (main db, WAL), neither raw nor as base64
+    path = app.state.settings.sqlite_path
     app.state.engine.dispose()
     blobs = b"".join(p.read_bytes() for p in path.parent.glob("familychat.db*"))
     assert SECRET_TEXT.encode() not in blobs
     assert b64(SECRET_TEXT.encode()).encode() not in blobs
     for blob in list(sent.values())[:3]:
         assert base64.b64encode(blob) not in blobs  # ciphertext is stored as bytes, not re-encoded
-
-    # the schema has exactly one column that can hold message content, and it is binary
-    for (table,) in con.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall():
-        for _cid, name, typ, *_ in con.execute(f"PRAGMA table_info({table})"):
-            if name in {"body", "text", "content", "plaintext", "message", "ciphertext"}:
-                assert (table, name, typ) == ("message_envelopes", "body", "BLOB")
-    con.close()
 
 
 def test_logs_never_contain_secrets_or_message_bodies(factory, app, caplog):

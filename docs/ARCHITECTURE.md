@@ -32,12 +32,15 @@
 - Python 3.12, FastAPI, Pydantic v2, SQLAlchemy 2 (sync engine, endpoints run in the threadpool), Alembic,
   argon2-cffi, PyJWT, httpx (push), uvicorn.
 - `app/main.py` app factory; `app/config.py` settings from `FAMILYCHAT_*` environment variables;
-  `app/db.py` engine/session (SQLite WAL, `busy_timeout`, foreign keys on); `app/models.py`;
+  `app/db.py` engine/session (SQLite WAL, `busy_timeout`, foreign keys on; PostgreSQL write lock, see
+  "Sync cursor"); `app/models.py`; `app/request_id.py` (X-Request-ID middleware and log context);
+  `app/openapi.py` (OpenAPI post-processing);
   `app/schemas.py`; `app/security.py` (Argon2id, JWT, token hashing); `app/ratelimit.py`;
   `app/routers/*` (auth, admin, users, devices, keys, conversations, messages, sync, attachments, ws, health);
-  `app/services/*` (events fan-out, membership, delivery receipts, push); `app/hub.py` (in-memory WebSocket
-  connection registry; one process, so no broker is needed); `app/cli.py` (invites, users, backup, restore,
-  seed-dev).
+  `app/services/*` (events fan-out, membership, delivery receipts, push, password reset, backup/verify, config check, maintenance);
+  `app/metrics.py` (Prometheus `/metrics`, no client library); `app/services/presence.py` (opt-in online status, debounced); `app/services/lockout.py`; `app/services/uploads.py` (resumable uploads); `app/hub.py` (in-memory WebSocket
+  connection registry; one process, so no broker is needed); `app/cli.py` (invites, users, password reset, backup,
+  verify-backup, restore, check-config, seed-dev).
 - WebSocket fan-out works because there is exactly one worker. Running several workers would need a broker
   (Redis/Postgres LISTEN) — documented, deliberately not built.
 
@@ -45,23 +48,49 @@
 
 | Table | Key columns |
 |---|---|
-| `users` | id, username (unique), display_name, password_hash, is_admin, avatar_attachment_id, created_at, disabled_at |
-| `invitations` | id, code_hash (unique), note, is_admin, created_by, created_at, expires_at, used_at, used_by, revoked_at |
+| `users` | id, username (unique), display_name, password_hash, is_admin, avatar_attachment_id, created_at, disabled_at, suspended_at (admin suspension: no sign-in or API use, data kept), share_presence (opt-in, default false), presence_last_seen_at (only kept while sharing) |
+| `invitations` | id, code_hash (unique), note, is_admin, created_by, created_at, expires_at, used_at, used_by, revoked_at, max_uses (1..20), uses (redeemed so far; used_at/used_by = used up / latest redeemer) |
 | `devices` | id, user_id, number (1..127, unique per user), name, created_at, last_seen_at, revoked_at, push_kind, push_endpoint, acked_cursor |
 | `sessions` | id, user_id, device_id, refresh_token_hash (unique), created_at, expires_at, revoked_at |
 | `session_tokens` | token_hash (PK), session_id — every refresh token a session issued, for reuse detection |
 | `device_keys` | device_id (PK), registration_id, identity_key, signed_prekey_id/public/signature, pq_last_resort_id/public/signature, updated_at |
 | `one_time_prekeys` | device_id, key_id, public_key (unique device_id+key_id) |
 | `one_time_pq_prekeys` | device_id, key_id, public_key, signature |
-| `conversations` | id, type, name, avatar_attachment_id, direct_key (unique, for direct pairs), created_by, created_at, updated_at, last_message_at, last_message_seq |
+| `password_resets` | id, user_id, code_hash (unique), created_by (NULL = CLI), created_at, expires_at (24 h), used_at, revoked_at |
+| `conversations` | id, type, name, avatar_attachment_id, direct_key (unique, for direct pairs), created_by, created_at, updated_at, last_message_at, last_message_seq, disappearing_seconds (NULL or 300..31536000; server pruning only) |
 | `conversation_members` | conversation_id, user_id, role, joined_at, read_seq |
-| `messages` | id (client UUID), seq (unique, monotonic), conversation_id, sender_user_id, sender_device_id, kind, target_message_id, client_ts, server_ts, deleted_at, edited_at |
+| `messages` | id (client UUID), seq (unique, monotonic), conversation_id, sender_user_id, sender_device_id, kind (`message`, `edit`, `delete`, `reaction`), target_message_id, client_ts, server_ts, deleted_at, edited_at, expires_at (indexed; server_ts + the conversation's timer at insert, NULL = keep) |
 | `message_envelopes` | message_id, device_id, type, body (ciphertext), delivered_at — **the message delivery state** |
 | `message_attachments` | message_id, attachment_id |
 | `attachments` | id, uploader_id, purpose, content_type, size, sha256, storage_path, created_at |
 | `events` | seq (PK autoincrement = sync cursor), device_id, type, conversation_id, payload (JSON), created_at |
 | `delivery_receipts` | message_id, user_id, delivered_at (one per recipient user, drives the `delivered` receipt) |
+| `audit_events` | id (autoincrement), at, actor_user_id, action, target_user_id, target_id, ip, details (JSON; never secrets) |
+| `login_failures` | id, key_hash (HMAC of the username, never the name), at — failed logins of the last 24 h, replayed into the in-memory lockout counters at startup |
+| `upload_sessions` | id (becomes the attachment id), user_id, purpose, size (reserved quota), sha256, offset, created_at, expires_at (24 h); bytes in `attachments/.tmp/uploads/<id>.part` |
 | `counters` | name, value (used for monotonic message `seq`, works on SQLite and PostgreSQL) |
+
+### Sync cursor and the database
+
+The sync cursor is `events.seq`: a device that has processed event N asks for `seq > N`. That is only correct if a
+lower `seq` never becomes visible after a higher one. **SQLite** guarantees it: every writing transaction starts
+with `BEGIN IMMEDIATE`, so writers queue and `AUTOINCREMENT` numbers are handed out in commit order. **PostgreSQL**
+allocates sequence values at insert time, so two concurrent transactions could commit in the opposite order and a
+device would skip the event that committed late. The choice made here: every *writing* transaction takes one
+transaction-scoped advisory lock (`pg_advisory_xact_lock`, `SET LOCAL lock_timeout = '10s'`) as its first
+statement (`app/db.py`, same place as SQLite's `BEGIN IMMEDIATE`), so writers are serialised exactly as on SQLite and
+commit order equals `seq` order. Read-only sessions (`get_read_db`) do not take it, so reads never wait. Why not a
+lock row or "expose events only below the smallest in-flight seq": a lock row taken only at the first `emit` can
+deadlock with row locks taken earlier in the same transaction (for example revoking a device), and hiding in-flight
+seqs needs a bookkeeping table of open transactions; serialising whole transactions needs neither and matches the
+behaviour the code was written against. Cost: no write concurrency, which one Pi with ten users never uses (Argon2
+never runs inside a transaction, so the lock is held for milliseconds). The monotonic message `seq` uses the
+`counters` row (`UPDATE ... SET value = value + 1` takes the row lock on both databases).
+`tests/test_postgres.py` proves the ordering and shows what goes wrong without the lock.
+
+Run the suite against PostgreSQL with `FAMILYCHAT_TEST_DATABASE_URL=postgresql+psycopg://user:pw@host:5432/postgres`
+(a role that may create databases); tests that need the SQLite file itself are skipped there. SQLite stays the
+default and the only backend `backup`/`restore`/`verify-backup` support; PostgreSQL is backed up with `pg_dump`.
 
 Event fan-out: when something happens (message, membership change, read receipt…) the service writes one row
 per affected device into `events` in the same transaction, then after commit tells the hub to send
@@ -106,6 +135,15 @@ Client data flow:
   WorkManager: `OutboxWorker` (on every send and when connectivity returns), `SyncWorker` (expedited, started by a
   UnifiedPush wake-up) and `PeriodicSyncWorker` (15 minutes). Notifications are built locally from the decrypted
   messages after a sync, never from the push.
+
+- The Room schema is at version 3 (`drafts`; `message_fts` full-text index and `conversation_settings` for
+  mute/archive/pin), with tested `MIGRATION_1_2` and `MIGRATION_2_3`. Messages are written with an upsert so the
+  FTS triggers stay in sync. Schema changes always bump the
+  version and ship a migration plus a `MigrationTest`, because installed phones keep their database.
+- The conversation's message list is a Room `PagingSource` (Paging 3), newest first. Date separators and the
+  unread divider are added with `insertSeparators`.
+- Inline replies from notifications go through `ReplyReceiver`, `engine.sendText` and the outbox. `AppLock`
+  handles the optional biometric lock; `ConversationSettingsStore` holds local mute, archive and pin state.
 
 ## Notifications: FCM vs self-hosted
 

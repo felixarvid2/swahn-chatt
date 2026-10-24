@@ -81,6 +81,18 @@ def test_create_invite_member_hours_and_validation(tmp_path):
     assert bad.returncode == 2 and bad.stdout.strip() == ""
 
 
+def test_create_invite_max_uses(tmp_path):
+    r = run_cli(tmp_path, "create-invite", "--max-uses", "3")
+    assert r.returncode == 0, r.stderr
+    app, client = serve(tmp_path)
+    with client:
+        admin = Factory(app, client).user("boss", admin=True)
+        (inv,) = [i for i in admin.get("/admin/invitations").json() if i["max_uses"] == 3]
+        assert (inv["uses"], inv["remaining"]) == (0, 3)
+    assert run_cli(tmp_path, "create-invite", "--max-uses", "21").returncode == 2
+    assert run_cli(tmp_path, "create-invite", "--admin", "--max-uses", "2").returncode == 2
+
+
 def test_cli_works_in_production_without_a_secret_key(tmp_path):
     r = run_cli(tmp_path, "create-invite", env_name="production")
     assert r.returncode == 0, r.stderr
@@ -149,3 +161,34 @@ def test_cli_main_in_process_invite(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("FAMILYCHAT_SECRET_KEY", SECRET)
     assert cli_main(["create-invite"]) == 0
     assert CODE_RE.match(capsys.readouterr().out.strip().splitlines()[-1])
+
+
+def test_reset_password_cli_prints_only_the_code_and_it_works(tmp_path):
+    app, client = serve(tmp_path)
+    with client:
+        f = Factory(app, client)
+        f.user("annika")
+    r = run_cli(tmp_path, "reset-password", "Annika")
+    assert r.returncode == 0, r.stderr
+    lines = r.stdout.strip().splitlines()
+    assert len(lines) == 1 and CODE_RE.match(lines[0])
+    assert "single use" in r.stderr
+    app, client = serve(tmp_path)
+    with client:
+        res = client.post(
+            "/api/v1/auth/password/reset",
+            json={"code": lines[0], "new_password": "fresh password 123", "device_name": "p"},
+        )
+        assert res.status_code == 200 and res.json()["user"]["username"] == "annika"
+        with app.state.session_factory() as db:
+            from app.models import AuditEvent
+
+            actions = [e.action for e in db.query(AuditEvent).order_by(AuditEvent.id)]
+            assert actions[-2:] == ["password_reset_issued", "password_reset_used"]
+            issued = db.query(AuditEvent).filter_by(action="password_reset_issued").one()
+            assert issued.actor_user_id is None and issued.details == {"via": "cli"}
+
+
+def test_reset_password_cli_unknown_user(tmp_path):
+    r = run_cli(tmp_path, "reset-password", "nobody")
+    assert r.returncode == 1 and r.stdout.strip() == "" and "no active user" in r.stderr

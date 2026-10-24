@@ -71,6 +71,9 @@ malicious members and revoked devices. Everything found is fixed and covered by 
 
 Behaviour change to know: after logging in on a second phone, approve it on the first one
 (Inställningar → Säkerhetsnummer för mina enheter) before the first phone sends to it.
+This is the owner's decision (2026-10-24): keep the protection unconditional for the own account, even when
+none of the own devices is verified. It stops a server from silently adding a listening device to the account.
+Do not relax it without asking.
 
 ## Known limitations and outstanding issues
 

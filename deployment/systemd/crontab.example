@@ -1,2 +1,6 @@
 # Alternative to the systemd timer: `crontab -e` as the user that runs docker.
-15 3 * * * KEEP=14 /home/pi/familychat/deployment/backup.sh /home/pi/familychat-backups >> /home/pi/familychat-backups/backup.log 2>&1
+# Retention (FAMILYCHAT_BACKUP_KEEP, default 14) and the optional rclone upload (FAMILYCHAT_BACKUP_RCLONE_REMOTE)
+# are read from deployment/.env; put them in front of the command to override, e.g.
+#   FAMILYCHAT_BACKUP_KEEP=30 FAMILYCHAT_BACKUP_RCLONE_REMOTE=familychat-crypt:backups /home/pi/...
+# cron has a minimal PATH: add the directory of docker/rclone if they are not in /usr/bin.
+15 3 * * * /home/pi/familychat/deployment/backup.sh /home/pi/familychat-backups >> /home/pi/familychat-backups/backup.log 2>&1

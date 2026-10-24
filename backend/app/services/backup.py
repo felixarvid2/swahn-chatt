@@ -167,8 +167,46 @@ def restore_backup(settings: Settings, archive: Path, force: bool = False) -> di
         shutil.rmtree(staging, ignore_errors=True)
 
 
-def _extract_verified(archive: Path, staging: Path) -> dict:
-    """Extract only known file names into `staging`, hashing while writing; then compare with the manifest."""
+def verify_backup(archive: Path) -> dict:
+    """Full verification without restoring anything: safe entry names, manifest, every checksum and size, SQLite
+    integrity check of the database (on a temporary copy; attachments are only hashed, never written), and the
+    attachment paths recorded in the database. Raises BackupError on the first problem."""
+    if not archive.is_file():
+        raise BackupError(f"archive not found: {archive}")
+    with tempfile.TemporaryDirectory(prefix="fc-verify-") as tmp:
+        staging = Path(tmp)
+        manifest = _extract_verified(archive, staging, keep_attachments=False)
+        warnings: list[str] = []
+        con = sqlite3.connect(staging / DB_NAME)
+        try:
+            rows = con.execute("SELECT version_num FROM alembic_version").fetchall()
+            revision = rows[0][0] if rows else None
+            referenced = con.execute("SELECT COUNT(*) FROM attachments").fetchone()[0]
+        except sqlite3.DatabaseError:
+            revision, referenced = None, 0
+            warnings.append("the database has no alembic_version or attachments table")
+        finally:
+            con.close()
+        stored = len(manifest["attachments"])
+        if referenced > stored:
+            warnings.append(f"{referenced - stored} attachment rows have no file in the archive")
+        if stored > referenced:
+            warnings.append(f"{stored - referenced} attachment files are not referenced by the database")
+    return {
+        "format": manifest["format"],
+        "created_at": manifest.get("created_at"),
+        "counts": manifest["counts"],
+        "attachment_files": stored,
+        "attachment_bytes": sum(e["size"] for e in manifest["attachments"]),
+        "database_bytes": manifest["database"]["size"],
+        "migration": revision,
+        "warnings": warnings,
+    }
+
+
+def _extract_verified(archive: Path, staging: Path, keep_attachments: bool = True) -> dict:
+    """Extract only known file names into `staging`, hashing while writing; then compare with the manifest.
+    With `keep_attachments=False` attachment contents are hashed but not written."""
     seen: dict[str, tuple[str, int]] = {}
     try:
         with tarfile.open(archive, "r:gz") as tar:
@@ -178,16 +216,23 @@ def _extract_verified(archive: Path, staging: Path) -> dict:
                     raise BackupError(f"unexpected non-file entry in archive: {name!r}")
                 if name not in ("manifest.json", DB_NAME) and not ATT_RE.match(name):
                     raise BackupError(f"unexpected entry in archive: {name!r}")
-                target = staging / name
-                target.parent.mkdir(parents=True, exist_ok=True)
+                if name in seen:
+                    raise BackupError(f"duplicate entry in archive: {name!r}")
                 src = tar.extractfile(member)
                 h = hashlib.sha256()
                 size = 0
-                with open(target, "wb") as out:
+                if keep_attachments or name in ("manifest.json", DB_NAME):
+                    target = staging / name
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    with open(target, "wb") as out:
+                        while chunk := src.read(1024 * 1024):
+                            h.update(chunk)
+                            size += len(chunk)
+                            out.write(chunk)
+                else:
                     while chunk := src.read(1024 * 1024):
                         h.update(chunk)
                         size += len(chunk)
-                        out.write(chunk)
                 seen[name] = (h.hexdigest(), size)
     except (tarfile.TarError, OSError, EOFError) as exc:
         raise BackupError(f"archive is unreadable or corrupted: {exc}") from exc

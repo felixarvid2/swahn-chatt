@@ -17,6 +17,7 @@ import se.familychat.app.media.AttachmentPreparer
 import se.familychat.app.platform.AppForeground
 import se.familychat.app.platform.ConnectivityMonitor
 import se.familychat.app.platform.notify.Notifier
+import se.familychat.app.platform.security.AppLock
 import se.familychat.app.platform.work.WorkScheduler
 import se.familychat.core.client.FamilyChatEngine
 import se.familychat.core.client.LocalStore
@@ -49,12 +50,19 @@ class AppStarter @Inject constructor(
     private val store: LocalStore,
     private val db: AppDatabase,
     private val preparer: AttachmentPreparer,
+    private val appLock: AppLock,
     @ApplicationScope private val scope: CoroutineScope,
 ) {
     fun start() {
+        foreground.addListener { fg -> if (fg) appLock.onForeground() else appLock.onBackground() }
         foreground.attach()
         notifier.start()
         session.start()
+
+        // No account, no lock (a new sign-in starts without one).
+        scope.launch {
+            session.state.collect { if (it is SessionState.SignedOut && appLock.enabled) appLock.disable() }
+        }
 
         // Realtime (WebSocket + sync on hints) only while the app is visible; in the background push and WorkManager take over.
         scope.launch {

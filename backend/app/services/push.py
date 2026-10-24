@@ -102,6 +102,10 @@ class PushService:
                 self._pending.add(did)
             self._queue.put(did)
 
+    def pending_count(self) -> int:
+        """Pushes waiting in the queue (for /metrics)."""
+        return self._queue.qsize()
+
     def flush(self, timeout: float = 10.0) -> None:
         """Wait until the queue is drained (tests)."""
         done = threading.Event()

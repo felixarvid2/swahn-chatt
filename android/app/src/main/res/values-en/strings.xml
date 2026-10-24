@@ -245,4 +245,90 @@
         <item quantity="one">%1$d selected</item>
         <item quantity="other">%1$d selected</item>
     </plurals>
+
+    <!-- connection banner -->
+    <string name="connection_connecting">Connecting…</string>
+    <string name="connection_offline">Offline – messages will be sent when you are back online</string>
+    <!-- conversation: unread divider, jump to latest -->
+    <string name="unread_divider">Unread messages</string>
+    <string name="scroll_to_latest">Go to the latest message</string>
+    <plurals name="scroll_to_latest_new">
+        <item quantity="one">Go to the latest message, %1$d new message</item>
+        <item quantity="other">Go to the latest message, %1$d new messages</item>
+    </plurals>
+    <!-- drafts -->
+    <string name="draft_preview">Draft: %1$s</string>
+    <!-- links -->
+    <string name="link_confirm_title">Open link?</string>
+    <string name="link_confirm_text">You are leaving FamilyChat. Check the whole address before you continue.</string>
+    <string name="link_confirm_open">Open</string>
+    <string name="link_target_web">Website: %1$s</string>
+    <string name="link_target_email">E-mail address: %1$s</string>
+    <string name="link_target_phone">Phone number: %1$s</string>
+    <string name="link_suspicious">The address contains unusual characters or hidden parts. Double-check it.</string>
+    <string name="link_open_action">Open link: %1$s</string>
+    <string name="error_open_link">No app could open the link</string>
+    <!-- voice playback speed -->
+    <string name="voice_speed_description">Playback speed %1$s</string>
+    <string name="voice_speed_change">Change playback speed</string>
+    <!-- header: safety numbers -->
+    <string name="safety_verified_description">All devices are verified. Open safety numbers.</string>
+    <string name="safety_warning_description">A safety key changed or a new device is waiting for your approval. Review.</string>
+    <!-- screen reader description of a message bubble -->
+    <string name="bubble_reply_to">reply to %1$s</string>
+    <!-- privacy, lock, search, pinned/muted/archived (0.2.0) -->
+    <string name="settings_privacy">Privacy and security</string>
+    <string name="notification_privacy">Notification content</string>
+    <string name="notification_privacy_hint">Applies to notifications and the lock screen. Replying from the notification is not offered when no name is shown or when the app lock is on.</string>
+    <string name="privacy_full">Name and message</string>
+    <string name="privacy_name_only">Name only</string>
+    <string name="privacy_hidden">No information</string>
+    <string name="block_screenshots">Block screenshots</string>
+    <string name="block_screenshots_hint">No screenshots and no preview in the recent apps list</string>
+    <string name="app_lock">App lock</string>
+    <string name="app_lock_hint">Unlock with fingerprint, face or screen lock</string>
+    <string name="app_lock_unavailable">Set up a screen lock or biometrics on the phone first.</string>
+    <string name="lock_after">Lock after</string>
+    <string name="lock_immediately">Immediately</string>
+    <string name="lock_1_minute">1 minute</string>
+    <string name="lock_5_minutes">5 minutes</string>
+    <string name="lock_30_minutes">30 minutes</string>
+    <string name="lock_title">FamilyChat is locked</string>
+    <string name="lock_text">Unlock to see your messages.</string>
+    <string name="lock_unlock">Unlock</string>
+    <string name="lock_prompt_title">Unlock FamilyChat</string>
+    <string name="lock_prompt_subtitle">Confirm that it is you</string>
+    <plurals name="notification_new_messages">
+        <item quantity="one">New message</item>
+        <item quantity="other">%1$d new messages</item>
+    </plurals>
+    <string name="reply_sent">Reply sent</string>
+    <string name="search">Search</string>
+    <string name="search_messages_hint">Search messages</string>
+    <string name="search_in_conversation">Search in conversation</string>
+    <string name="search_close">Close search</string>
+    <string name="search_empty">Search all messages. The search happens only on this phone.</string>
+    <string name="search_no_results">No results</string>
+    <plurals name="search_hits">
+        <item quantity="one">%1$d result</item>
+        <item quantity="other">%1$d results</item>
+    </plurals>
+    <string name="archived_section">Archived (%1$d)</string>
+    <string name="archived_expand">Show archived conversations</string>
+    <string name="archived_collapse">Hide archived conversations</string>
+    <string name="conversation_pin">Pin to top</string>
+    <string name="conversation_unpin">Unpin</string>
+    <string name="conversation_mute">Mute</string>
+    <string name="conversation_unmute">Unmute</string>
+    <string name="conversation_archive">Archive</string>
+    <string name="conversation_unarchive">Move back</string>
+    <string name="pin_limit">You can pin at most %1$d conversations.</string>
+    <string name="mute_title">Mute conversation</string>
+    <string name="mute_text">No notifications. Unread messages are still counted.</string>
+    <string name="mute_1_hour">1 hour</string>
+    <string name="mute_8_hours">8 hours</string>
+    <string name="mute_1_week">1 week</string>
+    <string name="mute_always">Always</string>
+    <string name="state_pinned">Pinned</string>
+    <string name="state_muted">Muted</string>
 </resources>

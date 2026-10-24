@@ -6,6 +6,9 @@ import android.graphics.Color
 import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.Shader
+import androidx.paging.LoadState
+import androidx.paging.LoadStates
+import androidx.paging.PagingData
 import se.familychat.app.platform.push.Distributor
 import se.familychat.app.platform.push.PushStatus
 import se.familychat.app.ui.components.PlaybackUi
@@ -66,12 +69,46 @@ object Fixtures {
     val conversationItems = listOf(
         ConversationItemUi("g1", "Familjen Ek", true, AvatarUi("Familjen Ek"), PreviewKind.TEXT, "Vi grillar på lördag, vem kommer?", "Cecilia", false, DeliveryUi.NONE, at(10, 24, 15, 58), 3),
         ConversationItemUi("d1", "Bertil Ek", false, bob.avatar, PreviewKind.VOICE, null, null, false, DeliveryUi.NONE, at(10, 24, 12, 41), 1),
-        ConversationItemUi("d2", "Cecilia Ek", false, cia.avatar, PreviewKind.TEXT, "Perfekt, vi ses då!", null, true, DeliveryUi.READ, at(10, 23, 21, 5), 0),
+        ConversationItemUi(
+            "d2", "Cecilia Ek", false, cia.avatar, PreviewKind.TEXT, "Perfekt, vi ses då!", null, true, DeliveryUi.READ, at(10, 23, 21, 5), 0,
+            draft = "Jag kan hämta på fredag, passar det?",
+        ),
         ConversationItemUi("d3", "Emma Berg", false, emma.avatar, PreviewKind.PHOTO, null, null, true, DeliveryUi.DELIVERED, at(10, 22, 9, 15), 0, typing = false),
         ConversationItemUi("g2", "Semesterplanering", true, AvatarUi("Semesterplanering"), PreviewKind.FILE, "boende-kroatien.pdf", "David", false, DeliveryUi.NONE, at(10, 19, 18, 2), 0),
         ConversationItemUi("d4", "David Ek", false, david.avatar, PreviewKind.TEXT, "Skickas inte än …", null, true, DeliveryUi.PENDING, at(10, 14, 8, 30), 0, typing = false),
         ConversationItemUi("d5", "Farmor", false, AvatarUi("Farmor"), PreviewKind.DELETED, null, null, false, DeliveryUi.NONE, at(9, 30, 10, 0), 0),
         ConversationItemUi("d6", "Mormor", false, AvatarUi("Mormor"), PreviewKind.TEXT, "", null, false, DeliveryUi.NONE, at(2, 3, 10, 0), 0, typing = true),
+    )
+
+    /** The same list with a pinned, a muted and some archived conversations (one archived conversation is muted). */
+    val conversationItemsOrganised: List<ConversationItemUi> = conversationItems.map {
+        when (it.id) {
+            "d2" -> it.copy(pinned = true)
+            "d1" -> it.copy(muted = true)
+            "g2" -> it.copy(archived = true, unread = 2, muted = true)
+            "d5", "d6" -> it.copy(archived = true)
+            "g1" -> it.copy(pinned = true)
+            else -> it
+        }
+    }
+
+    // --- search -----------------------------------------------------------------------------------------------------------
+
+    private fun hit(id: String, conversation: String, time: Long, sender: String?, text: String, terms: String) =
+        se.familychat.app.ui.model.SearchHitUi(id, conversation, time, sender, se.familychat.app.data.Snippets.of(text, se.familychat.app.data.SearchQuery.terms(terms)))
+
+    val searchGroups = listOf(
+        se.familychat.app.ui.model.SearchGroupUi(
+            "g1", "Familjen Ek", AvatarUi("Familjen Ek"),
+            listOf(
+                hit("s1", "g1", at(10, 24, 15, 58), "Cecilia Ek", "Vi grillar på lördag, vem kommer? Jag tar med middag till alla och bakar en kaka", "middag"),
+                hit("s2", "g1", at(10, 21, 18, 2), null, "Kan någon ta med kolsyra till middagen på söndag?", "middag"),
+            ),
+        ),
+        se.familychat.app.ui.model.SearchGroupUi(
+            "d2", "Cecilia Ek", cia.avatar,
+            listOf(hit("s3", "d2", at(9, 30, 20, 11), "Cecilia Ek", "Middag hos oss på fredag, passar det?", "middag")),
+        ),
     )
 
     // --- conversation ---------------------------------------------------------------------------------------------------
@@ -153,9 +190,18 @@ object Fixtures {
             msg("a", bob, "Ska vi ses vid fyra?", at(10, 24, 14, 30), group = false),
             msg("b", null, "Gärna! Jag tar med kaffe.", at(10, 24, 14, 32), group = false, delivery = DeliveryUi.READ),
             msg("c", null, null, at(10, 24, 14, 33), group = false, delivery = DeliveryUi.SENT, attachments = listOf(photo("p2", TransferUi.Downloading(0.4f)))),
-            msg("d", bob, "Fint foto! Vilken utsikt.", at(10, 24, 14, 40), group = false, undecryptable = null),
+            msg("d", bob, "Fint foto! Vilken utsikt. Mer här: https://exempel.se/utsikt eller ring 070-123 45 67", at(10, 24, 14, 40), group = false, undecryptable = null),
         ),
     )
+
+    /** The group conversation as it opens with six unread messages: the divider sits above the first of them (oldest first). */
+    val groupRowsUnread: List<ChatRow> = groupRows.flatMap { if (it is ChatRow.Message && it.message.id == "6") listOf(ChatRow.UnreadDivider, it) else listOf(it) }
+
+    /** [rows] (oldest first) as a fully loaded page stream, newest first: what the conversation screen reads. */
+    fun pages(rows: List<ChatRow>): PagingData<ChatRow> {
+        val done = LoadState.NotLoading(endOfPaginationReached = true)
+        return PagingData.from(rows.asReversed(), LoadStates(refresh = LoadState.NotLoading(false), prepend = done, append = done))
+    }
 
     val idle = PlaybackUi()
     val playing = PlaybackUi("v1", playing = true, positionMs = 9_000, durationMs = 23_000)

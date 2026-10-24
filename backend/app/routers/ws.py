@@ -86,8 +86,10 @@ async def ws_endpoint(ws: WebSocket):
         await ws.close(code=4401)
         return
     hub = app.state.hub
+    presence = app.state.presence
     conn = Connection(device_id=p.device_id, user_id=p.user_id)
     hub.register(conn)
+    counted = False  # presence is only updated for connections that got as far as the hello
     try:
         # A revocation that committed between check_session() and register() found no socket to kick, so look
         # again now that this connection can be kicked.
@@ -98,6 +100,8 @@ async def ws_endpoint(ws: WebSocket):
             return
         cursor = await run_in_threadpool(_hello_and_members, app, p)
         await ws.send_json({"type": "hello", "cursor": cursor})
+        counted = True
+        presence.fire(p.user_id)
         interval = app.state.settings.ws_revalidate_seconds
         killer = asyncio.create_task(conn.closed.wait())
         tasks = {
@@ -117,12 +121,14 @@ async def ws_endpoint(ws: WebSocket):
                 log.warning("websocket task failed: %s", type(t.exception()).__name__)
         if killer in done:
             with contextlib.suppress(Exception):
-                await ws.close(code=conn.close_code)
+                await ws.close(code=conn.close_code, reason=conn.close_reason)
     except WebSocketDisconnect:
         pass
     except Exception:
         log.exception("websocket error")
     finally:
+        if counted:
+            presence.fire(p.user_id, exclude=conn)  # a task of its own: this handler may be cancelled right now
         hub.unregister(conn)
 
 

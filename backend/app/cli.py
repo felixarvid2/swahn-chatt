@@ -7,6 +7,7 @@ import sys
 import time
 from pathlib import Path
 
+from pydantic import ValidationError
 from sqlalchemy import select
 
 from app.config import ConfigError, Settings
@@ -30,14 +31,18 @@ def _open(settings: Settings):
 
 
 def cmd_create_invite(args, settings: Settings) -> int:
+    if args.admin and args.max_uses > 1:
+        print("administrator invitations are single use", file=sys.stderr)
+        return 2
     from app.routers.admin import create_invitation
 
     factory = _open(settings)
     with factory() as db:
-        inv, code = create_invitation(db, None, args.note, args.hours, args.admin)
+        inv, code = create_invitation(db, None, args.note, args.hours, args.admin, max_uses=args.max_uses)
         db.commit()
         expires = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(inv.expires_at / 1000))
-    print(f"invitation valid until {expires}" + (" (administrator)" if args.admin else ""), file=sys.stderr)
+    uses = f", {args.max_uses} uses" if args.max_uses > 1 else ""
+    print(f"invitation valid until {expires}" + (" (administrator)" if args.admin else "") + uses, file=sys.stderr)
     print(code)  # scripts read the LAST stdout line
     return 0
 
@@ -62,7 +67,7 @@ def cmd_remove_user(args, settings: Settings) -> int:
     from sqlalchemy import func
 
     from app.models import User
-    from app.services import accounts
+    from app.services import accounts, audit
 
     factory = _open(settings)
     with factory() as db:
@@ -77,8 +82,48 @@ def cmd_remove_user(args, settings: Settings) -> int:
             print("refusing to remove the only administrator (use --force)", file=sys.stderr)
             return 1
         accounts.disable_user(db, user)
+        audit.record(db, "user_removed", target_user=user.id, was_admin=user.is_admin, via="cli")
         db.commit()
     print(f"removed {args.username}: sessions revoked, devices deleted, removed from conversations")
+    return 0
+
+
+def cmd_reset_password(args, settings: Settings) -> int:
+    from app.models import User
+    from app.services import password_reset
+
+    factory = _open(settings)
+    with factory() as db:
+        user = db.scalar(select(User).where(User.username == args.username.strip().lower(), User.disabled_at.is_(None)))
+        if user is None:
+            print(f"no active user {args.username!r}", file=sys.stderr)
+            return 1
+        code, expires_at = password_reset.issue(db, user, None, via="cli")
+        db.commit()
+    expires = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(expires_at / 1000))
+    print(
+        f"password reset code for {user.username}, valid until {expires}, single use. Using it signs the user "
+        "out everywhere (all devices are removed).",
+        file=sys.stderr,
+    )
+    print(code)  # scripts read the LAST stdout line
+    return 0
+
+
+def cmd_audit(args, settings: Settings) -> int:
+    from app.services import audit
+
+    factory = _open(settings)
+    with factory() as db:
+        events = audit.list_events(db, None, args.limit)
+    for e in reversed(events):  # oldest first, so the newest line is the last one
+        when = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(e.at / 1000))
+        parts = [f"actor={e.actor_user_id or '-'}", f"target_user={e.target_user_id or '-'}"]
+        if e.target_id:
+            parts.append(f"target={e.target_id}")
+        parts.append(f"ip={e.ip or '-'}")
+        details = " ".join(f"{k}={v}" for k, v in sorted((e.details or {}).items()))
+        print(f"{when} UTC  #{e.id:<6} {e.action:<20} {' '.join(parts)}" + (f"  {details}" if details else ""))
     return 0
 
 
@@ -103,6 +148,42 @@ def cmd_restore(args, settings: Settings) -> int:
     if result["previous_data"]:
         print(f"previous data kept in {result['previous_data']}", file=sys.stderr)
     print("restore complete; start the server (migrations run on start)")
+    return 0
+
+
+def cmd_verify_backup(args, settings: Settings) -> int:
+    from app.services.backup import verify_backup
+
+    info = verify_backup(Path(args.archive))  # BackupError -> "error: ..." and exit 1 in main()
+    c = info["counts"]
+    print(f"backup OK: {args.archive}")
+    print(f"  created      {info['created_at']}")
+    print(f"  database     {info['database_bytes']} bytes, integrity_check ok, migration {info['migration']}")
+    print(
+        f"  contents     {c.get('users', 0)} users, {c.get('devices', 0)} devices, {c.get('conversations', 0)} "
+        f"conversations, {c.get('messages', 0)} messages"
+    )
+    print(f"  attachments  {info['attachment_files']} files, {info['attachment_bytes']} bytes, checksums match")
+    for w in info["warnings"]:
+        print(f"  warning: {w}")
+    return 0
+
+
+def cmd_check_config(args, settings: Settings) -> int:
+    from app.services import configcheck
+
+    report = configcheck.check(settings, len(os.environ.get("FAMILYCHAT_SECRET_KEY", "").encode()))
+    width = max(len(k) for k, _ in report.settings)
+    for key, value in report.settings:
+        print(f"{key:<{width}}  {value}")
+    for w in report.warnings:
+        print(f"WARNING: {w}")
+    for e in report.errors:
+        print(f"ERROR: {e}")
+    if report.errors:
+        print(f"{len(report.errors)} error(s), {len(report.warnings)} warning(s)")
+        return 1
+    print("configuration OK" + (f" ({len(report.warnings)} warning(s))" if report.warnings else ""))
     return 0
 
 
@@ -168,6 +249,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--admin", action="store_true", help="the new account becomes an administrator")
     p.add_argument("--note", default=None)
     p.add_argument("--hours", type=int, default=72, help="validity in hours (1..720, default 72)")
+    p.add_argument(
+        "--max-uses", type=int, default=1, choices=range(1, 21), metavar="N", help="redemptions (1..20, default 1)"
+    )
     p.set_defaults(func=cmd_create_invite)
 
     p = sub.add_parser("list-users")
@@ -178,9 +262,24 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--force", action="store_true", help="allow removing the only administrator")
     p.set_defaults(func=cmd_remove_user)
 
+    p = sub.add_parser("reset-password", help="issue a single-use password reset code (24 h); the LAST stdout line")
+    p.add_argument("username")
+    p.set_defaults(func=cmd_reset_password)
+
+    p = sub.add_parser("audit", help="print the newest audit log entries (oldest first)")
+    p.add_argument("--limit", type=int, default=50, help="how many entries (1..1000, default 50)")
+    p.set_defaults(func=cmd_audit)
+
     p = sub.add_parser("backup", help="write a timestamped .tar.gz (consistent DB copy + attachments + manifest)")
     p.add_argument("out_dir")
     p.set_defaults(func=cmd_backup)
+
+    p = sub.add_parser("verify-backup", help="verify an archive completely without restoring it (exit 0 = good)")
+    p.add_argument("archive")
+    p.set_defaults(func=cmd_verify_backup)
+
+    p = sub.add_parser("check-config", help="print the effective settings and warnings (exit 1 on errors)")
+    p.set_defaults(func=cmd_check_config)
 
     p = sub.add_parser("restore", help="restore an archive into the configured data directory")
     p.add_argument("archive")
@@ -198,9 +297,12 @@ def main(argv: list[str] | None = None) -> int:
     if getattr(args, "hours", 72) < 1 or getattr(args, "hours", 72) > 720:
         print("--hours must be 1..720", file=sys.stderr)
         return 2
+    if getattr(args, "command", "") == "audit" and not 1 <= args.limit <= 1000:
+        print("--limit must be 1..1000", file=sys.stderr)
+        return 2
     try:
         return args.func(args, _settings())
-    except (BackupError, ConfigError) as exc:
+    except (BackupError, ConfigError, ValidationError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 

@@ -1,0 +1,16 @@
+# OPTIONAL OnFailure hook: posts "<unit> failed" to an ntfy topic that only the administrator subscribes to.
+# Hook it up by uncommenting OnFailure=familychat-notify-failure@%n.service in familychat-verify-backup.service
+# (or familychat-backup.service) and then `sudo systemctl daemon-reload`.
+# Install:  sudo cp familychat-notify-failure@.service /etc/systemd/system/
+#           sudo install -d -m 755 /etc/familychat
+#           echo 'NTFY_ADMIN_URL=https://ntfy.example.org/familychat-admin-CHANGE-ME' | sudo tee /etc/familychat/admin-ntfy.env
+#           sudo chmod 600 /etc/familychat/admin-ntfy.env
+# Use a long, unguessable topic name (a public ntfy topic is readable by anyone who knows its name). The message
+# carries only the unit name and host, never data from FamilyChat. Test: sudo systemctl start familychat-notify-failure@test.service
+[Unit]
+Description=Tell the administrator that %i failed
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/familychat/admin-ntfy.env
+ExecStart=/usr/bin/curl -fsS --max-time 20 -H "Title: FamilyChat: %i failed" -H "Priority: high" -H "Tags: warning" -d "%i failed on %H. Run: journalctl -u %i -n 50" ${NTFY_ADMIN_URL}

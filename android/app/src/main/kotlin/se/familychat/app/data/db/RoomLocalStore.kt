@@ -47,6 +47,11 @@ class RoomLocalStore(
         check(!db.inTransaction()) { "clearAll() cannot run inside a transaction" }
         // Deletes the signal_* and tokens tables too; also checkpoints the WAL and vacuums, so nothing lingers in the file.
         db.clearAllTables()
+        // The search index only marks removed messages as deleted (their tokens stay in its segments until they are merged),
+        // so rebuild it from the now empty `messages` and vacuum: no word of the old conversations stays in the file.
+        val raw = db.openHelper.writableDatabase
+        raw.execSQL("INSERT INTO `message_fts`(`message_fts`) VALUES ('rebuild')")
+        raw.execSQL("VACUUM")
     }
 
     override suspend fun getMeta(key: String): String? = io { dao.meta(key) }
@@ -100,6 +105,8 @@ class RoomLocalStore(
     override suspend fun removeConversation(id: String) = atomic {
         dao.deleteMessagesOf(id)
         dao.deleteOutboxOf(id)
+        dao.deleteDraft(id)
+        dao.deleteSettings(id)
         dao.deleteMembers(id)
         dao.deleteConversation(id)
     }
@@ -109,7 +116,12 @@ class RoomLocalStore(
 
     // --- messages -------------------------------------------------------------------------------------------------
     override suspend fun getMessage(id: String): StoredMessage? = io { dao.message(id)?.toModel() }
-    override suspend fun upsertMessage(message: StoredMessage) = io { dao.putMessage(message.toEntity()) }
+    override suspend fun upsertMessage(message: StoredMessage) = atomic {
+        val isNew = !message.outgoing && !message.deleted && message.systemEvent == null && dao.message(message.id) == null
+        dao.putMessage(message.toEntity())
+        // a new incoming message brings an archived conversation back, unless it is muted
+        if (isNew) dao.unarchiveUnlessMuted(message.conversationId, System.currentTimeMillis())
+    }
 
     override suspend fun updateMessage(id: String, update: (StoredMessage) -> StoredMessage): StoredMessage? = atomic {
         val current = dao.message(id)?.toModel() ?: return@atomic null

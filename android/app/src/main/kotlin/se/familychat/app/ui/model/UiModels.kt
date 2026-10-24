@@ -26,7 +26,27 @@ data class ConversationItemUi(
     val lastActivity: Long?,
     val unread: Int,
     val typing: Boolean = false,
+    /** Unsent composer text; when set the list shows "Utkast: ..." instead of the last message. */
+    val draft: String? = null,
+    /** Pinned conversations stay on top of the list (local setting). */
+    val pinned: Boolean = false,
+    /** Muted: no notification; the unread count is still shown. */
+    val muted: Boolean = false,
+    /** Archived conversations are shown in their own section at the end of the list. */
+    val archived: Boolean = false,
 )
+
+/** The conversation list in two parts: the main list (pinned first) and the archived ones. */
+@Immutable
+data class ConversationSections(val main: List<ConversationItemUi>, val archived: List<ConversationItemUi>) {
+    val archivedUnread: Int get() = archived.sumOf { it.unread }
+}
+
+/** Splits [items] (newest activity first): pinned conversations first, each group keeps its order; archived ones apart. */
+fun arrangeConversations(items: List<ConversationItemUi>): ConversationSections {
+    val (archived, active) = items.partition { it.archived }
+    return ConversationSections(active.sortedByDescending { it.pinned }, archived)
+}
 
 enum class AttachmentKindUi { IMAGE, VIDEO, VOICE, FILE }
 
@@ -96,6 +116,10 @@ data class MessageUi(
     val failed: Boolean,
     val canEdit: Boolean,
     val canDelete: Boolean,
+    /** Who wrote it (user id); consecutive messages of one sender form a run. */
+    val senderId: String = "",
+    /** The sender's display name for screen readers, also in direct conversations; null for own messages. */
+    val speaker: String? = null,
 )
 
 enum class SystemKind {
@@ -115,8 +139,14 @@ sealed interface ChatRow {
         override val key get() = "d$dayStart"
     }
 
-    data class Message(val message: MessageUi, val firstOfRun: Boolean) : ChatRow {
+    /** [firstOfRun] is final only in lists built by [buildChatRows]; paged lists decide it per row (see [isFirstOfRun]). */
+    data class Message(val message: MessageUi, val firstOfRun: Boolean = true) : ChatRow {
         override val key get() = message.id
+    }
+
+    /** "Olästa meddelanden": sits directly above the first message that was unread when the conversation was opened. */
+    data object UnreadDivider : ChatRow {
+        override val key get() = "unread-divider"
     }
 
     data class System(
@@ -145,3 +175,43 @@ data class MemberUi(
 
 @Immutable
 data class UserUi(val id: String, val name: String, val username: String, val avatar: AvatarUi)
+
+/** What the header says about the other members' safety numbers. */
+enum class SafetyState {
+    /** Nothing to show: not everything is verified, and nothing is waiting for a decision. */
+    NONE,
+
+    /** Every device of every other member is verified. */
+    VERIFIED,
+
+    /** An identity change (or a new device next to verified ones) waits for the user's decision. */
+    WARNING,
+}
+
+/** [reviewUserId] is whose safety screen to open for a [SafetyState.WARNING]. */
+@Immutable
+data class SafetyUi(val state: SafetyState = SafetyState.NONE, val reviewUserId: String? = null)
+
+/** What the connection banner says; [HIDDEN] while everything works. */
+enum class ConnectionUi { HIDDEN, CONNECTING, OFFLINE }
+
+/** A search result for display. [senderName] null: own message ("Du" is added by the screen). */
+@Immutable
+data class SearchHitUi(
+    val messageId: String,
+    val conversationId: String,
+    val time: Long,
+    val senderName: String?,
+    val snippet: se.familychat.app.data.Snippet,
+)
+
+/** The results of one conversation (global search groups by conversation, newest hit first). */
+@Immutable
+data class SearchGroupUi(val conversationId: String, val title: String, val avatar: AvatarUi, val hits: List<SearchHitUi>)
+
+/** Groups [hits] (newest first) by conversation; groups are ordered by their newest hit. */
+fun groupSearchHits(hits: List<SearchHitUi>, conversations: Map<String, ConversationItemUi>, unknownTitle: String): List<SearchGroupUi> =
+    hits.groupBy { it.conversationId }.map { (id, list) ->
+        val c = conversations[id]
+        SearchGroupUi(id, c?.title ?: unknownTitle, c?.avatar ?: AvatarUi(unknownTitle), list)
+    }

@@ -62,10 +62,26 @@ Risks of libsignal that we accept and mitigate:
   sender device to be listed under the claimed sender, and the sender to be a member of the conversation.
   Otherwise the message is dropped. So the server cannot move a private message into a group, re-aim an edit, or
   relabel who sent something.
+- **Reactions are bound to their target.** A reaction (`kind: "reaction"`) is sent like a message: encrypted for every
+  device, the emoji inside the encrypted content together with the conversation id, its own id and the
+  `target_message_id`. The server sees who reacted to which message and when (metadata, like any message) but never the
+  emoji. A client applies it only if the decrypted target id equals the outer one and the target message exists in
+  that conversation. Anyone in the conversation may react to any message; the server checks only membership, the
+  target's conversation and that it is a live regular message.
 - **Edits and deletes are authenticated.** Both are sent as encrypted content to every device. A client applies
   them only after decrypting content from the original author that names the target. Envelope-less edit or delete
   events (which only the server could produce) are ignored, so the server cannot wipe or rewrite messages on
   the phones. It can still withhold or drop ciphertext.
+- **Disappearing messages: the server's timer is not trusted.** The conversation's `disappearing_seconds` is
+  plain server state, so a malicious or hacked server (or any member's stolen token in a direct chat) could set it to
+  five minutes and watch phones wipe their history if clients obeyed it. Clients therefore never delete local
+  history because of `disappearing_seconds` or `expires_at`: the timer change travels as encrypted content from the
+  member who made it (authenticated like an edit) and only that content sets the phones' own timers. The server
+  value does one thing: the hourly maintenance job deletes expired **server-side** copies (messages, their
+  ciphertext envelopes, attachment links; unreferenced attachments are collected afterwards), which limits how long
+  undelivered ciphertext and metadata stay on the Pi. Worst case of a manipulated value is that undelivered
+  messages are dropped earlier than intended (the server could withhold them anyway). Allowed values: none or 300 s to
+  one year; `expires_at` is fixed when a message is stored.
 - **Attachments** are encrypted on the phone with Google Tink streaming AEAD (`AES256_GCM_HKDF_4KB`) under a
   fresh random 32-byte key per file, then uploaded. The key, the ciphertext SHA-256, the real MIME type and the
   file name travel only inside the Signal-encrypted message. The server therefore cannot validate MIME types of
@@ -96,6 +112,28 @@ Risks of libsignal that we accept and mitigate:
 - **Safety numbers:** the contact screen shows a 60-digit libsignal fingerprint per contact device (computed over
   device UUIDs). Compare it in person or on a call and mark it verified.
 
+## Links and drafts
+
+- Links in messages are recognised only for `http`, `https`, `mailto` and `tel`. Nothing is fetched or
+  previewed: link previews would make the phone contact a site before the user decided to.
+- Tapping a link opens a confirmation dialog showing the full address and the host it leads to. It warns when the
+  address hides something (user info before the host, non-ASCII or punycode host). Only after confirmation does
+  the system open it; a phone number only opens the dialer.
+- Unsent drafts are stored in the SQLCipher database. They are removed on send, when the conversation is
+  removed, and on logout.
+
+## Search, notifications and app lock
+
+- **Search index:** message search uses an FTS4 index of the decrypted text inside the SQLCipher database. It is
+  wiped on logout (`rebuild` and `VACUUM`), so no tokens remain after sign-out.
+- **Notification content:** configurable as "Namn och meddelande", "Endast namn" or "Ingen information". The
+  lock-screen (public) version of a notification never shows message text.
+- **Inline reply:** sent through the normal outbox. Its broadcast receiver is not exported, and its PendingIntent
+  is the only mutable one (explicit component). The reply action is hidden when notifications show
+  "Ingen information" and while the app lock is on.
+- **App lock and screenshot blocking** (`FLAG_SECURE`) are UI gates only. The database key does not depend on the
+  lock, so they protect against someone holding the unlocked phone, not against a forensic attacker.
+
 ## Keys on the phone
 
 - The local Room database (messages, contacts and the libsignal session/identity/prekey stores) is encrypted
@@ -123,7 +161,9 @@ Risks of libsignal that we accept and mitigate:
 
 ## Server security
 
-- Accounts only via single-use, expiring invitation codes (stored as SHA-256 hashes). No phone numbers.
+- Accounts only via expiring invitation codes (stored as SHA-256 hashes), single use unless an administrator
+  sets `max_uses` (2..20; never for administrator invitations); the use counter is claimed with one atomic
+  `UPDATE ... WHERE uses < max_uses`, so concurrent redemptions cannot exceed it. No phone numbers.
 - Passwords hashed with Argon2id (argon2-cffi defaults: t=3, m=64 MiB, p=4; tuned for a Pi 4). At most two
   hashes/verifications run at once (memory cap) and none ever runs inside a database transaction, so a flood of
   logins cannot hold the SQLite write lock or exhaust RAM; the account state is re-checked in the write
@@ -140,7 +180,11 @@ Risks of libsignal that we accept and mitigate:
   `429 rate_limited` until the oldest failures age out. Unknown usernames are counted and answered identically,
   so the lock cannot be used to enumerate accounts. Trade-off: someone who knows a username can keep new logins
   to that account blocked (for up to an hour per 10 attempts); devices that are already signed in keep working,
-  because refreshing and API calls are not logins.
+  because refreshing and API calls are not logins. The counters are in memory for speed, but every *failure* is
+  also written to `login_failures` (an HMAC of the username keyed with the server secret, plus a timestamp: unknown
+  names are not stored) and replayed at startup, so restarting the server does not hand a guesser a fresh
+  budget. Nothing is written for successful logins or other requests; rows older than a day are pruned. (Without a
+  fixed `FAMILYCHAT_SECRET_KEY`, i.e. development, the key changes per start and the replay finds nothing.)
 - **Prekey draining:** `GET /keys/{user}` is limited per caller *user* (120/min), and each caller user gets only
   10 bundles per target device and hour that include a one-time prekey. Beyond that the bundle still contains the
   signed prekey and the last-resort Kyber key but no one-time keys, and none are deleted, so a (logged-in) user
@@ -160,10 +204,70 @@ Risks of libsignal that we accept and mitigate:
   redacted by a logging filter on uvicorn's loggers; the Authorization header is preferred. Request logs never
   contain query strings.
 - Every conversation, message and attachment route checks membership; non-members get `404`.
+- **Suspension, roles, self-deletion.** An administrator can suspend an account (`POST /admin/users/{id}/suspend`):
+  the session check in front of every route answers `403 account_suspended`, login (after the password was
+  verified, so usernames are not revealed), refresh and password reset codes are refused, open sockets are
+  closed. Nothing is deleted: memberships, devices and sessions stay, so unsuspending restores the account and
+  senders keep encrypting for its devices. Promoting and demoting (`PATCH /admin/users/{id}`) refuses to leave
+  the server without an **active** administrator (not removed, not suspended), the caller included; the check
+  runs inside the serialised write transaction, so two administrators cannot demote each other at once. Users
+  can delete their own account (`DELETE /users/me`) after re-entering the password (rate limited, failures
+  audited); a stolen unlocked phone with a valid session therefore cannot erase the account without the password.
+  The effect is that of an administrator's removal, plus the avatar being unlinked and the account's
+  unreferenced attachments being garbage-collected at the next hourly run.
+- **Metrics:** `GET /metrics` exposes counts and histograms by route template and status, gauges for sockets,
+  queues, database size and free disk, and nothing per user (no ids, names or addresses in labels). It answers
+  only a request that comes from this machine without being forwarded by a proxy (so Caddy or `tailscale serve`,
+  which forward remote clients from `127.0.0.1` with `X-Forwarded-For`, do not open it) or an administrator's
+  bearer token; everybody else gets `404`, as if it did not exist.
+- **Resumable uploads:** a session reserves quota for its full size when it starts, belongs to its creator
+  (everyone else gets `404`), expires after 24 hours and is deleted with its temp file by the hourly job. Temp files
+  are named by the server-generated session id only, live under `attachments/.tmp/uploads/`, are created `0600`
+  and are excluded from backups. Chunks are limited to 8 MiB, offsets are checked, an interrupted chunk is cut off
+  again, and the optional sha256 is verified over the whole file before it becomes an attachment.
+- **Audit log:** the table `audit_events` records who did what to whom and from which address (`at`, actor,
+  `action`, target user, target id, `ip`, small `details`). Actions: `invitation_created`, `invitation_revoked`,
+  `invitation_redeemed` (once per use of a multi-use code, with the new user as target and `details.use`/`max_uses`),
+  `admin_granted` (`via` = `invitation` or `admin`) and `admin_revoked` (role changes through `PATCH /admin/users/{id}`),
+  `user_suspended`, `user_unsuspended`, `login_blocked` (right password, suspended account), `self_delete_failed`,
+  `presence_setting_changed` (`share_presence` true/false), `login_success`, `login_failure`, `password_changed`, `refresh_token_reuse`,
+  `device_revoked` (`details.by`: `self`, `admin` or `logout`), `user_removed` (API or CLI; `details.via` = `self` for self-deletion), `password_reset_issued`
+  (`details.via`: `admin` or `cli`) and `password_reset_used` (`details.revoked_devices`). It is written in the
+  same transaction as the action; failed logins commit on their own. **Never stored:** passwords, invitation codes,
+  tokens or token hashes; for a failed login on a username that does not exist the log says only `unknown user`
+  (the name that was typed is not kept), for an existing account it records the account. Only administrators can
+  read it (`GET /admin/audit`, or `python -m app.cli audit` on the server). Rows older than
+  `FAMILYCHAT_AUDIT_RETENTION_DAYS` (default 180) are deleted by the hourly maintenance job. The log lives in the
+  server's database: whoever controls the server can alter it, so it is a record for the family, not tamper-proof
+  evidence.
+- **Password reset by an administrator:** the administrator (API) or whoever has the server shell (CLI) gets a
+  single-use code, valid 24 hours, stored as a SHA-256 hash (in its own hash domain, so an invitation code is
+  not a reset code), which they pass to the user. Redeeming it sets the new password and **ends everything that was
+  signed in**: all sessions and devices of the account are revoked, their keys and queued ciphertext deleted, their
+  sockets closed, and a new device with new keys is created for the person resetting. This is deliberately as
+  disruptive as a lost phone: whoever knows the code (including an administrator who intercepts it) gets an
+  account that can log in but **cannot read any past message**, and every contact sees "new device" for this
+  person and, where devices were verified, has to approve it. The code is rate limited like invitation redemption
+  and never appears in the audit log or the logs; both events are audited. An administrator cannot read the user's
+  old messages this way, but can impersonate the user from then on, which contacts can only notice through that
+  new-device notice.
+- **Request IDs:** every request gets an `X-Request-ID` (a client value is used only if it matches
+  `^[A-Za-z0-9._-]{8,64}$`, so it cannot inject log lines or grow without bound). It appears in the response, in
+  every JSON log line of that request and in error bodies, and carries no personal data.
+- **Retention:** the hourly maintenance job deletes message envelopes (the ciphertext copies) that were delivered
+  more than `FAMILYCHAT_ENVELOPE_RETENTION_DAYS` (default 30) days ago; once a device has fetched its copy the
+  server has no use for it. Undelivered envelopes of active devices are kept for as long as the device is
+  active, and revoking a device deletes its queued ones at once. Expired sessions, invitations
+  and password reset codes are pruned as before, expired disappearing messages are deleted (see above) and avatars
+  that no user or conversation uses any more are removed after 24 hours.
 - Attachments are stored under random UUID names outside any web root; client file names are never used on
   disk. Uploads are streamed with size limits and quotas; avatars are type-checked by magic bytes. The stored path
   of an attachment is validated (`xx/<uuid>` of that attachment, resolved inside the attachments directory) before
   every read, delete and on restore, so a tampered database cannot make the server read or delete other files.
+- `python -m app.cli verify-backup <archive>` checks a backup completely without restoring it (entry names,
+  manifest, checksums, SQLite integrity check on a temporary copy, attachment paths); `check-config` prints the
+  effective non-secret settings and warns about risky ones (production without a push allow-list, an unset or short
+  secret, public API docs, trusted proxies missing behind a proxy, low disk).
 - The JWT secret comes from the environment (`FAMILYCHAT_SECRET_KEY`, at least 32 bytes); the server refuses
   to start in production without it. Nothing secret is committed.
 - Push notifications (UnifiedPush) carry no content at all — only "something new, please sync". The server
@@ -175,6 +279,24 @@ Risks of libsignal that we accept and mitigate:
   The containers run with `no-new-privileges`, all Linux capabilities dropped (Caddy keeps only
   `NET_BIND_SERVICE`) and, for the backend, a read-only root filesystem; the Caddy and ntfy images are pinned to
   versions.
+
+## Presence (online / last seen)
+
+Presence is **opt-in and off by default** (`PATCH /users/me/settings {"share_presence": true}`), and the server
+enforces it: for a user who has not opted in nothing is recorded (no `presence_last_seen_at`), no WebSocket
+frame about them is ever sent, and `GET /users` returns `online: null, last_seen_at: null` for them. A device's
+`last_seen_at` is presence too, so `GET /users/{id}/devices` shows other people the device's creation time instead
+unless the owner opted in. Switching sharing off deletes the stored time and, if contacts had been told something,
+sends them one frame saying "unknown" (`online: false, last_seen_at: null`, indistinguishable from a user who never
+shared). Administrators still see each account's real last activity in `GET /admin/users` (operational data,
+as before).
+
+Trade-offs to be honest about: whoever opts in tells every user who shares a conversation with them (frames) and
+in fact **every account on the server** (`GET /users` lists all users) when they connect and disconnect, which
+reveals daily rhythms and whether a message is likely to be read soon. The debounce (10 s) only limits noise, it
+does not hide anything. Presence follows the WebSocket, which the app keeps open only while it is in the
+foreground. Contacts cannot opt out of *seeing* it except by ignoring the field, and the setting is per user, not
+per contact. If that is too much for your family, simply leave it off: the default sends nothing.
 
 ## Backups and encryption
 

@@ -52,6 +52,45 @@ The result is `app/build/outputs/apk/release/app-release.apk` (about 30 MB, arm6
 `-Pfamilychat.*` properties the release APK is signed with the debug key: fine to check that minification works, not
 something to hand to other people. You can also put the properties in `~/.gradle/gradle.properties`.
 
+`make apk` and `make apk-release` (in `familychat/`) wrap these commands; `make apk-release` signs when you pass
+`KEYSTORE=... KEYSTORE_PASSWORD=... KEY_ALIAS=... KEY_PASSWORD=...`.
+
+### Releases on GitHub (signed APK from CI)
+
+Pushing a tag that starts with `familychat-v` runs `.github/workflows/familychat-release.yml`. It builds the release
+APK, signs it with your key, and creates a GitHub release with `familychat-<version>.apk` and a `.sha256` file:
+
+```bash
+git tag familychat-v1.0.0 && git push origin familychat-v1.0.0
+```
+
+One-time setup. Create the keystore as above (once; keep it and its passwords outside the repository and in a password
+manager, because every future update must be signed with the same key), then store it as repository secrets
+(*Settings, Secrets and variables, Actions*; or with the `gh` CLI):
+
+```bash
+base64 -w0 ~/familychat-release.jks | gh secret set FAMILYCHAT_KEYSTORE_BASE64     # macOS: base64 -i file | tr -d '\n'
+gh secret set FAMILYCHAT_KEYSTORE_PASSWORD
+gh secret set FAMILYCHAT_KEY_ALIAS            # familychat, the -alias used with keytool
+gh secret set FAMILYCHAT_KEY_PASSWORD
+```
+
+The workflow writes the keystore to a temporary file on the runner and passes it as `-Pfamilychat.keystore`,
+`-Pfamilychat.keystorePassword`, `-Pfamilychat.keyAlias` and `-Pfamilychat.keyPassword` (the properties
+`app/build.gradle.kts` reads). If any of the four secrets is missing, the workflow still runs but signs with the public
+debug key, names the file `familychat-<version>-DEBUG-SIGNED.apk` and marks the release as a pre-release: that file is
+only for checking the pipeline. Check a download with `sha256sum -c familychat-<version>.apk.sha256`, and the signing
+key with `apksigner verify --print-certs`. The GitHub release is public if the repository is public: see the note in
+section 2 about the AGPL and who may get the APK. Use a private repository, or delete the release and hand out the
+artifact yourself, if the family's app should not be downloadable by everybody.
+
+The tag does not set the app's version: raise `versionCode` and `versionName` in `app/build.gradle.kts` before tagging.
+
+Continuous integration (`familychat-android.yml`) builds, tests and lints on every push or pull request touching
+`familychat/android/` or `familychat/backend/`, runs `scripts/run-e2e.sh`, and uploads the debug APK and the test
+reports as artifacts. It needs no `local.properties`: the Android SDK location comes from `ANDROID_HOME`, which
+`android-actions/setup-android` sets. Locally, `ANDROID_HOME` (or `ANDROID_SDK_ROOT`) works the same instead of `local.properties`.
+
 ### Run the tests
 
 ```bash
@@ -60,7 +99,11 @@ something to hand to other people. You can also put the properties in `~/.gradle
 ```
 
 `:app` tests run on the JVM with Robolectric (no phone or emulator needed). The first run downloads Robolectric's
-Android jar. The screenshot tests write PNGs to `app/screenshots/` (light and dark, Swedish and English).
+Android jar. The screenshot tests write PNGs to `app/screenshots/` (light and dark, Swedish and English; also the
+conversation with the unread divider and jump-to-bottom button, the connection banner, drafts in the list, the
+verified header, the list with pinned, muted and archived conversations, the privacy and security section of the settings,
+the search and the lock screen). They are a review aid: look at them after a UI change. The paging test fills a database with 10,000
+messages and checks pages, order and timing of the message list.
 SQLCipher itself cannot be loaded on a PC (its native library is built for Android), so the database tests use plain
 SQLite through the same Room code; the encryption layer has to be checked on a phone (section 8).
 
@@ -73,6 +116,14 @@ adb install -r app/build/outputs/apk/release/app-release.apk
 ```
 
 `-r` updates an existing install and keeps its data.
+
+**Updating a phone that already has the app:** install the new APK over the old one (same signing key) and do not
+uninstall first: uninstalling deletes the keys and the whole local history (see section 7). The app's local database
+carries a schema version and upgrades itself on the first start of the new build, with a tested migration, without
+losing messages, keys or sessions. Version 2 added the table for unsent drafts; version 3 (app 0.2.0) added the full-text search index of the messages (built from the existing messages during the upgrade) and the local pin/mute/archive settings; the history is in
+`AppDatabase.MIGRATIONS` and `app/schemas/`. Whoever raises `AppDatabase.VERSION` must add a `Migration` and a case in
+`MigrationTest` in the same change (a build that cannot open the old file would otherwise leave the phone without its
+data).
 
 **Without a computer (sideloading):** send `app-release.apk` to the phone by a way you trust (a cable and file copy,
 your own Nextcloud, ...). Open it in the file manager. Android asks to allow *Install unknown apps* for that file
@@ -191,3 +242,21 @@ the notification arrives (ntfy) and that the conversation opens with the message
 | Messages appear only when the app is opened | Section 4: distributor chosen? battery optimisation off for ntfy and FamilyChat? |
 | "Det gick inte att avkryptera meddelandet" | The message was sent to a device that did not exist yet, or its key changed. Tap *Granska* if shown; otherwise ask the sender to send it again |
 | Red warning "Säkerhetsnumret … har ändrats" | Compare the number with the person (section 6) before accepting |
+
+## App 0.2.0: search, privacy, lock, pin/mute/archive (what to know when testing on a phone)
+
+- **Search** (magnifier in the conversation list: all conversations, results grouped by conversation; magnifier in a
+  conversation: only that one). The index is an FTS4 table inside the encrypted database; nothing leaves the phone.
+  Words match by their beginning, all words must occur, `å`/`ä`/`ö` are not folded to `a`/`o`.
+- **Settings > Integritet och säkerhet**: notification content (*Namn och meddelande* / *Endast namn* / *Ingen information*),
+  block screenshots (FLAG_SECURE, default off, immediate), app lock with a timeout (immediately, 1, 5, 30 minutes).
+  The app lock needs a screen lock or biometrics on the phone (BIOMETRIC_STRONG or screen lock on Android 11+; on Android
+  9 and 10 a weak-or-better biometric or the screen lock; on Android 8 the screen lock). Turning it on or off asks for the
+  authentication first. While the app is locked the window is secure and nothing of the app is drawn behind the lock
+  screen. Pickers and share sheets the app starts itself do not count as leaving the app (2 minutes of grace).
+- **Inline reply** in the notification goes through the normal outbox. It is not offered when notification content is
+  *Ingen information* (nobody is named, so a reply could go to the wrong person) or while the app lock is on (a reply would
+  send without the unlock). Replying always needs the phone to be unlocked.
+- **Pin / mute / archive**: long-press a conversation. Up to 5 pinned; mute for 1 hour, 8 hours, 1 week or always (no
+  notification, unread count kept); archived conversations sit under *Arkiverade* and come back on a new message unless muted.
+  All local to the phone, not synced between devices.

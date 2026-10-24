@@ -163,7 +163,8 @@ def test_lockout_is_identical_for_unknown_usernames(make_app):
             assert bad_login(client, name).status_code == 401, (name, i)
         clock.t += 61
         r = bad_login(client, name)
-        seen[name] = (r.status_code, r.json(), set(r.headers) & {"retry-after"})
+        body = {k: v for k, v in r.json().items() if k != "request_id"}  # differs per request by design
+        seen[name] = (r.status_code, body, set(r.headers) & {"retry-after"})
     assert seen["alice"][0] == seen["ghost"][0] == 429
     assert seen["alice"][1] == seen["ghost"][1]
     assert seen["alice"][2] == seen["ghost"][2] == {"retry-after"}
