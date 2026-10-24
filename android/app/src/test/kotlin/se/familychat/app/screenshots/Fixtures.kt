@@ -80,6 +80,37 @@ object Fixtures {
         ConversationItemUi("d6", "Mormor", false, AvatarUi("Mormor"), PreviewKind.TEXT, "", null, false, DeliveryUi.NONE, at(2, 3, 10, 0), 0, typing = true),
     )
 
+    /** The same list with a pinned, a muted and some archived conversations (one archived conversation is muted). */
+    val conversationItemsOrganised: List<ConversationItemUi> = conversationItems.map {
+        when (it.id) {
+            "d2" -> it.copy(pinned = true)
+            "d1" -> it.copy(muted = true)
+            "g2" -> it.copy(archived = true, unread = 2, muted = true)
+            "d5", "d6" -> it.copy(archived = true)
+            "g1" -> it.copy(pinned = true)
+            else -> it
+        }
+    }
+
+    // --- search -----------------------------------------------------------------------------------------------------------
+
+    private fun hit(id: String, conversation: String, time: Long, sender: String?, text: String, terms: String) =
+        se.familychat.app.ui.model.SearchHitUi(id, conversation, time, sender, se.familychat.app.data.Snippets.of(text, se.familychat.app.data.SearchQuery.terms(terms)))
+
+    val searchGroups = listOf(
+        se.familychat.app.ui.model.SearchGroupUi(
+            "g1", "Familjen Ek", AvatarUi("Familjen Ek"),
+            listOf(
+                hit("s1", "g1", at(10, 24, 15, 58), "Cecilia Ek", "Vi grillar på lördag, vem kommer? Jag tar med middag till alla och bakar en kaka", "middag"),
+                hit("s2", "g1", at(10, 21, 18, 2), null, "Kan någon ta med kolsyra till middagen på söndag?", "middag"),
+            ),
+        ),
+        se.familychat.app.ui.model.SearchGroupUi(
+            "d2", "Cecilia Ek", cia.avatar,
+            listOf(hit("s3", "d2", at(9, 30, 20, 11), "Cecilia Ek", "Middag hos oss på fredag, passar det?", "middag")),
+        ),
+    )
+
     // --- conversation ---------------------------------------------------------------------------------------------------
 
     private fun msg(

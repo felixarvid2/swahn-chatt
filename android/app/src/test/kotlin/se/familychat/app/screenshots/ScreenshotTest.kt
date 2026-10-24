@@ -51,6 +51,9 @@ import se.familychat.app.ui.screens.PendingKeyUi
 import se.familychat.app.ui.screens.RecordingUi
 import se.familychat.app.ui.screens.ServerSettingsContent
 import se.familychat.app.ui.screens.ServerSettingsUiState
+import se.familychat.app.ui.screens.LockContent
+import se.familychat.app.ui.screens.SearchContent
+import se.familychat.app.ui.screens.SearchUiState
 import se.familychat.app.ui.screens.SettingsCallbacks
 import se.familychat.app.ui.screens.SettingsContent
 import se.familychat.app.ui.screens.SettingsUiState
@@ -202,10 +205,43 @@ class ScreenshotTest {
             ),
         ),
         pushStatus = Fixtures.pushActive, distributors = Fixtures.distributors, selectedDistributor = "io.heckel.ntfy",
-        theme = ThemeMode.SYSTEM, versionName = "0.1.0",
+        theme = ThemeMode.SYSTEM, versionName = "0.2.0",
+        notificationPrivacy = se.familychat.app.data.NotificationPrivacy.NAME_ONLY, blockScreenshots = true, appLockEnabled = true,
+        lockTimeout = se.familychat.app.data.LockTimeout.MINUTES_5,
     )
     @Test fun settingsLight() = shot("12_settings", false) { SettingsContent(settings, SettingsCallbacks()) }
     @Test fun settingsDark() = shot("12_settings", true) { SettingsContent(settings, SettingsCallbacks()) }
+
+    // the privacy section sits far down: a tall window shows the whole page
+    @Test fun settingsPrivacyLight() {
+        RuntimeEnvironment.setQualifiers("sv-w360dp-h1500dp-xhdpi")
+        shot("12b_settings_privacy", false) { SettingsContent(settings, SettingsCallbacks()) }
+    }
+    @Test fun settingsPrivacyDark() {
+        RuntimeEnvironment.setQualifiers("sv-w360dp-h1500dp-xhdpi")
+        shot("12b_settings_privacy", true) { SettingsContent(settings, SettingsCallbacks()) }
+    }
+
+    @Test fun conversationsOrganisedLight() = shot("1c_conversations_pinned_muted_archived", false) {
+        ConversationsContent(Fixtures.conversationItemsOrganised, false, {}, {}, {}, {}, archivedExpanded = true)
+    }
+    @Test fun conversationsOrganisedDark() = shot("1c_conversations_pinned_muted_archived", true) {
+        ConversationsContent(Fixtures.conversationItemsOrganised, false, {}, {}, {}, {}, archivedExpanded = true)
+    }
+    @Test fun conversationsOrganisedCollapsedLight() = shot("1d_conversations_archived_collapsed", false) {
+        ConversationsContent(Fixtures.conversationItemsOrganised, false, {}, {}, {}, {})
+    }
+
+    private val searchAll = SearchUiState(query = "middag", searched = true, groups = Fixtures.searchGroups)
+    @Test fun searchLight() = shot("16_search", false) { SearchContent(searchAll, {}, {}, { _, _ -> }, autoFocus = false) }
+    @Test fun searchDark() = shot("16_search", true) { SearchContent(searchAll, {}, {}, { _, _ -> }, autoFocus = false) }
+
+    private val searchIn = SearchUiState(query = "middag", conversationId = "g1", conversationTitle = "Familjen Ek", searched = true, groups = Fixtures.searchGroups.take(1))
+    @Test fun searchInConversationLight() = shot("16b_search_in_conversation", false) { SearchContent(searchIn, {}, {}, { _, _ -> }, autoFocus = false) }
+    @Test fun searchEmptyLight() = shot("16c_search_no_results", false) { SearchContent(SearchUiState(query = "xyz", searched = true), {}, {}, { _, _ -> }, autoFocus = false) }
+
+    @Test fun lockLight() = shot("17_lock", false) { LockContent(onUnlock = {}) }
+    @Test fun lockDark() = shot("17_lock", true) { LockContent(onUnlock = {}) }
 
     private val digits = listOf("37912", "61880", "03483", "41262", "93841", "20197", "58214", "67330", "11925", "48660", "07351", "82594")
     private val newDigits = listOf("92014", "33871", "56620", "10473", "78195", "04418", "62907", "35582", "81146", "27730", "94061", "50329")
