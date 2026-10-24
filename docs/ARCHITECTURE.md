@@ -95,7 +95,7 @@ Client data flow:
 ### App internals (`:app`)
 
 - **Storage.** One Room database, encrypted with SQLCipher, holds `LocalStore` (messages, conversations, outbox, cursor),
-  `ProtocolStorage` (libsignal identity, prekeys, sessions, pinned remote identities) and the tokens. The passphrase is
+  `ProtocolStorage` (libsignal identity, prekeys, sessions, pinned remote identities, all keyed by device UUID) and the tokens. The passphrase is
   32 random bytes, wrapped by a non-exportable AES-256-GCM key in the Android Keystore (StrongBox where available); the
   wrapped blob lives in `noBackupFilesDir`. The database is opened lazily on a background thread.
 - **Atomic decrypt-and-store.** libsignal advances its ratchet while decrypting; `SyncProcessor` therefore decrypts and

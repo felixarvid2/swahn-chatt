@@ -26,7 +26,8 @@ E2EE is on from the first build, and the server rejects nothing but also underst
 
 - **On a phone:** SQLCipher native loading, Android Keystore wrapping, R8 keep rules at runtime, UnifiedPush
   delivery with the app killed and the device in Doze, WorkManager timing, notifications, the microphone and
-  camera flows, and the photo picker. Robolectric tests use plain SQLite. Do the first-phone check at the end of
+  camera flows, and the photo picker. The Keystore error handling (lost key vs. temporary error) is only tested against a
+  software wrapper. Robolectric tests use plain SQLite. Do the first-phone check at the end of
   `docs/ANDROID_SETUP.md` §8 first.
 - **ARM64 Docker image:** not built (this build machine has no binfmt/QEMU). All 33 pinned Python packages
   resolve as aarch64 cp312 wheels and the base image is multi-arch, but run `docker compose build` on the Pi and
