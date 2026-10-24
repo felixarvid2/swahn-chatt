@@ -1,0 +1,77 @@
+"""In-memory WebSocket registry (one process, so no broker). The socket is only a hint: events live in the DB."""
+
+import asyncio
+import logging
+import threading
+from dataclasses import dataclass, field
+
+log = logging.getLogger("familychat.hub")
+
+
+@dataclass(eq=False)
+class Connection:
+    device_id: str
+    user_id: str
+    queue: asyncio.Queue = field(default_factory=asyncio.Queue)
+    closed: asyncio.Event = field(default_factory=asyncio.Event)
+    close_code: int = 1000
+
+
+class Hub:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._by_device: dict[str, set[Connection]] = {}
+        self._loop: asyncio.AbstractEventLoop | None = None
+
+    # --- called on the event loop ---
+    def register(self, conn: Connection) -> None:
+        self._loop = asyncio.get_running_loop()
+        with self._lock:
+            self._by_device.setdefault(conn.device_id, set()).add(conn)
+
+    def unregister(self, conn: Connection) -> None:
+        with self._lock:
+            conns = self._by_device.get(conn.device_id)
+            if conns:
+                conns.discard(conn)
+                if not conns:
+                    del self._by_device[conn.device_id]
+
+    # --- thread safe ---
+    def is_connected(self, device_id: str) -> bool:
+        with self._lock:
+            return bool(self._by_device.get(device_id))
+
+    def connected_count(self) -> int:
+        with self._lock:
+            return sum(len(c) for c in self._by_device.values())
+
+    def _connections(self, device_id: str) -> list[Connection]:
+        with self._lock:
+            return list(self._by_device.get(device_id, ()))
+
+    def send(self, device_id: str, message: dict) -> bool:
+        conns = self._connections(device_id)
+        loop = self._loop
+        if not conns or loop is None:
+            return False
+        for conn in conns:
+            try:
+                loop.call_soon_threadsafe(conn.queue.put_nowait, message)
+            except RuntimeError:  # loop closed
+                return False
+        return True
+
+    def kick(self, device_id: str, code: int = 4401) -> None:
+        loop = self._loop
+        for conn in self._connections(device_id):
+            conn.close_code = code
+            if loop is not None:
+                try:
+                    loop.call_soon_threadsafe(conn.closed.set)
+                except RuntimeError:
+                    pass
+
+    def user_devices_connected(self, user_ids: set[str]) -> list[Connection]:
+        with self._lock:
+            return [c for conns in self._by_device.values() for c in conns if c.user_id in user_ids]

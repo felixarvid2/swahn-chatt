@@ -1,0 +1,14 @@
+# Install:  sudo cp familychat-backup.{service,timer} /etc/systemd/system/
+#           (edit User=, WorkingDirectory= and the paths first)
+#           sudo systemctl daemon-reload && sudo systemctl enable --now familychat-backup.timer
+[Unit]
+Description=FamilyChat nightly backup
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+User=pi
+WorkingDirectory=/home/pi/familychat/deployment
+Environment=KEEP=14
+ExecStart=/home/pi/familychat/deployment/backup.sh /home/pi/familychat-backups

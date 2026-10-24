@@ -1,0 +1,39 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# Local data and secrets
+data/
+data-dev/
+backend/data*/
+*.db
+*.db-wal
+*.db-shm
+.env
+.env.*
+!.env.example
+deployment/backups/
+
+# Build outputs
+build/
+dist/
+out/
+
+# Android
+android/.gradle/
+android/**/build/
+.gradle/
+local.properties
+*.apk
+*.aab
+*.jks
+*.keystore
+.idea/
+*.iml
+.cxx/
+captures/

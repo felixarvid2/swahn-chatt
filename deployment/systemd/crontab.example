@@ -1,0 +1,2 @@
+# Alternative to the systemd timer: `crontab -e` as the user that runs docker.
+15 3 * * * KEEP=14 /home/pi/familychat/deployment/backup.sh /home/pi/familychat-backups >> /home/pi/familychat-backups/backup.log 2>&1

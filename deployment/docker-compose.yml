@@ -1,0 +1,89 @@
+# FamilyChat on a Raspberry Pi (or any Docker host).
+#   cp .env.example .env && edit .env       # at least FAMILYCHAT_SECRET_KEY
+#   docker compose up -d --build            # backend only, listens on 127.0.0.1:8000
+#   docker compose --profile caddy up -d    # + public HTTPS reverse proxy (ports 80/443)
+#   docker compose --profile ntfy up -d     # + self-hosted UnifiedPush server (ntfy)
+# See ../docs/RASPBERRY_PI_SETUP.md.
+name: familychat
+
+services:
+  backend:
+    build:
+      context: ../backend
+    image: familychat-backend:latest
+    env_file: .env
+    volumes:
+      - familychat-data:/data
+    ports:
+      # Never publish this on 0.0.0.0: it is plain HTTP. Tailscale or Caddy reach it on the host/network.
+      - "127.0.0.1:8000:8000"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  caddy:
+    profiles: ["caddy"]
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      FAMILYCHAT_DOMAIN: ${FAMILYCHAT_DOMAIN:-localhost}
+      NTFY_DOMAIN: ${NTFY_DOMAIN:-ntfy.localhost}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data       # certificates: keep this volume, Let's Encrypt rate-limits re-issuing
+      - caddy-config:/config
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  ntfy:
+    profiles: ["ntfy"]
+    image: binwiederhier/ntfy
+    command: ["serve"]
+    restart: unless-stopped
+    environment:
+      NTFY_BASE_URL: ${NTFY_BASE_URL:-http://localhost}
+      NTFY_BEHIND_PROXY: "true"
+      NTFY_CACHE_FILE: /var/cache/ntfy/cache.db
+      NTFY_CACHE_DURATION: 12h
+      NTFY_ATTACHMENT_CACHE_DIR: ""
+      NTFY_LISTEN_HTTP: ":80"
+    volumes:
+      - ntfy-cache:/var/cache/ntfy
+    ports:
+      # For `tailscale serve --https=8443 http://127.0.0.1:2586`; with the caddy profile Caddy reaches it as ntfy:80.
+      - "127.0.0.1:2586:80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:80/v1/health || exit 1"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+volumes:
+  familychat-data:
+  caddy-data:
+  caddy-config:
+  ntfy-cache:
