@@ -139,3 +139,19 @@ def test_http_endpoint_skipped_in_production_mode_even_if_stored(make_app):
     f.direct(b, a)
     app.state.push.flush()
     assert app.state.pushes == []
+
+
+def test_push_allowed_hosts_restricts_endpoints(make_app):
+    app, client = make_app(push_allowed_hosts="ntfy.example.org, push.family.ts.net")
+    a = Factory(app, client).user("alice")
+    assert a.put("/devices/me/push", {"kind": "unifiedpush", "endpoint": ENDPOINT}).status_code == 204
+    assert (
+        a.put("/devices/me/push", {"kind": "unifiedpush", "endpoint": "https://PUSH.family.ts.net/up"}).status_code
+        == 204
+    )
+    assert (
+        a.put("/devices/me/push", {"kind": "unifiedpush", "endpoint": "https://169.254.169.254/x"}).status_code == 422
+    )
+    assert (
+        a.put("/devices/me/push", {"kind": "unifiedpush", "endpoint": "https://evil.example.com/up"}).status_code == 422
+    )

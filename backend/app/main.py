@@ -31,7 +31,7 @@ from app.routers import (
 )
 from app.services.events import Dispatcher
 from app.services.maintenance import prune
-from app.services.push import PushService
+from app.services.push import PushService, parse_hosts
 
 log = logging.getLogger("familychat")
 
@@ -81,7 +81,12 @@ def create_app(settings: Settings | None = None, push_transport=None) -> FastAPI
     limiter = RateLimiter(enabled=settings.rate_limit_enabled)
     info: dict = {}
     session_factory = make_session_factory(engine, info)
-    push = PushService(session_factory, allow_http=settings.push_allow_http, transport=push_transport)
+    push = PushService(
+        session_factory,
+        allow_http=settings.push_allow_http,
+        allowed_hosts=parse_hosts(settings.push_allowed_hosts),
+        transport=push_transport,
+    )
     info["dispatcher"] = Dispatcher(hub, push)
 
     @asynccontextmanager

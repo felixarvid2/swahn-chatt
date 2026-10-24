@@ -7,7 +7,7 @@ from app.errors import invalid, not_found
 from app.models import Device
 from app.schemas import DeviceOut, PushRegistration
 from app.services import accounts
-from app.services.push import endpoint_allowed
+from app.services.push import endpoint_allowed, parse_hosts
 from app.services.views import device_out_db
 
 router = APIRouter(prefix="/devices", tags=["devices"])
@@ -25,8 +25,8 @@ def set_push(
     settings: Settings = Depends(get_settings_dep),
     db: Session = Depends(get_db),
 ):
-    if not endpoint_allowed(body.endpoint, settings.push_allow_http):
-        raise invalid("endpoint must be an https URL")
+    if not endpoint_allowed(body.endpoint, settings.push_allow_http, parse_hosts(settings.push_allowed_hosts)):
+        raise invalid("endpoint must be an https URL on an allowed push host")
     device = db.get(Device, p.device_id)
     device.push_kind = body.kind
     device.push_endpoint = body.endpoint

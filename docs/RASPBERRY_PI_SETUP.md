@@ -153,6 +153,9 @@ Without push the app only syncs when it is open or every 15 minutes. With push t
    UnifiedPush distributor; the app registers its endpoint (`https://.../up…`) with `PUT /devices/me/push`.
 4. The backend only sends to `https` endpoints (`FAMILYCHAT_PUSH_ALLOW_HTTP=false`), with a 5 second timeout, and
    never blocks a request on it. Failures are logged without the endpoint URL.
+5. Set `FAMILYCHAT_PUSH_ALLOWED_HOSTS` in `.env` to the host name of your ntfy server (for example
+   `pi.tailnet-name.ts.net`). Then the server refuses push endpoints on any other host, so it cannot be abused
+   to send requests to arbitrary URLs.
 
 The backend container must be able to resolve and reach the host in the registered endpoint. With public DNS
 (Caddy option) this just works. With a `*.ts.net` name the container has to resolve MagicDNS through the host; if

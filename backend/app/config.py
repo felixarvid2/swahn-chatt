@@ -32,6 +32,8 @@ class Settings(BaseSettings):
     # Comma separated CIDRs whose X-Forwarded-For header is honoured (rate limiting only).
     trusted_proxies: str = ""
     push_allow_http: bool = False
+    # Comma separated host names push endpoints may use (e.g. "ntfy.example.ts.net"). Empty = any host.
+    push_allowed_hosts: str = ""
     expose_docs: bool = False
     log_level: str = "INFO"
     # Tunables (defaults match SECURITY.md; tests lower them).

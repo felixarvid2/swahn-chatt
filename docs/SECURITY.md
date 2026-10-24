@@ -104,7 +104,9 @@ Risks of libsignal that we accept and mitigate:
   disk. Uploads are streamed with size limits and quotas; avatars are type-checked by magic bytes.
 - The JWT secret comes from the environment (`FAMILYCHAT_SECRET_KEY`, at least 32 bytes); the server refuses
   to start in production without it. Nothing secret is committed.
-- Push notifications (UnifiedPush) carry no content at all — only "something new, please sync".
+- Push notifications (UnifiedPush) carry no content at all — only "something new, please sync". The server
+  only POSTs to https endpoints, and `FAMILYCHAT_PUSH_ALLOWED_HOSTS` limits them to your ntfy host so a
+  logged-in user cannot make the server call arbitrary URLs (SSRF).
 - The API listens on `127.0.0.1` in the Docker deployment; only Tailscale or the HTTPS reverse proxy reaches it.
 
 ## Backups and encryption

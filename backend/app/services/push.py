@@ -17,9 +17,16 @@ log = logging.getLogger("familychat.push")
 PUSH_PAYLOAD = {"t": "sync"}
 
 
-def endpoint_allowed(endpoint: str, allow_http: bool) -> bool:
+def parse_hosts(value: str) -> frozenset[str]:
+    return frozenset(h.strip().lower() for h in value.split(",") if h.strip())
+
+
+def endpoint_allowed(endpoint: str, allow_http: bool, allowed_hosts: frozenset[str] = frozenset()) -> bool:
+    """https only (http when allowed); when `allowed_hosts` is non-empty the host must be listed (SSRF guard)."""
     parts = urlsplit(endpoint)
     if not parts.hostname:
+        return False
+    if allowed_hosts and parts.hostname.lower() not in allowed_hosts:
         return False
     return parts.scheme == "https" or (allow_http and parts.scheme == "http")
 
@@ -29,11 +36,13 @@ class PushService:
         self,
         session_factory: Callable[[], Session],
         allow_http: bool = False,
+        allowed_hosts: frozenset[str] = frozenset(),
         transport: httpx.BaseTransport | None = None,
         timeout: float = 5.0,
     ):
         self._session_factory = session_factory
         self._allow_http = allow_http
+        self._allowed_hosts = allowed_hosts
         self._client = httpx.Client(transport=transport, timeout=timeout, follow_redirects=False)
         self._queue: queue.Queue[str | None] = queue.Queue()
         self._pending: set[str] = set()
@@ -91,8 +100,8 @@ class PushService:
             ).first()
         if not dev or dev.push_kind != "unifiedpush" or not dev.push_endpoint:
             return
-        if not endpoint_allowed(dev.push_endpoint, self._allow_http):
-            log.warning("push endpoint rejected (scheme not allowed)")
+        if not endpoint_allowed(dev.push_endpoint, self._allow_http, self._allowed_hosts):
+            log.warning("push endpoint rejected (scheme or host not allowed)")
             return
         host = urlsplit(dev.push_endpoint).hostname
         try:
