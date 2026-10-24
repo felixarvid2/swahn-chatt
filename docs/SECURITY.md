@@ -122,6 +122,18 @@ Risks of libsignal that we accept and mitigate:
 - Unsent drafts are stored in the SQLCipher database. They are removed on send, when the conversation is
   removed, and on logout.
 
+## Search, notifications and app lock
+
+- **Search index:** message search uses an FTS4 index of the decrypted text inside the SQLCipher database. It is
+  wiped on logout (`rebuild` and `VACUUM`), so no tokens remain after sign-out.
+- **Notification content:** configurable as "Namn och meddelande", "Endast namn" or "Ingen information". The
+  lock-screen (public) version of a notification never shows message text.
+- **Inline reply:** sent through the normal outbox. Its broadcast receiver is not exported, and its PendingIntent
+  is the only mutable one (explicit component). The reply action is hidden when notifications show
+  "Ingen information" and while the app lock is on.
+- **App lock and screenshot blocking** (`FLAG_SECURE`) are UI gates only. The database key does not depend on the
+  lock, so they protect against someone holding the unlocked phone, not against a forensic attacker.
+
 ## Keys on the phone
 
 - The local Room database (messages, contacts and the libsignal session/identity/prekey stores) is encrypted

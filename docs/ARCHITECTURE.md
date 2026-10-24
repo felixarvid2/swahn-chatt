@@ -134,10 +134,14 @@ Client data flow:
   UnifiedPush wake-up) and `PeriodicSyncWorker` (15 minutes). Notifications are built locally from the decrypted
   messages after a sync, never from the push.
 
-- The Room schema is at version 2 (a `drafts` table) with a tested `MIGRATION_1_2`. Schema changes always bump the
+- The Room schema is at version 3 (`drafts`; `message_fts` full-text index and `conversation_settings` for
+  mute/archive/pin), with tested `MIGRATION_1_2` and `MIGRATION_2_3`. Messages are written with an upsert so the
+  FTS triggers stay in sync. Schema changes always bump the
   version and ship a migration plus a `MigrationTest`, because installed phones keep their database.
 - The conversation's message list is a Room `PagingSource` (Paging 3), newest first. Date separators and the
   unread divider are added with `insertSeparators`.
+- Inline replies from notifications go through `ReplyReceiver`, `engine.sendText` and the outbox. `AppLock`
+  handles the optional biometric lock; `ConversationSettingsStore` holds local mute, archive and pin state.
 
 ## Notifications: FCM vs self-hosted
 
