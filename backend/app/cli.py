@@ -31,14 +31,18 @@ def _open(settings: Settings):
 
 
 def cmd_create_invite(args, settings: Settings) -> int:
+    if args.admin and args.max_uses > 1:
+        print("administrator invitations are single use", file=sys.stderr)
+        return 2
     from app.routers.admin import create_invitation
 
     factory = _open(settings)
     with factory() as db:
-        inv, code = create_invitation(db, None, args.note, args.hours, args.admin)
+        inv, code = create_invitation(db, None, args.note, args.hours, args.admin, max_uses=args.max_uses)
         db.commit()
         expires = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(inv.expires_at / 1000))
-    print(f"invitation valid until {expires}" + (" (administrator)" if args.admin else ""), file=sys.stderr)
+    uses = f", {args.max_uses} uses" if args.max_uses > 1 else ""
+    print(f"invitation valid until {expires}" + (" (administrator)" if args.admin else "") + uses, file=sys.stderr)
     print(code)  # scripts read the LAST stdout line
     return 0
 
@@ -245,6 +249,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--admin", action="store_true", help="the new account becomes an administrator")
     p.add_argument("--note", default=None)
     p.add_argument("--hours", type=int, default=72, help="validity in hours (1..720, default 72)")
+    p.add_argument(
+        "--max-uses", type=int, default=1, choices=range(1, 21), metavar="N", help="redemptions (1..20, default 1)"
+    )
     p.set_defaults(func=cmd_create_invite)
 
     p = sub.add_parser("list-users")

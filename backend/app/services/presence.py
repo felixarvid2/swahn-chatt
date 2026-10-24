@@ -33,8 +33,24 @@ class Presence:
         self._announced: dict[str, bool] = {}  # last state sent to contacts, per sharing user
         self._last_sent: dict[str, float] = {}
         self._timers: dict[str, asyncio.Task] = {}
+        self._tasks: set[asyncio.Task] = set()
 
     # --- called by the WebSocket endpoint -------------------------------------------------------------------
+    def fire(self, user_id: str, exclude=None) -> None:
+        """Run changed() as a task of its own: the WebSocket handler may be cancelled while it is closing (server
+        shutdown, test clients), and the bookkeeping must still happen."""
+        task = asyncio.get_running_loop().create_task(self._guarded(user_id, exclude))
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    async def _guarded(self, user_id: str, exclude=None) -> None:
+        try:
+            await self.changed(user_id, exclude)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.warning("presence update failed", exc_info=True)
+
     async def changed(self, user_id: str, exclude=None) -> None:
         """A connection of `user_id` opened (exclude=None) or is closing (`exclude` = that connection)."""
         if not await run_in_threadpool(self._opted_in, user_id):
@@ -56,7 +72,7 @@ class Presence:
             await self._send(user_id, frame(user_id, False, None))
 
     def stop(self) -> None:
-        for t in self._timers.values():
+        for t in [*self._timers.values(), *self._tasks]:
             t.cancel()
         self._timers.clear()
 
@@ -134,6 +150,12 @@ def settings_changed(app, user_id: str, enabled: bool) -> None:
     loop = app.state.hub.loop
     if loop is None or loop.is_closed():
         return
-    coro = presence.changed(user_id) if enabled else presence.retract(user_id)
+
+    async def run() -> None:
+        try:
+            await (presence.changed(user_id) if enabled else presence.retract(user_id))
+        except Exception:
+            log.warning("presence update failed", exc_info=True)
+
     with contextlib.suppress(RuntimeError):
-        asyncio.run_coroutine_threadsafe(coro, loop)
+        asyncio.run_coroutine_threadsafe(run(), loop)

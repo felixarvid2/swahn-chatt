@@ -160,7 +160,9 @@ enter the server URL, choose *Redeem invitation* and pick a username and passwor
 docker compose exec backend python -m app.cli create-invite --note "Grandma" --hours 168
 ```
 
-Administrators can also create and revoke invitations in the app. Each code works once. Other commands:
+Administrators can also create and revoke invitations in the app. A code works once unless it was created with
+`max_uses` (1 to 20; `create-invite --max-uses 5` or `POST /api/v1/admin/invitations`), e.g. for a family dinner
+where five people sign up with the same code; every use is audited and revoking stops the rest. Other commands:
 
 ```bash
 docker compose exec backend python -m app.cli list-users
@@ -353,6 +355,20 @@ storage use; `GET /api/v1/admin/audit` or the command below shows the security l
 ```bash
 docker compose exec backend python -m app.cli audit --limit 50   # logins, invitations, device and user changes
 ```
+
+Prometheus can scrape `GET /metrics` (request counts and latency by route, sockets, queues, database size, free
+disk; no per-user data). It answers only requests from the Pi itself (no proxy in between) or with an administrator's
+bearer token, everybody else gets `404`:
+
+```bash
+curl -s http://127.0.0.1:8000/metrics | head          # on the Pi, bypassing Caddy / tailscale serve
+```
+
+Administrator tasks in the API (no CLI needed): `POST /api/v1/admin/users/{id}/suspend` and `/unsuspend` block and
+restore an account without deleting anything (e.g. a lost phone while you decide), and
+`PATCH /api/v1/admin/users/{id}` with `{"is_admin": true|false}` promotes or demotes; the last active administrator
+cannot be demoted. Users can delete their own account from the app (`DELETE /api/v1/users/me`, needs their password);
+the last administrator must promote someone else first. All of these are in the audit log.
 
 A lost or stolen phone: an administrator revokes it with `DELETE /api/v1/admin/users/{user_id}/devices/{device_id}`
 (the owner can do the same from another device). Delivered messages are deleted from the server after

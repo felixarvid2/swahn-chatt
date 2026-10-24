@@ -38,7 +38,7 @@
   `app/schemas.py`; `app/security.py` (Argon2id, JWT, token hashing); `app/ratelimit.py`;
   `app/routers/*` (auth, admin, users, devices, keys, conversations, messages, sync, attachments, ws, health);
   `app/services/*` (events fan-out, membership, delivery receipts, push, password reset, backup/verify, config check, maintenance);
-  `app/hub.py` (in-memory WebSocket
+  `app/metrics.py` (Prometheus `/metrics`, no client library); `app/services/presence.py` (opt-in online status, debounced); `app/services/lockout.py`; `app/services/uploads.py` (resumable uploads); `app/hub.py` (in-memory WebSocket
   connection registry; one process, so no broker is needed); `app/cli.py` (invites, users, password reset, backup,
   verify-backup, restore, check-config, seed-dev).
 - WebSocket fan-out works because there is exactly one worker. Running several workers would need a broker
@@ -48,8 +48,8 @@
 
 | Table | Key columns |
 |---|---|
-| `users` | id, username (unique), display_name, password_hash, is_admin, avatar_attachment_id, created_at, disabled_at |
-| `invitations` | id, code_hash (unique), note, is_admin, created_by, created_at, expires_at, used_at, used_by, revoked_at |
+| `users` | id, username (unique), display_name, password_hash, is_admin, avatar_attachment_id, created_at, disabled_at, suspended_at (admin suspension: no sign-in or API use, data kept), share_presence (opt-in, default false), presence_last_seen_at (only kept while sharing) |
+| `invitations` | id, code_hash (unique), note, is_admin, created_by, created_at, expires_at, used_at, used_by, revoked_at, max_uses (1..20), uses (redeemed so far; used_at/used_by = used up / latest redeemer) |
 | `devices` | id, user_id, number (1..127, unique per user), name, created_at, last_seen_at, revoked_at, push_kind, push_endpoint, acked_cursor |
 | `sessions` | id, user_id, device_id, refresh_token_hash (unique), created_at, expires_at, revoked_at |
 | `session_tokens` | token_hash (PK), session_id — every refresh token a session issued, for reuse detection |
@@ -66,6 +66,8 @@
 | `events` | seq (PK autoincrement = sync cursor), device_id, type, conversation_id, payload (JSON), created_at |
 | `delivery_receipts` | message_id, user_id, delivered_at (one per recipient user, drives the `delivered` receipt) |
 | `audit_events` | id (autoincrement), at, actor_user_id, action, target_user_id, target_id, ip, details (JSON; never secrets) |
+| `login_failures` | id, key_hash (HMAC of the username, never the name), at — failed logins of the last 24 h, replayed into the in-memory lockout counters at startup |
+| `upload_sessions` | id (becomes the attachment id), user_id, purpose, size (reserved quota), sha256, offset, created_at, expires_at (24 h); bytes in `attachments/.tmp/uploads/<id>.part` |
 | `counters` | name, value (used for monotonic message `seq`, works on SQLite and PostgreSQL) |
 
 ### Sync cursor and the database

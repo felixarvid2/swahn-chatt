@@ -33,7 +33,9 @@ def test_suspended_user_is_refused_everywhere_and_unsuspending_restores(client, 
     r = client.post("/api/v1/auth/refresh", json={"refresh_token": bob.refresh})
     assert r.status_code == 403 and r.json()["code"] == "account_suspended"
     # signing in: wrong password is still the plain 401 (no oracle), the right one is told why
-    bad = client.post("/api/v1/auth/login", json={"username": "bob", "password": "wrong-password-xyz", "device_name": "x"})
+    bad = client.post(
+        "/api/v1/auth/login", json={"username": "bob", "password": "wrong-password-xyz", "device_name": "x"}
+    )
     assert bad.status_code == 401 and bad.json()["code"] == "invalid_credentials"
     good = client.post("/api/v1/auth/login", json={"username": "bob", "password": PASSWORD, "device_name": "x"})
     assert good.status_code == 403 and good.json()["code"] == "account_suspended"
@@ -49,7 +51,12 @@ def test_suspended_user_is_refused_everywhere_and_unsuspending_restores(client, 
     assert client.post("/api/v1/auth/refresh", json={"refresh_token": bob.refresh}).status_code == 200
     texts = [e for e in bob.events("message")]
     assert len(texts) == 2  # both messages were waiting
-    assert client.post("/api/v1/auth/login", json={"username": "bob", "password": PASSWORD, "device_name": "y"}).status_code == 200
+    assert (
+        client.post(
+            "/api/v1/auth/login", json={"username": "bob", "password": PASSWORD, "device_name": "y"}
+        ).status_code
+        == 200
+    )
 
 
 def test_suspension_closes_open_websockets(client, admin, bob):
@@ -171,7 +178,10 @@ def test_two_admins_cannot_demote_each_other_at_the_same_time(admin, alice):
         start.wait()
         results.append(actor.patch(f"/admin/users/{target.id}", {"is_admin": False}).status_code)
 
-    threads = [threading.Thread(target=demote, args=(admin, alice)), threading.Thread(target=demote, args=(alice, admin))]
+    threads = [
+        threading.Thread(target=demote, args=(admin, alice)),
+        threading.Thread(target=demote, args=(alice, admin)),
+    ]
     for t in threads:
         t.start()
     for t in threads:

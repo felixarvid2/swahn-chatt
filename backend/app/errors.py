@@ -91,7 +91,7 @@ def error_responses(*statuses: int) -> dict[int | str, dict[str, Any]]:
 
 ERROR_DESCRIPTIONS = {
     401: "Missing, invalid or expired credentials (`unauthorized`, `token_expired`, `invalid_credentials`, ...).",
-    403: "Not allowed (`forbidden`).",
+    403: "Not allowed (`forbidden`, `account_suspended`, `invalid_credentials` when re-entering a password).",
     404: "Not found, or not visible to the caller (`not_found`).",
     409: "Conflicts with the current state (`conflict` and more specific codes).",
     413: "Body too large (`payload_too_large`, `quota_exceeded`).",

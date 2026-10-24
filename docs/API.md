@@ -16,7 +16,8 @@ The running server also serves a generated OpenAPI document at `/api/v1/openapi.
   with extra fields (documented per endpoint) and, from this version on, `"request_id"` (see below). Common codes:
   `invalid_request` (422), `unauthorized` (401), `token_expired` (401), `forbidden` (403), `not_found` (404),
   `conflict` (409), `rate_limited` (429, with a `Retry-After` header in seconds), `payload_too_large` (413),
-  `quota_exceeded` (413), `unsupported_media_type` (415).
+  `quota_exceeded` (413), `unsupported_media_type` (415). `403 account_suspended` is returned for every
+  authenticated request, login and token refresh of a suspended account (see "Administration").
 - Request IDs: every response carries `X-Request-ID`. A client may send its own (`^[A-Za-z0-9._-]{8,64}$`, anything
   else is ignored and replaced); the server uses it in every log line of that request and puts it in error bodies as
   `request_id`, so a user can quote it to the administrator. Clients ignore the field if they do not know it.
@@ -83,8 +84,8 @@ Display name: 1–64 characters. Device name: 1–64 characters.
 | Method | Path | Body | Result |
 |---|---|---|---|
 | POST | `/auth/invite/redeem` | `{code, username, password, display_name, device_name}` | `201 AuthResponse`. `404 invalid_invite` for unknown/expired/used codes, `409 username_taken` |
-| POST | `/auth/login` | `{username, password, device_name}` | `200 AuthResponse`. Every login registers a **new device**. `401 invalid_credentials` (same answer for unknown user and wrong password). `409 device_limit` when the account already has the maximum number of active devices (default 10, `FAMILYCHAT_MAX_DEVICES_PER_USER`; the `message` says so: remove a device, then log in again). `429 rate_limited` while the username is locked after repeated failures (see below) |
-| POST | `/auth/refresh` | `{refresh_token}` | `200 AuthResponse` with a **new** refresh token; the old one stops working. Presenting **any** refresh token the session issued earlier (not only the previous one) revokes the whole session and its device (`401 token_reused`) |
+| POST | `/auth/login` | `{username, password, device_name}` | `200 AuthResponse`. Every login registers a **new device**. `401 invalid_credentials` (same answer for unknown user and wrong password). `403 account_suspended` when the password is right but the account is suspended (never for a wrong password, so it reveals nothing about usernames). `409 device_limit` when the account already has the maximum number of active devices (default 10, `FAMILYCHAT_MAX_DEVICES_PER_USER`; the `message` says so: remove a device, then log in again). `429 rate_limited` while the username is locked after repeated failures (see below) |
+| POST | `/auth/refresh` | `{refresh_token}` | `200 AuthResponse` with a **new** refresh token (`403 account_suspended` while the account is suspended; the session is kept and works again after unsuspending); the old one stops working. Presenting **any** refresh token the session issued earlier (not only the previous one) revokes the whole session and its device (`401 token_reused`) |
 | POST | `/auth/logout` | – (auth) | `204`. Revokes the session and the device, deletes the device's public keys |
 | POST | `/auth/password/reset` | `{code, new_password, device_name}` | `200 AuthResponse`. Redeems a reset code an administrator issued (see below). `404 invalid_reset_code` for unknown, expired, used or replaced codes (or a removed account), `422` for a weak password, `429` like redeem |
 
@@ -105,23 +106,37 @@ Display name: 1–64 characters. Device name: 1–64 characters.
 - Per-username lockout: after 10 failed logins within an hour (or 30 within a day) for a username, from any
   addresses, further logins for that username get `429 rate_limited` (with `Retry-After`) until the failures age
   out, even with the right password. Unknown usernames behave identically. Signed-in devices are not affected.
+  The failures are persisted (an HMAC of the username and a timestamp, nothing else) and replayed at startup, so
+  restarting the server does not reset a lockout.
 
 ## Administration (admins only, else `403`)
 
 | Method | Path | Body | Result |
 |---|---|---|---|
-| POST | `/admin/invitations` | `{note?: str, expires_in_hours?: 1..720 (default 72), is_admin?: bool}` | `201 {id, code, note, is_admin, expires_at, created_at}` — the `code` is shown only here |
-| GET | `/admin/invitations` | – | `200 [{id, note, is_admin, expires_at, created_at, used_at, used_by, revoked_at}]` |
-| DELETE | `/admin/invitations/{id}` | – | `204` |
+| POST | `/admin/invitations` | `{note?: str, expires_in_hours?: 1..720 (default 72), is_admin?: bool, max_uses?: 1..20 (default 1)}` | `201 {id, code, note, is_admin, expires_at, created_at, max_uses}` — the `code` is shown only here. `422` for `is_admin` with `max_uses > 1` (administrator invitations stay single use) |
+| GET | `/admin/invitations` | – | `200 [{id, note, is_admin, expires_at, created_at, used_at, used_by, revoked_at, max_uses, uses, remaining}]`. `uses` counts redemptions, `remaining` is what can still be redeemed (`0` when used up, revoked or expired). `used_at`/`used_by` mean "used up" and the latest redeemer, exactly as for single-use codes |
+| DELETE | `/admin/invitations/{id}` | – | `204`. Revoking stops the remaining uses |
 | DELETE | `/admin/users/{user_id}` | – | `204`. Disables the account, revokes all sessions and devices, removes the user from all conversations. An admin cannot remove themselves (`409`) |
-| GET | `/admin/users` | – | `200 [{id, username, display_name, is_admin, created_at, disabled_at, last_seen_at, active_devices, attachment_bytes}]`, oldest account first, removed accounts included (`disabled_at` set). `last_seen_at` is the newest over all the user's devices (`null` if none), `attachment_bytes` the storage the user has uploaded |
+| POST | `/admin/users/{user_id}/suspend` | – | `204`. The account cannot sign in or use the API (`403 account_suspended` on every request, login with the right password and refresh), open WebSockets are closed with `4401` (a reconnect or refresh then gets the `403`). Data, conversation memberships, devices and sessions stay, so other members keep encrypting for its devices and **unsuspend restores everything**. Idempotent. `409` for yourself, `404` for an unknown or removed user. Audit: `user_suspended` |
+| POST | `/admin/users/{user_id}/unsuspend` | – | `204`, idempotent, `404` as above. Audit: `user_unsuspended` |
+| PATCH | `/admin/users/{user_id}` | `{is_admin: bool}` | `200` the account as in `GET /admin/users`. Promotes or demotes (takes effect on the user's next request; contacts get `user_updated`). `409 last_admin` when it would leave no active administrator (not removed, not suspended), yourself included; no change is a quiet no-op. Audit: `admin_granted` / `admin_revoked` (`details.via` = `admin`) |
+| GET | `/admin/users` | – | `200 [{id, username, display_name, is_admin, created_at, disabled_at, suspended_at, last_seen_at, active_devices, attachment_bytes}]`, oldest account first, removed accounts included (`disabled_at` set). `last_seen_at` is the newest over all the user's devices (`null` if none), `attachment_bytes` the storage the user has uploaded |
 | POST | `/admin/users/{user_id}/password-reset` | – | `201 {code, expires_at}`. The `code` is shown only here (single use, 24 h, stored hashed). `404` for an unknown or removed user. Audit: `password_reset_issued` |
 | DELETE | `/admin/users/{user_id}/devices/{device_id}` | – | `204`. Lost phone: revokes that device with the same effects as the owner doing it (keys and queued data deleted, sessions revoked, `devices_changed` events sent, its WebSocket closed with `4401`). `404` if the device is not an active device of that user; `409` for the admin's own current device (use logout) |
 | GET | `/admin/stats` | – | `200 {users, active_devices, conversations, messages, undelivered_envelopes, attachments, db_bytes, attachments_bytes, disk_free_bytes, version, migration: {head, current}, uptime_seconds}`. `users` counts active accounts; `undelivered_envelopes` only those for active devices; `db_bytes` is the SQLite file with its WAL (`null` for other databases); `disk_free_bytes` is free space on the data volume |
 | GET | `/admin/audit?before_id=&limit=` | – | `200 [{id, at, actor_user_id, action, target_user_id, target_id, ip, details}]`, newest first. `limit` 1..200 (default 50); pass the smallest `id` of a page as `before_id` for the next (older) page. See "Audit log" in `SECURITY.md` for the actions |
 
+Monitoring: `GET /metrics` (not under `/api/v1`) serves Prometheus text format: `familychat_http_requests_total` and
+`familychat_http_request_duration_seconds` (histogram) by `method`, `route` (the route template such as
+`/api/v1/conversations/{conversation_id}`, `unmatched` when nothing matched) and `status`, plus
+`familychat_websocket_connections`, `familychat_push_queue_depth`, `familychat_event_queue_depth` (unacknowledged
+sync events), `familychat_database_size_bytes`, `familychat_disk_free_bytes`, `familychat_uptime_seconds` and
+`familychat_build_info`. There are no per-user labels. Access: a request from this machine (peer `127.0.0.1`/`::1`
+that no proxy forwarded: no `X-Forwarded-For`, `Forwarded` or `X-Real-IP` header) or an administrator's bearer
+token; everybody else gets a plain `404`.
+
 Bootstrap and server-side administration use the CLI (see `docs/RASPBERRY_PI_SETUP.md`):
-`python -m app.cli create-invite --admin`, `create-invite`, `list-users`, `remove-user <username>`,
+`python -m app.cli create-invite --admin`, `create-invite [--max-uses N]`, `list-users`, `remove-user <username>`,
 `reset-password <username>` (prints a reset code; the last stdout line), `audit [--limit N]`, `backup <dir>`,
 `verify-backup <archive>` (checks an archive completely without restoring it; exit 0 = good), `restore <archive>`,
 `check-config` (effective non-secret settings and warnings; exit 1 on errors), `seed-dev`.
@@ -130,11 +145,14 @@ Bootstrap and server-side administration use the CLI (see `docs/RASPBERRY_PI_SET
 
 | Method | Path | Body | Result |
 |---|---|---|---|
-| GET | `/users` | – | `200 [User]` (active users) |
+| GET | `/users` | – | `200 [User]` (active users). Each item also has `online` (bool) and `last_seen_at` (ms), **both `null` unless that user opted in to sharing presence** (see below); for opted-in users `last_seen_at` is the current time while online |
 | GET | `/users/me` | – | `200 User` |
 | PATCH | `/users/me` | `{display_name?, avatar_attachment_id?: uuid|null}` | `200 User`. The avatar must be an `avatar` attachment uploaded by the caller |
+| GET | `/users/me/settings` | – | `200 {"share_presence": false}` |
+| PATCH | `/users/me/settings` | `{share_presence?: bool}` | `200 {"share_presence": bool}`. Presence is **off by default**. Audit: `presence_setting_changed` |
+| DELETE | `/users/me` | `{password}` | `204`. Deletes the caller's own account with the same effect as an administrator removing it: the account is disabled, every device, session and key is revoked, the user leaves all conversations (their messages stay in them for the others), the avatar is unlinked and uploaded files that no message references are garbage-collected at the next hourly run. `403 invalid_credentials` for a wrong password (audited as `self_delete_failed`), `409 last_admin` for the only active administrator (promote someone first), `429` after 5 attempts per minute. Audit: `user_removed` with `details.via` = `self` |
 | PUT | `/users/me/password` | `{current_password, new_password}` | `204`. Revokes all other sessions and devices |
-| GET | `/users/{user_id}/devices` | – | `200 [Device]` (active devices) |
+| GET | `/users/{user_id}/devices` | – | `200 [Device]` (active devices). For another user who has not opted in to presence, `last_seen_at` is the device's `created_at` (device activity would be presence) |
 | GET | `/devices/me` | – | `200 Device` |
 | PUT | `/devices/me/push` | `{kind: "unifiedpush", endpoint: "https://..."}` | `204`. `422` when the endpoint is not https or its host is not in the server's `FAMILYCHAT_PUSH_ALLOWED_HOSTS` (IP-literal hosts only if listed). `409 push_not_configured` when the production server has no allowed hosts configured, i.e. push is unavailable there |
 | DELETE | `/devices/me/push` | – | `204` |
@@ -279,6 +297,13 @@ Server → client:
 - `{"type": "sync", "cursor": 124}` — new events exist; call `GET /sync`.
 - `{"type": "typing", "conversation_id": "uuid", "user_id": "uuid", "state": "start|stop"}`
 - `{"type": "pong"}`
+- `{"type": "presence", "user_id": "uuid", "online": true, "last_seen_at": 1700000000000}` — only about users who
+  opted in (`PATCH /users/me/settings`) and share a conversation with you; sent when their first device connects or
+  their last device disconnects (debounced: the first change goes out at once, later changes of the same user at
+  most every 10 s, `FAMILYCHAT_PRESENCE_DEBOUNCE_SECONDS`, and only the state current at that moment). Nothing is
+  sent for users who did not opt in. When someone switches sharing off, one final frame with `online: false` and
+  `last_seen_at: null` tells you to forget what you showed (the same as for any user who does not share). On
+  connect there is no snapshot: read `GET /users`. Clients that do not know this type ignore it.
 
 Client → server:
 - `{"type": "typing", "conversation_id": "uuid", "state": "start|stop"}` (relayed to the other members'
@@ -306,6 +331,24 @@ redacted in server logs, but proxies and other logs may still record it.
   received bytes differ.
 - Per-user quota `FAMILYCHAT_USER_QUOTA_MB` (default 2048) → `413 quota_exceeded`.
 - `201 {"id", "purpose", "content_type", "size", "sha256", "created_at"}`.
+
+### Resumable uploads (large message attachments)
+
+For files too big to risk on one request. Quota for the whole `size` is reserved when the session starts
+(`POST /attachments` sees the reservation too). Existing `POST /attachments` is unchanged.
+
+| Method | Path | Body | Result |
+|---|---|---|---|
+| POST | `/attachments/uploads` | `{size: 1.., purpose: "message", sha256?: hex}` | `201 {upload_id, offset: 0, size, expires_at, max_chunk_bytes}`. `413 payload_too_large` above `FAMILYCHAT_MAX_ATTACHMENT_MB`, `413 quota_exceeded`, `429 too_many_uploads` (10 open sessions per user), `429 rate_limited` |
+| PATCH | `/attachments/uploads/{id}` | raw bytes, `Content-Type: application/octet-stream`, header `Upload-Offset: <current offset>` | `200 {offset}` (also as header `Upload-Offset`), or `201` with the attachment object after the last byte. At most 8 MiB per request and not beyond `size` (`413 payload_too_large`). `409 offset_mismatch` (body `{"offset": n}` and header `Upload-Offset` name the server's offset), `409 upload_busy` when another chunk of the session is being written, `409 upload_corrupt` if the stored file no longer matches the session (the session is dropped; start again), `422 invalid_request` (missing or bad header, empty chunk), `415`. A request that breaks off leaves no trace: resume at the reported offset |
+| GET / HEAD | `/attachments/uploads/{id}` | – | `200 {upload_id, offset, size, expires_at, max_chunk_bytes}` with headers `Upload-Offset` and `Upload-Length` (HEAD: headers only). Use it to find where to continue |
+
+When `offset == size` the server checks `sha256` (if given; `422 checksum_mismatch` ends the session, start over)
+and turns the file into an ordinary attachment: the `201` body is the same object `POST /attachments` returns and
+**its `id` equals the `upload_id`**, so a client that lost the response can still use `GET /attachments/{upload_id}`.
+Only the creator can see or change a session (everyone else, unknown ids and expired sessions get `404`). Sessions
+expire 24 hours after they start; the hourly job deletes expired sessions and their temp files and the reserved
+quota is free again. Finished attachments follow the usual rule (deleted after 24 h unless a message uses them).
 
 `GET /attachments/{id}` → the bytes, with `Range` support (`206`) for resumed downloads. Allowed for the
 uploader, for members of a conversation containing a non-deleted message that references the attachment, and

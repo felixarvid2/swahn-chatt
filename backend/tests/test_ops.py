@@ -99,7 +99,7 @@ def test_admin_users_lists_everyone_with_usage(factory, app, admin, alice, bob):
     assert users["admin"]["is_admin"] is True and users["admin"]["attachment_bytes"] == 0
     assert users["bob"]["disabled_at"] is not None and users["bob"]["active_devices"] == 0
     assert set(a) == {
-        "id", "username", "display_name", "is_admin", "created_at", "disabled_at", "last_seen_at",
+        "id", "username", "display_name", "is_admin", "created_at", "disabled_at", "suspended_at", "last_seen_at",
         "active_devices", "attachment_bytes",
     }  # fmt: skip
     assert "password_hash" not in json.dumps(r.json())

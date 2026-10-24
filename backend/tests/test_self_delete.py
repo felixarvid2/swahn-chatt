@@ -73,7 +73,7 @@ def test_avatar_and_unreferenced_files_become_collectable_but_sent_files_stay(ap
     cid = factory.direct(alice, bob)
     avatar = upload(alice, "avatar", PNG, "image/png")
     assert alice.patch("/users/me", {"avatar_attachment_id": avatar}).status_code == 200
-    unused = upload(alice, "message", b"never sent", "application/octet-stream")
+    upload(alice, "message", b"never sent", "application/octet-stream")
     sent_file = upload(alice, "message", b"sent in a message", "application/octet-stream")
     assert alice.send(cid, "with file", attachment_ids=[sent_file]).status_code == 201
     assert alice.delete("/users/me", json={"password": PASSWORD}).status_code == 204

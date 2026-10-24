@@ -101,7 +101,7 @@ async def ws_endpoint(ws: WebSocket):
         cursor = await run_in_threadpool(_hello_and_members, app, p)
         await ws.send_json({"type": "hello", "cursor": cursor})
         counted = True
-        await _presence_changed(presence, p.user_id)
+        presence.fire(p.user_id)
         interval = app.state.settings.ws_revalidate_seconds
         killer = asyncio.create_task(conn.closed.wait())
         tasks = {
@@ -127,19 +127,9 @@ async def ws_endpoint(ws: WebSocket):
     except Exception:
         log.exception("websocket error")
     finally:
-        try:
-            if counted:
-                await _presence_changed(presence, p.user_id, exclude=conn)
-        finally:
-            hub.unregister(conn)
-
-
-async def _presence_changed(presence, user_id: str, exclude=None) -> None:
-    """Opt-in presence bookkeeping; a failure here must never break the socket."""
-    try:
-        await presence.changed(user_id, exclude)
-    except Exception:
-        log.warning("presence update failed", exc_info=True)
+        if counted:
+            presence.fire(p.user_id, exclude=conn)  # a task of its own: this handler may be cancelled right now
+        hub.unregister(conn)
 
 
 async def _revalidate(app, conn: Connection, claims: AccessClaims, interval: float) -> None:

@@ -9,6 +9,7 @@ import tarfile
 import pytest
 
 from app.cli import main as cli_main
+from app.migrate import code_head
 from app.services.backup import create_backup, verify_backup
 from tests.test_backup import corrupt_cases, populate
 
@@ -60,13 +61,13 @@ class TestVerifyBackup:
         out = capsys.readouterr().out
         assert "backup OK" in out and "2 users" in out and "2 messages" in out
         assert "1 files" in out and "checksums match" in out and "integrity_check ok" in out
-        assert "migration 0005" in out
+        assert f"migration {code_head()}" in out
         assert not (tmp_path / "cli-data").exists()  # verifying never creates or touches the data directory
 
     def test_summary_function(self, archive):
         info = verify_backup(archive)
         assert info["counts"]["messages"] == 2 and info["attachment_files"] == 1 and info["warnings"] == []
-        assert info["migration"] == "0005" and info["attachment_bytes"] == 50_000
+        assert info["migration"] == code_head() and info["attachment_bytes"] == 50_000
 
     def test_every_corruption_is_found_without_restoring(self, archive, cli_env, capsys, tmp_path):
         cases = corrupt_cases(tmp_path, archive)

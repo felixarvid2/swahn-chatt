@@ -39,3 +39,6 @@ local.properties
 *.iml
 .cxx/
 captures/
+
+# empty files some PostgreSQL test runs leave in backend/
+backend/fc_t_*

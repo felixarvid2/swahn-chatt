@@ -113,4 +113,4 @@ def test_json_columns_round_trip(app, alice, admin):
     admin.post("/admin/invitations", {"note": "j", "is_admin": True})
     rows = admin.get("/admin/audit?limit=5").json()
     created = next(r for r in rows if r["action"] == "invitation_created")
-    assert created["details"] == {"is_admin": True, "hours": 72}
+    assert created["details"] == {"is_admin": True, "hours": 72, "max_uses": 1}

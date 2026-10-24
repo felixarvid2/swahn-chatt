@@ -161,7 +161,9 @@ Risks of libsignal that we accept and mitigate:
 
 ## Server security
 
-- Accounts only via single-use, expiring invitation codes (stored as SHA-256 hashes). No phone numbers.
+- Accounts only via expiring invitation codes (stored as SHA-256 hashes), single use unless an administrator
+  sets `max_uses` (2..20; never for administrator invitations); the use counter is claimed with one atomic
+  `UPDATE ... WHERE uses < max_uses`, so concurrent redemptions cannot exceed it. No phone numbers.
 - Passwords hashed with Argon2id (argon2-cffi defaults: t=3, m=64 MiB, p=4; tuned for a Pi 4). At most two
   hashes/verifications run at once (memory cap) and none ever runs inside a database transaction, so a flood of
   logins cannot hold the SQLite write lock or exhaust RAM; the account state is re-checked in the write
@@ -178,7 +180,11 @@ Risks of libsignal that we accept and mitigate:
   `429 rate_limited` until the oldest failures age out. Unknown usernames are counted and answered identically,
   so the lock cannot be used to enumerate accounts. Trade-off: someone who knows a username can keep new logins
   to that account blocked (for up to an hour per 10 attempts); devices that are already signed in keep working,
-  because refreshing and API calls are not logins.
+  because refreshing and API calls are not logins. The counters are in memory for speed, but every *failure* is
+  also written to `login_failures` (an HMAC of the username keyed with the server secret, plus a timestamp: unknown
+  names are not stored) and replayed at startup, so restarting the server does not hand a guesser a fresh
+  budget. Nothing is written for successful logins or other requests; rows older than a day are pruned. (Without a
+  fixed `FAMILYCHAT_SECRET_KEY`, i.e. development, the key changes per start and the replay finds nothing.)
 - **Prekey draining:** `GET /keys/{user}` is limited per caller *user* (120/min), and each caller user gets only
   10 bundles per target device and hour that include a one-time prekey. Beyond that the bundle still contains the
   signed prekey and the last-resort Kyber key but no one-time keys, and none are deleted, so a (logged-in) user
@@ -198,11 +204,34 @@ Risks of libsignal that we accept and mitigate:
   redacted by a logging filter on uvicorn's loggers; the Authorization header is preferred. Request logs never
   contain query strings.
 - Every conversation, message and attachment route checks membership; non-members get `404`.
+- **Suspension, roles, self-deletion.** An administrator can suspend an account (`POST /admin/users/{id}/suspend`):
+  the session check in front of every route answers `403 account_suspended`, login (after the password was
+  verified, so usernames are not revealed), refresh and password reset codes are refused, open sockets are
+  closed. Nothing is deleted: memberships, devices and sessions stay, so unsuspending restores the account and
+  senders keep encrypting for its devices. Promoting and demoting (`PATCH /admin/users/{id}`) refuses to leave
+  the server without an **active** administrator (not removed, not suspended), the caller included; the check
+  runs inside the serialised write transaction, so two administrators cannot demote each other at once. Users
+  can delete their own account (`DELETE /users/me`) after re-entering the password (rate limited, failures
+  audited); a stolen unlocked phone with a valid session therefore cannot erase the account without the password.
+  The effect is that of an administrator's removal, plus the avatar being unlinked and the account's
+  unreferenced attachments being garbage-collected at the next hourly run.
+- **Metrics:** `GET /metrics` exposes counts and histograms by route template and status, gauges for sockets,
+  queues, database size and free disk, and nothing per user (no ids, names or addresses in labels). It answers
+  only a request that comes from this machine without being forwarded by a proxy (so Caddy or `tailscale serve`,
+  which forward remote clients from `127.0.0.1` with `X-Forwarded-For`, do not open it) or an administrator's
+  bearer token; everybody else gets `404`, as if it did not exist.
+- **Resumable uploads:** a session reserves quota for its full size when it starts, belongs to its creator
+  (everyone else gets `404`), expires after 24 hours and is deleted with its temp file by the hourly job. Temp files
+  are named by the server-generated session id only, live under `attachments/.tmp/uploads/`, are created `0600`
+  and are excluded from backups. Chunks are limited to 8 MiB, offsets are checked, an interrupted chunk is cut off
+  again, and the optional sha256 is verified over the whole file before it becomes an attachment.
 - **Audit log:** the table `audit_events` records who did what to whom and from which address (`at`, actor,
   `action`, target user, target id, `ip`, small `details`). Actions: `invitation_created`, `invitation_revoked`,
-  `invitation_redeemed`, `admin_granted` (an account created from an administrator invitation; there is no
-  other way to change the role), `login_success`, `login_failure`, `password_changed`, `refresh_token_reuse`,
-  `device_revoked` (`details.by`: `self`, `admin` or `logout`), `user_removed` (API or CLI), `password_reset_issued`
+  `invitation_redeemed` (once per use of a multi-use code, with the new user as target and `details.use`/`max_uses`),
+  `admin_granted` (`via` = `invitation` or `admin`) and `admin_revoked` (role changes through `PATCH /admin/users/{id}`),
+  `user_suspended`, `user_unsuspended`, `login_blocked` (right password, suspended account), `self_delete_failed`,
+  `presence_setting_changed` (`share_presence` true/false), `login_success`, `login_failure`, `password_changed`, `refresh_token_reuse`,
+  `device_revoked` (`details.by`: `self`, `admin` or `logout`), `user_removed` (API or CLI; `details.via` = `self` for self-deletion), `password_reset_issued`
   (`details.via`: `admin` or `cli`) and `password_reset_used` (`details.revoked_devices`). It is written in the
   same transaction as the action; failed logins commit on their own. **Never stored:** passwords, invitation codes,
   tokens or token hashes; for a failed login on a username that does not exist the log says only `unknown user`
@@ -250,6 +279,24 @@ Risks of libsignal that we accept and mitigate:
   The containers run with `no-new-privileges`, all Linux capabilities dropped (Caddy keeps only
   `NET_BIND_SERVICE`) and, for the backend, a read-only root filesystem; the Caddy and ntfy images are pinned to
   versions.
+
+## Presence (online / last seen)
+
+Presence is **opt-in and off by default** (`PATCH /users/me/settings {"share_presence": true}`), and the server
+enforces it: for a user who has not opted in nothing is recorded (no `presence_last_seen_at`), no WebSocket
+frame about them is ever sent, and `GET /users` returns `online: null, last_seen_at: null` for them. A device's
+`last_seen_at` is presence too, so `GET /users/{id}/devices` shows other people the device's creation time instead
+unless the owner opted in. Switching sharing off deletes the stored time and, if contacts had been told something,
+sends them one frame saying "unknown" (`online: false, last_seen_at: null`, indistinguishable from a user who never
+shared). Administrators still see each account's real last activity in `GET /admin/users` (operational data,
+as before).
+
+Trade-offs to be honest about: whoever opts in tells every user who shares a conversation with them (frames) and
+in fact **every account on the server** (`GET /users` lists all users) when they connect and disconnect, which
+reveals daily rhythms and whether a message is likely to be read soon. The debounce (10 s) only limits noise, it
+does not hide anything. Presence follows the WebSocket, which the app keeps open only while it is in the
+foreground. Contacts cannot opt out of *seeing* it except by ignoring the field, and the setting is per user, not
+per contact. If that is too much for your family, simply leave it off: the default sends nothing.
 
 ## Backups and encryption
 

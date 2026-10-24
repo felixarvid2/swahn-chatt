@@ -245,7 +245,7 @@ def test_flapping_connections_are_debounced(make_app):
         hello(aws)
         with connect(client, bob) as b:
             hello(b)
-        assert aws.receive_json()["online"] is True  # the first change goes out at once
+            assert aws.receive_json()["online"] is True  # the first change goes out at once
         with connect(client, bob) as b:  # back within the debounce window: no offline/online noise
             hello(b)
             time.sleep(0.9)

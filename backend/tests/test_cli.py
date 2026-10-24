@@ -81,6 +81,18 @@ def test_create_invite_member_hours_and_validation(tmp_path):
     assert bad.returncode == 2 and bad.stdout.strip() == ""
 
 
+def test_create_invite_max_uses(tmp_path):
+    r = run_cli(tmp_path, "create-invite", "--max-uses", "3")
+    assert r.returncode == 0, r.stderr
+    app, client = serve(tmp_path)
+    with client:
+        admin = Factory(app, client).user("boss", admin=True)
+        (inv,) = [i for i in admin.get("/admin/invitations").json() if i["max_uses"] == 3]
+        assert (inv["uses"], inv["remaining"]) == (0, 3)
+    assert run_cli(tmp_path, "create-invite", "--max-uses", "21").returncode == 2
+    assert run_cli(tmp_path, "create-invite", "--admin", "--max-uses", "2").returncode == 2
+
+
 def test_cli_works_in_production_without_a_secret_key(tmp_path):
     r = run_cli(tmp_path, "create-invite", env_name="production")
     assert r.returncode == 0, r.stderr

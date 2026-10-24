@@ -66,7 +66,19 @@ def test_failures_older_than_the_window_are_not_restored(make_app, locked_out):
     assert attempt(proxy2, password=PASSWORD, ip="198.51.100.60").status_code == 200
 
 
-def test_hourly_lock_decays_but_the_daily_count_still_applies_after_a_restart(make_app, locked_out):
+def test_a_daily_lock_is_restored_after_a_restart(make_app, locked_out):
+    hour = 3_600_000
+    digest = lockout.key_hash(locked_out.state.settings, "alice")
+    with locked_out.state.session_factory() as db:
+        db.execute(update(LoginFailure).values(at=clock.now_ms() - 2 * hour))  # the hourly counter has emptied...
+        db.add_all(LoginFailure(key_hash=digest, at=clock.now_ms() - 3 * hour) for _ in range(20))  # ...30 in a day
+        db.commit()
+    _app2, proxy2 = restart(make_app, locked_out)
+    r = attempt(proxy2, password=PASSWORD, ip="198.51.100.62")
+    assert r.status_code == 429 and int(r.headers["Retry-After"]) > 3600  # the long lock, not the hourly one
+
+
+def test_old_failures_below_the_daily_limit_do_not_lock_after_a_restart(make_app, locked_out):
     hour = 3_600_000
     with locked_out.state.session_factory() as db:
         db.execute(update(LoginFailure).values(at=clock.now_ms() - hour - 1000))

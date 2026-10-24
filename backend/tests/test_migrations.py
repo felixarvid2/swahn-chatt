@@ -209,3 +209,32 @@ def test_0004_0005_keep_existing_rows(blank_db):
     )
     command.upgrade(cfg, "head")
     assert rows(blank_db, "SELECT id, disappearing_seconds FROM conversations") == {("c", None)}
+
+
+def test_0006_backfills_invitation_uses_and_keeps_existing_data(blank_db):
+    """Redeemable now means uses < max_uses: an invitation redeemed before the upgrade must not become usable again."""
+    cfg = alembic_config(blank_db)
+    command.upgrade(cfg, "0005")
+    execute(
+        blank_db,
+        "INSERT INTO users (id, username, display_name, password_hash, is_admin, created_at) "
+        "VALUES ('u','u','U','x',false,1)",
+        "INSERT INTO invitations (id, code_hash, is_admin, created_by, created_at, expires_at, used_at, used_by) "
+        "VALUES ('used','h1',false,NULL,1,9999999999999,5,'u'), ('fresh','h2',false,NULL,1,9999999999999,NULL,NULL)",
+    )
+    command.upgrade(cfg, "0006")
+    assert rows(blank_db, "SELECT id, max_uses, uses FROM invitations") == {("used", 1, 1), ("fresh", 1, 0)}
+    assert rows(blank_db, "SELECT suspended_at, share_presence, presence_last_seen_at FROM users") == {
+        (None, False, None)
+    }
+    assert {"login_failures", "upload_sessions"} <= table_names(blank_db)
+    command.downgrade(cfg, "0005")  # with data in the tables, on SQLite and PostgreSQL
+    assert not {"login_failures", "upload_sessions"} & table_names(blank_db)
+    engine = create_engine(blank_db, poolclass=NullPool)
+    cols = {c["name"] for c in inspect(engine).get_columns("invitations")} | {
+        c["name"] for c in inspect(engine).get_columns("users")
+    }
+    engine.dispose()
+    assert not cols & {"max_uses", "uses", "suspended_at", "share_presence", "presence_last_seen_at"}
+    assert rows(blank_db, "SELECT id FROM invitations") == {("used",), ("fresh",)}
+    command.upgrade(cfg, "head")

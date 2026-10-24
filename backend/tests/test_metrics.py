@@ -97,7 +97,9 @@ def test_request_counts_and_latency_use_route_templates(client, local, admin, al
     buckets = [
         float(v)
         for n, lab, v in samples(text)
-        if n == "familychat_http_request_duration_seconds_bucket" and lab.get("route") == route and lab["status"] == "200"
+        if n == "familychat_http_request_duration_seconds_bucket"
+        and lab.get("route") == route
+        and lab["status"] == "200"
     ]
     assert buckets == sorted(buckets)  # cumulative
 
