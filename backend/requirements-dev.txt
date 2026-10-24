@@ -3,3 +3,20 @@ pytest==9.1.1
 pytest-timeout==2.4.0
 ruff==0.17.2
 openapi-spec-validator==0.9.0
+
+# Transitive dev dependencies, locked.
+attrs==26.1.0
+iniconfig==2.3.1
+jsonschema-path==0.5.0
+jsonschema-specifications==2025.9.1
+jsonschema==4.26.0
+lazy-object-proxy==1.13.0
+openapi-schema-validator==0.9.0
+packaging==26.3
+pathable==0.6.0
+pluggy==1.7.0
+Pygments==2.21.0
+referencing==0.37.0
+rfc3339-validator==0.1.4
+rpds-py==2026.9.1
+six==1.17.0
