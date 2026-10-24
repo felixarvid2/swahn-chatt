@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app import clock
-from app.deps import Principal, get_db, require_admin
+from app.deps import Principal, get_db, get_read_db, require_admin
 from app.errors import conflict, not_found
 from app.models import Invitation, User
 from app.schemas import InvitationCreate, InvitationCreated, InvitationOut
@@ -49,7 +49,7 @@ def post_invitation(body: InvitationCreate, p: Principal = Depends(require_admin
 
 
 @router.get("/invitations", response_model=list[InvitationOut])
-def list_invitations(_: Principal = Depends(require_admin), db: Session = Depends(get_db)):
+def list_invitations(_: Principal = Depends(require_admin), db: Session = Depends(get_read_db)):
     rows = db.scalars(select(Invitation).order_by(Invitation.created_at.desc())).all()
     return [
         {

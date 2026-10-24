@@ -107,6 +107,7 @@ import se.familychat.app.ui.components.dayLabel
 import se.familychat.app.ui.components.formatDuration
 import se.familychat.app.ui.model.AttachmentKindUi
 import se.familychat.app.ui.model.ChatRow
+import se.familychat.app.media.ShareFiles
 import se.familychat.app.ui.model.SystemKind
 import se.familychat.app.ui.model.TransferUi
 import java.io.File
@@ -171,6 +172,7 @@ fun ConversationScreen(nav: ConversationNav, vm: ConversationViewModel = hiltVie
             onDownload = { messageId, a -> vm.download(messageId, a) },
             onToggleVoice = { _, a -> vm.toggleVoice(a) },
             onReviewIdentity = { state.otherUserId?.let(nav.onOpenContact) },
+            onOpenContact = nav.onOpenContact,
             onJumpTo = vm::jumpTo,
         )
     }
@@ -242,14 +244,16 @@ private fun copyToClipboard(context: Context, text: String) {
  * receiving app sees "holiday.pdf" and not the attachment id; the FileProvider only serves that cache folder.
  */
 internal fun openFile(context: Context, path: String, mime: String, name: String? = null) {
-    val dir = File(context.cacheDir, "share").apply { mkdirs(); listFiles()?.forEach { it.delete() } }
-    val safe = (name ?: File(path).name).replace(Regex("[^\\p{L}\\p{N}._ -]"), "_").trim().take(100).ifEmpty { "file" }
-    val copy = File(dir, safe)
-    File(path).copyTo(copy, overwrite = true)
-    val uri = FileProvider.getUriForFile(context, "${context.packageName}.files", copy)
-    val send = Intent(Intent.ACTION_SEND).setType(mime).putExtra(Intent.EXTRA_STREAM, uri)
-        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-    context.startActivity(Intent.createChooser(send, null).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    try {
+        val copy = ShareFiles.copyForSharing(File(path), File(context.cacheDir, "share"), name)
+        val uri = FileProvider.getUriForFile(context, "${context.packageName}.files", copy)
+        val send = Intent(Intent.ACTION_SEND).setType(mime).putExtra(Intent.EXTRA_STREAM, uri)
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        context.startActivity(Intent.createChooser(send, null).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    } catch (e: Exception) {
+        // a bad name, a vanished file, no app to share with: tell the user instead of crashing
+        Toast.makeText(context, R.string.error_open_file, Toast.LENGTH_LONG).show()
+    }
 }
 
 @Composable
@@ -262,6 +266,7 @@ fun errorTexts(): (UiError) -> String {
                     UiError.NETWORK -> R.string.error_network
                     UiError.INVALID_CREDENTIALS -> R.string.error_invalid_credentials
                     UiError.USERNAME_TAKEN -> R.string.error_username_taken
+                    UiError.DEVICE_LIMIT -> R.string.error_device_limit
                     UiError.INVALID_INVITE -> R.string.error_invalid_invite
                     UiError.RATE_LIMITED -> R.string.error_rate_limited
                     UiError.FORBIDDEN -> R.string.error_forbidden
@@ -403,7 +408,7 @@ private fun MessageList(
                 when (row) {
                     is ChatRow.DateHeader -> DateSeparator(row)
                     is ChatRow.Message -> MessageBubble(row, actions, playback)
-                    is ChatRow.System -> SystemNotice(row, actions.onReviewIdentity)
+                    is ChatRow.System -> SystemNotice(row) { actions.onOpenContact(row.userId) }
                 }
             }
         }
@@ -423,7 +428,18 @@ private fun DateSeparator(row: ChatRow.DateHeader) {
 
 @Composable
 private fun SystemNotice(row: ChatRow.System, onReview: () -> Unit) {
-    val warning = row.kind == SystemKind.IDENTITY_CHANGED
+    val warning = row.kind == SystemKind.IDENTITY_CHANGED || row.kind == SystemKind.NEW_DEVICE_BLOCKED
+    val text = when (row.kind) {
+        SystemKind.IDENTITY_CHANGED -> stringResource(R.string.system_identity_changed, row.personName)
+        SystemKind.NEW_DEVICE ->
+            if (row.own) stringResource(R.string.system_new_own_device, row.deviceName.orEmpty())
+            else stringResource(R.string.system_new_device, row.personName, row.deviceName.orEmpty())
+        SystemKind.NEW_DEVICE_BLOCKED ->
+            if (row.own) stringResource(R.string.system_new_own_device_blocked, row.deviceName.orEmpty())
+            else stringResource(R.string.system_new_device_blocked, row.personName, row.deviceName.orEmpty())
+        SystemKind.MEMBER_ADDED -> stringResource(R.string.system_member_added, row.personName)
+        SystemKind.MEMBER_REMOVED -> stringResource(R.string.system_member_removed, row.personName)
+    }
     Column(
         Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 6.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -440,8 +456,7 @@ private fun SystemNotice(row: ChatRow.System, onReview: () -> Unit) {
                 modifier = Modifier.size(18.dp),
             )
             Text(
-                if (warning) stringResource(R.string.system_identity_changed, row.personName)
-                else stringResource(R.string.system_new_device, row.personName, row.deviceName.orEmpty()),
+                text,
                 style = MaterialTheme.typography.bodySmall,
                 color = if (warning) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(start = 8.dp),

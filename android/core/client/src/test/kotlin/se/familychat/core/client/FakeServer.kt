@@ -69,6 +69,55 @@ class FakeServer {
     @Volatile var corruptAttachments = false
     @Volatile var alwaysMismatch = false
 
+    // --- a malicious server --------------------------------------------------------------------------------------------
+    /** Rewrites the device list the server returns for a user (number remaps, injected or hidden devices). */
+    @Volatile var listDevicesHook: ((userId: String, honest: List<Device>) -> List<Device>)? = null
+
+    /** Rewrites a key bundle response (another identity key, another device id). */
+    @Volatile var getKeysHook: ((userId: String, deviceId: String?, honest: KeyBundleResponse) -> KeyBundleResponse)? = null
+
+    /** If set, the next sends fail with this 409 (once per element) before reaching the normal checks. */
+    val forcedMismatches = java.util.concurrent.ConcurrentLinkedQueue<ApiException.MismatchedDevices>()
+
+    /** Puts an arbitrary event into a device's queue, as a server that controls every response could. */
+    fun injectEvent(deviceId: String, type: String, conversationId: String?, data: JsonElement): Event =
+        enqueue(deviceId, type, conversationId, data)
+
+    /**
+     * The server adds a device with its own keys to [userId]'s account (a rogue device). It is listed, receives
+     * envelopes and counts for the `mismatched_devices` check like any device; [announce] controls whether anybody gets
+     * a `devices_changed` event (a malicious server would not send one).
+     */
+    fun addDevice(userId: String, upload: UploadKeysRequest, name: String = "rogue", announce: Boolean = false, id: String = UUID.randomUUID().toString()): String =
+        synchronized(lock) {
+            val used = devices.values.filter { it.userId == userId && !it.revoked }.map { it.number }.toSet()
+            val number = (1..127).first { it !in used }
+            val d = DeviceRec(id, userId, number, name, upload)
+            upload.oneTimePrekeys.orEmpty().forEach { d.ec.add(it) }
+            upload.oneTimePqPrekeys.orEmpty().forEach { d.pq.add(it) }
+            devices[id] = d
+            queues[id] = ArrayList()
+            if (announce) notifyDevicesChanged(userId)
+            id
+        }
+
+    /** The server replaces the identity (and prekeys) of a known device by [upload]'s: same uuid, another key. */
+    fun swapIdentity(deviceId: String, upload: UploadKeysRequest, announce: Boolean = false) {
+        synchronized(lock) {
+            val d = devices.getValue(deviceId)
+            d.keys = upload
+            d.ec.clear(); d.pq.clear()
+            upload.oneTimePrekeys.orEmpty().forEach { d.ec.add(it) }
+            upload.oneTimePqPrekeys.orEmpty().forEach { d.pq.add(it) }
+            if (announce) notifyDevicesChanged(d.userId)
+        }
+    }
+
+    /** Tells every interested device that [userId]'s devices changed (what the real server does on key uploads). */
+    fun announceDevicesChanged(userId: String) {
+        synchronized(lock) { notifyDevicesChanged(userId) }
+    }
+
     // --- accounts -----------------------------------------------------------------------------------------------------
 
     fun newUser(username: String, displayName: String = username, admin: Boolean = false, password: String = "password-$username"): UserRec =
@@ -173,7 +222,8 @@ class FakeServer {
         override suspend fun changePassword(request: ChangePasswordRequest) = Unit
         override suspend fun listDevices(userId: String): List<Device> = synchronized(lock) {
             log += "devices:$userId"
-            activeDevices(userId).map { deviceDto(it) }
+            val honest = activeDevices(userId).map { deviceDto(it) }
+            listDevicesHook?.invoke(userId, honest) ?: honest
         }
 
         override suspend fun myDevice(): Device = synchronized(lock) { deviceDto(me) }
@@ -212,7 +262,7 @@ class FakeServer {
         override suspend fun getKeys(userId: String, deviceId: String?): KeyBundleResponse = synchronized(lock) {
             log += "keys:$userId:${deviceId?.take(4)}"
             val list = activeDevices(userId).filter { it.keys != null && it.id != me.id && (deviceId == null || it.id == deviceId) }
-            KeyBundleResponse(
+            val honest = KeyBundleResponse(
                 userId,
                 list.map { d ->
                     val k = d.keys!!
@@ -222,6 +272,7 @@ class FakeServer {
                     )
                 },
             )
+            getKeysHook?.invoke(userId, deviceId, honest) ?: honest
         }
 
         override suspend fun listConversations(): List<Conversation> = synchronized(lock) {
@@ -307,9 +358,10 @@ class FakeServer {
                 return SendMessageResponse(it.msg.copy(envelope = null), true)
             }
             if (alwaysMismatch) throw ApiException.MismatchedDevices("forced", emptyList(), emptyList())
+            forcedMismatches.poll()?.let { throw it }
             val expected = c.members.keys.flatMap { activeDevices(it) }.filter { it.keys != null && it.id != me.id }.map { it.id }.toSet()
             val given = r.envelopes.map { it.deviceId }.toSet()
-            val want = if (r.kind == MessageKind.DELETE) emptySet() else expected
+            val want = expected // deletes carry ciphertext for the full device set too
             if (given != want) {
                 fun ref(id: String) = DeviceRef(devices.getValue(id).userId, id)
                 throw ApiException.MismatchedDevices("mismatch", (want - given).map(::ref), (given - want).map(::ref))
@@ -324,14 +376,8 @@ class FakeServer {
             )
             val envMap = r.envelopes.associate { it.deviceId to MessageEnvelope(it.type, it.body) }
             messages[r.id] = MsgRec(msg, r.kind, envMap)
-            if (r.kind == MessageKind.DELETE) {
-                messages.getValue(r.targetMessageId!!).deleted = true
-                for (u in c.members.keys) for (d in activeDevices(u)) if (d.id != me.id) {
-                    enqueue(d.id, EventType.MESSAGE, c.id, FamilyChatJson.encodeToJsonElement(msg.copy(envelope = null)))
-                }
-            } else {
-                for ((devId, env) in envMap) enqueue(devId, EventType.MESSAGE, c.id, FamilyChatJson.encodeToJsonElement(msg.copy(envelope = env)))
-            }
+            if (r.kind == MessageKind.DELETE) messages.getValue(r.targetMessageId!!).deleted = true
+            for ((devId, env) in envMap) enqueue(devId, EventType.MESSAGE, c.id, FamilyChatJson.encodeToJsonElement(msg.copy(envelope = env)))
             return SendMessageResponse(msg, false)
         }
 

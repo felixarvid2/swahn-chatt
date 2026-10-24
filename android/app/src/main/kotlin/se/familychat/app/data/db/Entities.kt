@@ -105,10 +105,11 @@ data class MessageEntity(
     /** User ids, comma separated (UUIDs contain no commas). */
     val deliveredTo: String,
     val readBy: String,
-    /** `new_device` / `identity_changed` for system notices, else null. */
+    /** `new_device` / `new_device_blocked` / `identity_changed` / `member_added` / `member_removed` for system notices, else null. */
     val systemType: String?,
     val systemUserId: String?,
-    val systemDeviceNumber: Int?,
+    /** The device UUID a device notice is about (never the server's device number). */
+    val systemDeviceId: String?,
     val systemDeviceName: String?,
     val pendingEnvelopeType: String?,
     val pendingEnvelopeBody: String?,
@@ -154,15 +155,18 @@ class SignalKyberPreKeyEntity(@PrimaryKey val id: Int, val record: ByteArray, va
 @Entity(tableName = "signal_last_resort_used", primaryKeys = ["kyberId", "signedId", "baseKeyHex"])
 class SignalLastResortUsedEntity(val kyberId: Int, val signedId: Int, val baseKeyHex: String)
 
-@Entity(tableName = "signal_sessions", primaryKeys = ["name", "deviceNumber"])
-class SignalSessionEntity(val name: String, val deviceNumber: Int, val record: ByteArray)
+/** A Signal session; [name] is `"<userId>/<deviceUuid>"` (see `DeviceAddress`). */
+@Entity(tableName = "signal_sessions")
+class SignalSessionEntity(@PrimaryKey val name: String, val record: ByteArray)
 
-@Entity(tableName = "signal_identities", primaryKeys = ["name", "deviceNumber"])
+/** The pinned identity of a remote device, keyed by the device UUID; [userId] is the owner it was pinned for. */
+@Entity(tableName = "signal_identities", indices = [Index("userId")])
 class SignalRemoteIdentityEntity(
-    val name: String,
-    val deviceNumber: Int,
+    @PrimaryKey val deviceId: String,
+    val userId: String,
     val identityKey: ByteArray,
     val verified: Boolean,
+    val approved: Boolean,
 )
 
 @Entity(tableName = "signal_counters")

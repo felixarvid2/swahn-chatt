@@ -2,8 +2,8 @@ from fastapi import APIRouter, Depends, Response
 from sqlalchemy.orm import Session
 
 from app.config import Settings
-from app.deps import Principal, get_db, get_principal, get_settings_dep
-from app.errors import invalid, not_found
+from app.deps import Principal, get_db, get_principal, get_read_db, get_settings_dep
+from app.errors import conflict, invalid, not_found
 from app.models import Device
 from app.schemas import DeviceOut, PushRegistration
 from app.services import accounts
@@ -14,7 +14,7 @@ router = APIRouter(prefix="/devices", tags=["devices"])
 
 
 @router.get("/me", response_model=DeviceOut)
-def my_device(p: Principal = Depends(get_principal), db: Session = Depends(get_db)):
+def my_device(p: Principal = Depends(get_principal), db: Session = Depends(get_read_db)):
     return device_out_db(db, db.get(Device, p.device_id))
 
 
@@ -25,7 +25,13 @@ def set_push(
     settings: Settings = Depends(get_settings_dep),
     db: Session = Depends(get_db),
 ):
-    if not endpoint_allowed(body.endpoint, settings.push_allow_http, parse_hosts(settings.push_allowed_hosts)):
+    hosts = parse_hosts(settings.push_allowed_hosts)
+    if settings.push_requires_allowlist and not hosts:
+        raise conflict(
+            "push is not configured on this server: the administrator must set FAMILYCHAT_PUSH_ALLOWED_HOSTS",
+            "push_not_configured",
+        )
+    if not endpoint_allowed(body.endpoint, settings.push_allow_http, hosts, settings.push_requires_allowlist):
         raise invalid("endpoint must be an https URL on an allowed push host")
     device = db.get(Device, p.device_id)
     device.push_kind = body.kind

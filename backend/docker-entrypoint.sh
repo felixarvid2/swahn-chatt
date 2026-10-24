@@ -9,4 +9,4 @@ exec uvicorn app.main:create_app --factory \
   --host 0.0.0.0 --port 8000 --workers 1 \
   --no-access-log --no-proxy-headers --no-server-header \
   --log-config /app/uvicorn_log.json \
-  --ws-ping-interval 25 --ws-ping-timeout 60
+  --ws-ping-interval 25 --ws-ping-timeout 60 --ws-max-size 65536  # WebSocket frames are tiny control messages

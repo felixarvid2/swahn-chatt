@@ -169,7 +169,7 @@ abstract class LocalStoreContract {
         store.upsertMessage(msg("c", seq = 4))
         store.upsertMessage(msg("own", seq = 5, outgoing = true))
         store.upsertMessage(msg("gone", seq = 6).copy(deleted = true))
-        store.upsertMessage(msg("sys", seq = 7).copy(systemEvent = SystemEvent.NewDevice("u2", 2, "Phone")))
+        store.upsertMessage(msg("sys", seq = 7).copy(systemEvent = SystemEvent.NewDevice("u2", "dev-2", "Phone")))
         assertEquals(2, store.unreadCount("c1"))
         store.setMyReadSeq("c1", 4)
         assertEquals(0, store.unreadCount("c1"))
@@ -200,13 +200,23 @@ abstract class LocalStoreContract {
         assertEquals(m, store.getMessage("m1"))
         val sys = StoredMessage(
             id = "sys-1", conversationId = "c1", senderUserId = "", senderDeviceId = null, outgoing = false, status = MessageStatus.RECEIVED,
-            seq = 8, clientTs = 1, serverTs = null, text = null, replyTo = null, systemEvent = SystemEvent.IdentityChanged("u2", 3),
+            seq = 8, clientTs = 1, serverTs = null, text = null, replyTo = null, systemEvent = SystemEvent.IdentityChanged("u2", "dev-3"),
         )
         store.upsertMessage(sys)
         assertEquals(sys, store.getMessage("sys-1"))
-        val nd = sys.copy(id = "sys-2", systemEvent = SystemEvent.NewDevice("u2", 4, "Tablet"))
+        val nd = sys.copy(id = "sys-2", systemEvent = SystemEvent.NewDevice("u2", "dev-4", "Tablet"))
         store.upsertMessage(nd)
         assertEquals(nd, store.getMessage("sys-2"))
+        // every notice type keeps its fields, including the approval flag and the group member notices
+        for ((i, event) in listOf(
+            SystemEvent.NewDevice("u2", "dev-5", "Tablet", needsApproval = true),
+            SystemEvent.MemberAdded("u3"),
+            SystemEvent.MemberRemoved("u4"),
+        ).withIndex()) {
+            val n = sys.copy(id = "sys-n$i", systemEvent = event)
+            store.upsertMessage(n)
+            assertEquals(n, store.getMessage("sys-n$i"))
+        }
     }
 
     @Test fun `updateMessage applies edits and deletes atomically and reports a missing message`() = runBlocking {

@@ -151,8 +151,8 @@ class RoomEngineE2ETest {
             assertEquals(se.familychat.core.client.DownloadState.DONE, aliceStore.getMessage(fromBob)!!.attachments.single().downloadState)
 
             // safety numbers computed from the Room-stored identities agree on both phones
-            val bobDevice = bob.engine.account.value!!.deviceNumber
-            val aliceDevice = alice.account.value!!.deviceNumber
+            val bobDevice = bob.engine.account.value!!.deviceId
+            val aliceDevice = alice.account.value!!.deviceId
             assertEquals(
                 alice.safetyNumber(bob.userId, bobDevice)!!.digits,
                 bob.engine.safetyNumber(aliceId, aliceDevice)!!.digits,

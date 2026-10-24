@@ -2,6 +2,7 @@
 
 import logging
 import os
+import re
 import time
 import uuid
 from pathlib import Path
@@ -40,8 +41,29 @@ def new_storage_path(att_id: str) -> str:
     return f"{att_id[:2]}/{att_id}"
 
 
-def full_path(settings: Settings, storage_path: str) -> Path:
-    return settings.attachments_dir / storage_path
+UUID_PATH_RE = re.compile(r"^[0-9a-f]{2}/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$")
+
+
+class InvalidStoragePath(ValueError):
+    pass
+
+
+def check_storage_path(storage_path: str, att_id: str | None = None) -> None:
+    """The format new_storage_path() produces: `<first two id chars>/<id>`. Anything else is a tampered row."""
+    m = UUID_PATH_RE.match(storage_path or "")
+    if m is None or storage_path[:2] != m.group(1)[:2] or (att_id is not None and m.group(1) != att_id):
+        raise InvalidStoragePath("attachment storage path has an unexpected format")
+
+
+def full_path(settings: Settings, storage_path: str, att_id: str | None = None) -> Path:
+    """Absolute file path for a stored attachment; refuses anything that could leave the attachments directory
+    (a restored or hand-edited database must never make the server read or delete other files)."""
+    check_storage_path(storage_path, att_id)
+    base = settings.attachments_dir.resolve()
+    path = (base / storage_path).resolve()
+    if not path.is_relative_to(base):
+        raise InvalidStoragePath("attachment storage path escapes the attachments directory")
+    return path
 
 
 def used_bytes(db: Session, user_id: str) -> int:
@@ -89,7 +111,10 @@ def collect_garbage(db: Session, settings: Settings) -> int:
     ).all()
     for att in victims:
         try:
-            full_path(settings, att.storage_path).unlink(missing_ok=True)
+            full_path(settings, att.storage_path, att.id).unlink(missing_ok=True)
+        except InvalidStoragePath:
+            log.error("attachment %s has an invalid storage path; row and file left untouched", att.id)
+            continue
         except OSError:
             log.warning("could not delete attachment file")
             continue

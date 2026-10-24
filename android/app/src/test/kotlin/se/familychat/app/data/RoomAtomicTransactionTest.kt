@@ -55,23 +55,23 @@ class RoomAtomicTransactionTest {
     /** What SyncProcessor does for one message: advance the ratchet, then store the plaintext. */
     private fun decryptAndStore(id: String, seq: Long, failAfterWrites: Boolean = false) {
         store.blockingTransaction {
-            protocol.storeSession("u2", 1, ratchetAfter) // libsignal persists the new ratchet state while decrypting
+            protocol.storeSession("u2/d1", ratchetAfter) // libsignal persists the new ratchet state while decrypting
             runBlocking { store.upsertMessage(msg(id, seq)) }
             if (failAfterWrites) throw IllegalStateException("crash before commit")
         }
     }
 
     @Test fun `ratchet and plaintext commit together`() {
-        protocol.storeSession("u2", 1, ratchetBefore)
+        protocol.storeSession("u2/d1", ratchetBefore)
         decryptAndStore("m1", 1)
-        assertContentEquals(ratchetAfter, protocol.loadSession("u2", 1))
+        assertContentEquals(ratchetAfter, protocol.loadSession("u2/d1"))
         assertNotNull(runBlocking { store.getMessage("m1") })
     }
 
     @Test fun `a failure after both writes rolls back the ratchet and the plaintext`() {
-        protocol.storeSession("u2", 1, ratchetBefore)
+        protocol.storeSession("u2/d1", ratchetBefore)
         assertFailsWith<IllegalStateException> { decryptAndStore("m1", 1, failAfterWrites = true) }
-        assertContentEquals(ratchetBefore, protocol.loadSession("u2", 1), "ratchet must be unchanged so the replay can decrypt again")
+        assertContentEquals(ratchetBefore, protocol.loadSession("u2/d1"), "ratchet must be unchanged so the replay can decrypt again")
         assertNull(runBlocking { store.getMessage("m1") })
     }
 
@@ -84,24 +84,24 @@ class RoomAtomicTransactionTest {
                 store.transaction { store.upsertMessage(msg("m2", 2)) } // nested suspending transaction
                 store.removeConversation("none")
             }
-            protocol.storeSession("u2", 1, ratchetAfter)
+            protocol.storeSession("u2/d1", ratchetAfter)
         }
         assertEquals("edited", runBlocking { store.getMessage("m1") }!!.text)
         assertEquals(2, runBlocking { store.getMessages("c1") }.size)
     }
 
     @Test fun `a suspending transaction also covers blocking protocol calls made on its thread`() {
-        protocol.storeSession("u2", 1, ratchetBefore)
+        protocol.storeSession("u2/d1", ratchetBefore)
         assertFailsWith<IllegalStateException> {
             runBlocking {
                 store.transaction {
                     store.upsertMessage(msg("m1", 1))
-                    protocol.storeSession("u2", 1, ratchetAfter)
+                    protocol.storeSession("u2/d1", ratchetAfter)
                     throw IllegalStateException("boom")
                 }
             }
         }
-        assertContentEquals(ratchetBefore, protocol.loadSession("u2", 1))
+        assertContentEquals(ratchetBefore, protocol.loadSession("u2/d1"))
         assertNull(runBlocking { store.getMessage("m1") })
     }
 
@@ -113,14 +113,14 @@ class RoomAtomicTransactionTest {
             val decrypt = pool.submit(Callable {
                 for (i in 1..iterations) synchronized(cryptoLock) {
                     store.blockingTransaction {
-                        protocol.storeSession("u2", 1, byteArrayOf(i.toByte()))
+                        protocol.storeSession("u2/d1", byteArrayOf(i.toByte()))
                         runBlocking { store.upsertMessage(msg("in$i", i.toLong())) }
                     }
                 }
             })
             val encrypt = pool.submit(Callable {
                 for (i in 1..iterations) synchronized(cryptoLock) {
-                    protocol.storeSession("u3", 1, byteArrayOf(i.toByte()))
+                    protocol.storeSession("u3/d1", byteArrayOf(i.toByte()))
                     protocol.reserveKeyIds(se.familychat.core.crypto.KeyIdKind.PRE_KEY, 1)
                 }
             })
@@ -139,7 +139,7 @@ class RoomAtomicTransactionTest {
         } finally {
             pool.shutdownNow()
         }
-        assertEquals(iterations.toByte().toInt(), protocol.loadSession("u2", 1)!![0].toInt())
+        assertEquals(iterations.toByte().toInt(), protocol.loadSession("u2/d1")!![0].toInt())
         assertEquals(2 * iterations, runBlocking { store.getMessages("c1", 1000) }.size)
         assertEquals(iterations.toString(), runBlocking { store.getMeta("last") })
     }

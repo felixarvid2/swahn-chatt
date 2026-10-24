@@ -40,6 +40,7 @@ sealed interface DevicesUi {
 @Immutable
 data class SettingsUiState(
     val displayName: String = "",
+    val userId: String = "",
     val username: String = "",
     val avatar: AvatarUi = AvatarUi(""),
     val isAdmin: Boolean = false,
@@ -81,6 +82,7 @@ class SettingsViewModel @Inject constructor(
         distributorsTick.value
         SettingsUiState(
             displayName = user?.displayName ?: a?.displayName.orEmpty(),
+            userId = a?.userId.orEmpty(),
             username = a?.username.orEmpty(),
             avatar = AvatarUi(user?.displayName ?: a?.displayName.orEmpty(), user?.avatarAttachmentId),
             isAdmin = a?.isAdmin == true, serverUrl = a?.serverUrl.orEmpty(), deviceName = a?.deviceName.orEmpty(),

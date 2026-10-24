@@ -103,7 +103,9 @@ Do not use `tailscale funnel` for this: it would put the login API on the public
    docker compose logs -f caddy      # watch it obtain the certificate
    ```
    Caddy terminates TLS, proxies `/api/v1/ws` WebSockets and obtains/renews Let's Encrypt certificates. Keep the
-   `caddy-data` volume; deleting it forces re-issuing and can hit Let's Encrypt rate limits.
+   `caddy-data` volume; deleting it forces re-issuing and can hit Let's Encrypt rate limits. Caddy caps request
+   bodies at 9 MB, except attachment uploads: those may be `CADDY_MAX_UPLOAD` (default `110MB`). If you raise
+   `FAMILYCHAT_MAX_ATTACHMENT_MB` above 100, raise `CADDY_MAX_UPLOAD` in `.env` too (a bit above it).
 4. Never forward port 8000.
 
 You can run Tailscale and Caddy side by side, but choose one address for the app.
@@ -127,7 +129,7 @@ Administrators can also create and revoke invitations in the app. Each code work
 
 ```bash
 docker compose exec backend python -m app.cli list-users
-docker compose exec backend python -m app.cli remove-user <username>   # kills their sessions immediately
+docker compose exec backend python -m app.cli remove-user <username>   # API access ends at once; open sockets close within ~1 min
 ```
 
 Every login on a new phone is a new *device* with new encryption keys. Messages sent before a device existed
@@ -153,9 +155,12 @@ Without push the app only syncs when it is open or every 15 minutes. With push t
    UnifiedPush distributor; the app registers its endpoint (`https://.../up…`) with `PUT /devices/me/push`.
 4. The backend only sends to `https` endpoints (`FAMILYCHAT_PUSH_ALLOW_HTTP=false`), with a 5 second timeout, and
    never blocks a request on it. Failures are logged without the endpoint URL.
-5. Set `FAMILYCHAT_PUSH_ALLOWED_HOSTS` in `.env` to the host name of your ntfy server (for example
-   `pi.tailnet-name.ts.net`). Then the server refuses push endpoints on any other host, so it cannot be abused
-   to send requests to arbitrary URLs.
+5. **Set `FAMILYCHAT_PUSH_ALLOWED_HOSTS` in `.env`** to the host name of your ntfy server (for example
+   `pi.tailnet-name.ts.net`; comma separated for several). It is required: while it is empty the production
+   server refuses to register push endpoints (`409 push_not_configured`), logs a warning at startup and sends no
+   push. With it set, endpoints on any other host are refused, so the server cannot be abused to send requests
+   to arbitrary URLs. IP addresses as host names are refused unless you list that exact address. Restart the
+   backend after changing it (`docker compose up -d`) and let the phones register again (reopen the app).
 
 The backend container must be able to resolve and reach the host in the registered endpoint. With public DNS
 (Caddy option) this just works. With a `*.ts.net` name the container has to resolve MagicDNS through the host; if
@@ -176,6 +181,11 @@ docker compose up -d --build         # rebuilds the image; migrations run automa
 docker compose ps && curl -s http://127.0.0.1:8000/readyz
 docker image prune -f                # drop old image layers
 ```
+
+The Caddy and ntfy images are pinned to specific versions in `docker-compose.yml`; they do not update by
+themselves. To upgrade one, change its tag deliberately (read the release notes), then `docker compose pull && docker compose up -d`.
+The backend container has a read-only root filesystem: anything you copy in or out by hand must go through
+`/data` (the volume), not `/tmp` (a small tmpfs); `backup.sh` and `restore.sh` already do.
 
 If an upgrade misbehaves: `git checkout <previous commit>`, `docker compose up -d --build`, and if the new
 version changed the database, `./restore.sh` the backup taken in step one (migrations only move forward).
@@ -238,6 +248,8 @@ SQLite in WAL mode survives it, but an SSD survives it better than an SD card.
 |---|---|
 | Container restarts immediately | `docker compose logs backend`: usually a missing or short `FAMILYCHAT_SECRET_KEY` |
 | App says token expired in a loop | The phone's clock is wrong, or `FAMILYCHAT_SECRET_KEY` changed (log in again) |
-| `429 rate_limited` | Too many logins from one address; wait for `Retry-After` seconds |
+| `429 rate_limited` | Too many attempts from one address (IPv6: one /64 prefix), or too many failed logins for that username (10 per hour, 30 per day, from anywhere); wait for `Retry-After` seconds. The counters are in memory: restarting the backend clears them |
+| `409 device_limit` at login | The account has `FAMILYCHAT_MAX_DEVICES_PER_USER` (default 10) active devices; remove an old one from a signed-in device (`DELETE /devices/{id}`) or with `remove-user` as an admin |
+| Revoked device still shows connected | The CLI cannot reach the running server's sockets; they close within `FAMILYCHAT_WS_REVALIDATE_SECONDS` (60 s) |
 | No push notifications | ntfy health URL, battery optimisation for the ntfy app, `docker compose logs backend \| grep push` |
 | Disk filling up | `docker system df`; attachments live in the `familychat-data` volume (per-user quota `FAMILYCHAT_USER_QUOTA_MB`) |

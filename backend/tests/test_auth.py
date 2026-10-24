@@ -5,6 +5,7 @@ import jwt
 from app import clock
 from app.models import Device, Invitation
 from app.models import Session as AuthSession
+from app.security import hash_token
 from tests.conftest import PASSWORD, SECRET
 
 REDEEM = "/api/v1/auth/invite/redeem"
@@ -198,7 +199,7 @@ def test_rate_limit_per_ip_and_other_endpoints(make_app):
     assert codes[-1] == 429
 
 
-def test_rate_limit_key_fetch_per_device(make_app):
+def test_rate_limit_key_fetch_per_user(make_app):
     from tests.conftest import Factory
 
     app, client = make_app(rate_limit_enabled=True)
@@ -299,3 +300,66 @@ def test_devices_endpoints(factory, alice, bob):
     assert second.get("/users/me").status_code == 401
     assert [d["number"] for d in bob.get(f"/users/{alice.id}/devices").json()] == [1]
     assert bob.get("/users/00000000-0000-4000-8000-000000000000/devices").status_code == 404
+
+
+def _refresh(client, token):
+    return client.post("/api/v1/auth/refresh", json={"refresh_token": token})
+
+
+def test_reuse_detected_after_several_rotations(alice, client):
+    """An attacker who rotates a stolen token twice used to escape detection (only one previous hash was kept)."""
+    stolen = alice.refresh
+    r1 = _refresh(client, stolen)
+    r2 = _refresh(client, r1.json()["refresh_token"])
+    r3 = _refresh(client, r2.json()["refresh_token"])
+    assert r1.status_code == r2.status_code == r3.status_code == 200
+    attacker = {"Authorization": f"Bearer {r3.json()['access_token']}"}
+    assert client.get("/api/v1/users/me", headers=attacker).status_code == 200
+    # the victim (or the attacker) presents any non-current token: the whole session dies
+    for old in (stolen, r1.json()["refresh_token"]):
+        r = _refresh(client, old)
+        assert r.status_code == 401 and r.json()["code"] == "token_reused"
+    assert client.get("/api/v1/users/me", headers=attacker).status_code == 401
+    assert _refresh(client, r3.json()["refresh_token"]).status_code == 401
+
+
+def test_middle_token_reuse_revokes_session(alice, client):
+    r1 = _refresh(client, alice.refresh)
+    r2 = _refresh(client, r1.json()["refresh_token"])
+    r3 = _refresh(client, r2.json()["refresh_token"])
+    r = _refresh(client, r2.json()["refresh_token"])  # neither the first nor the previous one
+    assert r.status_code == 401 and r.json()["code"] == "token_reused"
+    assert _refresh(client, r3.json()["refresh_token"]).status_code == 401
+
+
+def test_token_history_is_stored_hashed_and_pruned_with_the_session(alice, client, app):
+    from app.models import SessionToken
+    from app.services.maintenance import prune
+
+    tokens = [alice.refresh]
+    for _ in range(3):
+        tokens.append(_refresh(client, tokens[-1]).json()["refresh_token"])
+    with app.state.session_factory() as db:
+        stored = {t.token_hash for t in db.query(SessionToken)}
+        assert stored == {hash_token(t) for t in tokens}
+        assert not (stored & set(tokens))
+        s = db.query(AuthSession).one()
+        s.revoked_at = clock.now_ms() - 8 * 86_400_000
+        db.commit()
+        assert prune(db, app.state.settings)["sessions"] == 1
+        assert db.query(SessionToken).count() == 0
+
+
+def test_prune_drops_tokens_older_than_the_refresh_lifetime_but_keeps_recent_ones(alice, client, app):
+    from app.models import SessionToken
+    from app.services.maintenance import prune
+
+    first = _refresh(client, alice.refresh)
+    assert first.status_code == 200
+    with app.state.session_factory() as db:
+        old = db.query(SessionToken).filter_by(token_hash=hash_token(alice.refresh)).one()
+        old.issued_at = clock.now_ms() - (app.state.settings.refresh_token_days + 1) * 86_400_000
+        db.commit()
+        prune(db, app.state.settings)
+        assert db.query(SessionToken).count() == 1  # the current token stays, the expired old one is gone
+    assert _refresh(client, alice.refresh).json()["code"] == "invalid_token"

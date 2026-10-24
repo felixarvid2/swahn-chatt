@@ -61,7 +61,7 @@ def test_deleted_message_revokes_member_access(factory, alice, bob):
     cid = factory.direct(alice, bob)
     mid = alice.send(cid, "file", attachment_ids=[att["id"]]).json()["message"]["id"]
     assert bob.get(f"/attachments/{att['id']}").status_code == 200
-    alice.send(cid, "", kind="delete", target_message_id=mid, envelopes=[])
+    alice.send(cid, "", kind="delete", target_message_id=mid)
     assert bob.get(f"/attachments/{att['id']}").status_code == 404
     assert alice.get(f"/attachments/{att['id']}").status_code == 200
 
@@ -213,3 +213,74 @@ def test_garbage_collection_of_unreferenced_attachments(factory, alice, bob, app
     assert names == left
     assert orphan["id"] not in names and avatar["id"] not in names
     assert Path(app.state.settings.attachments_dir).is_dir()
+
+
+# --- tampered storage_path (e.g. from a modified restored backup) must never leave the attachments dir
+
+
+def _tamper(app, att_id, storage_path):
+    with app.state.session_factory() as db:
+        db.get(Attachment, att_id).storage_path = storage_path
+        db.commit()
+
+
+def test_download_refuses_tampered_storage_paths(alice, app, tmp_path):
+    secret = app.state.settings.data_dir / "outside.txt"
+    secret.write_bytes(b"top secret")
+    att = upload(alice, b"abc").json()
+    own = f"{att['id'][:2]}/{att['id']}"
+    other = str(uuid.uuid4())
+    for bad in (
+        "../outside.txt",
+        "../familychat.db",
+        str(secret),  # absolute
+        f"{att['id'][:2]}/../../outside.txt",
+        f"{other[:2]}/{other}",  # well formed, but not this attachment's own file
+        f"zz/{att['id']}",
+        own + "/",
+        "",
+    ):
+        _tamper(app, att["id"], bad)
+        r = alice.get(f"/attachments/{att['id']}")
+        assert r.status_code == 404, bad
+    _tamper(app, att["id"], own)
+    assert alice.get(f"/attachments/{att['id']}").content == b"abc"
+    # a symlink inside the directory that points outside is refused as well
+    link = app.state.settings.attachments_dir / own
+    link.unlink()
+    link.symlink_to(secret)
+    assert alice.get(f"/attachments/{att['id']}").status_code == 404
+
+
+def test_garbage_collection_never_deletes_outside_the_attachments_dir(alice, app):
+    db_file = app.state.settings.sqlite_path
+    victim = app.state.settings.data_dir / "outside.txt"
+    victim.write_bytes(b"keep me")
+    att = upload(alice, b"abc").json()
+    own = app.state.settings.attachments_dir / att["id"][:2] / att["id"]
+    with app.state.session_factory() as db:
+        a = db.get(Attachment, att["id"])
+        a.created_at = clock.now_ms() - 3 * 24 * 3600 * 1000
+        a.storage_path = "../../familychat.db"
+        db.commit()
+        collect_garbage(db, app.state.settings)
+        a.storage_path = "../outside.txt"
+        db.commit()
+        collect_garbage(db, app.state.settings)
+        assert db.get(Attachment, att["id"]) is not None  # row left for the operator to look at
+    assert db_file.exists() and victim.read_bytes() == b"keep me" and own.exists()
+
+
+def test_restore_rejects_a_database_with_tampered_storage_paths(factory, alice, app, tmp_path):
+    import pytest
+
+    from app.services.backup import BackupError, create_backup, restore_backup
+    from tests.conftest import make_settings
+
+    att = upload(alice, b"abc").json()
+    _tamper(app, att["id"], "../../../etc/passwd")
+    archive = create_backup(app.state.settings, tmp_path / "b")
+    target = tmp_path / "restored"
+    with pytest.raises(BackupError, match="invalid storage path"):
+        restore_backup(make_settings(target), archive)
+    assert not (target / "familychat.db").exists()

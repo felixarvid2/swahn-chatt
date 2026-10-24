@@ -14,8 +14,9 @@ if [ "${2:-}" != "-y" ]; then
 fi
 
 docker compose stop backend
-# The archive is streamed through stdin so file permissions on the host do not matter.
+# The archive is streamed through stdin so file permissions on the host do not matter. It is staged on the data
+# volume (the container's root filesystem is read-only and /tmp is a small tmpfs) and removed afterwards.
 docker compose run --rm --no-deps -T --entrypoint sh backend -c \
-  'cat > /tmp/restore.tar.gz && python -m app.cli restore /tmp/restore.tar.gz --force' < "$archive"
+  'f=/data/.restore-upload.tar.gz; trap "rm -f $f" EXIT; cat > $f && python -m app.cli restore $f --force' < "$archive"
 docker compose up -d backend
 echo "restored; the backend applies any newer migrations on start"

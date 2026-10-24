@@ -273,7 +273,7 @@ class FamilyChatEngine(
             ctx.store.removeConversation(c.id)
             ctx.emit(EngineEvent.ConversationRemoved(c.id))
         }
-        remote.forEach { ctx.store.upsertConversation(it) }
+        remote.forEach { directory.applyConversation(it) }
         val userIds = (remote.flatMap { c -> c.members.map { it.userId } } + account.userId).distinct()
         for (u in userIds) directory.refreshDevices(u)
         remote.forEach { ctx.emit(EngineEvent.ConversationChanged(it.id)) }
@@ -286,7 +286,7 @@ class FamilyChatEngine(
 
     suspend fun createDirect(otherUserId: String): Conversation {
         val c = ctx.api.createConversation(CreateConversationRequest(ConversationType.DIRECT, null, listOf(otherUserId)))
-        ctx.store.upsertConversation(c)
+        directory.applyConversation(c)
         c.members.forEach { directory.refreshDevices(it.userId) }
         ctx.emit(EngineEvent.ConversationChanged(c.id))
         return c
@@ -296,7 +296,7 @@ class FamilyChatEngine(
         val c = ctx.api.createConversation(
             CreateConversationRequest(ConversationType.GROUP, name.trim(), memberUserIds, avatarAttachmentId),
         )
-        ctx.store.upsertConversation(c)
+        directory.applyConversation(c)
         c.members.forEach { directory.refreshDevices(it.userId) }
         ctx.emit(EngineEvent.ConversationChanged(c.id))
         return c
@@ -328,7 +328,7 @@ class FamilyChatEngine(
         updated(ctx.api.setMemberRole(conversationId, userId, SetRoleRequest(if (admin) "admin" else "member")))
 
     private suspend fun updated(c: Conversation): Conversation {
-        ctx.store.upsertConversation(c)
+        directory.applyConversation(c)
         ctx.emit(EngineEvent.ConversationChanged(c.id))
         return c
     }
@@ -668,63 +668,101 @@ class FamilyChatEngine(
     // Identity verification
     // =========================================================================================================
 
-    /** The safety number between this device and [userId]'s device [deviceNumber], or null if no identity is pinned yet. */
-    fun safetyNumber(userId: String, deviceNumber: Int): SafetyNumber? {
+    /**
+     * The safety number between this device and the device [deviceId] of [userId], or null if the device is not pinned.
+     * Devices are identified by their UUID (`Device.id`).
+     */
+    fun safetyNumber(userId: String, deviceId: String): SafetyNumber? {
         val account = ctx.account ?: return null
-        val remote = ctx.signalStore.pinnedIdentity(userId, deviceNumber) ?: return null
+        val remote = ctx.signalStore.pinnedIdentity(deviceId)?.takeIf { it.userId == userId } ?: return null
         return SafetyNumbers.compute(
-            account.userId, account.deviceNumber, ctx.keyManager.identityPublicKey(),
-            userId, deviceNumber, remote.identityKey,
+            account.userId, account.deviceId, ctx.keyManager.identityPublicKey(),
+            userId, deviceId, remote.identityKey,
         )
     }
 
     /**
-     * The safety number this device would have with [userId]'s device [deviceNumber] if [identityKey] (a serialized
+     * The safety number this device would have with [userId]'s device [deviceId] if [identityKey] (a serialized
      * `IdentityKey`, for example [IdentityChange.newIdentityKey]) were its identity. Lets the user compare the number of a
      * changed key before accepting it.
      */
-    fun safetyNumberFor(userId: String, deviceNumber: Int, identityKey: ByteArray): SafetyNumber? {
+    fun safetyNumberFor(userId: String, deviceId: String, identityKey: ByteArray): SafetyNumber? {
         val account = ctx.account ?: return null
         return SafetyNumbers.compute(
-            account.userId, account.deviceNumber, ctx.keyManager.identityPublicKey(), userId, deviceNumber, identityKey,
+            account.userId, account.deviceId, ctx.keyManager.identityPublicKey(), userId, deviceId, identityKey,
         )
     }
 
     /** True if the user marked this device's pinned identity as verified. */
-    fun isVerified(userId: String, deviceNumber: Int): Boolean =
-        ctx.signalStore.pinnedIdentity(userId, deviceNumber)?.verified == true
-
-    fun setVerified(userId: String, deviceNumber: Int, verified: Boolean) =
-        ctx.signalStore.setVerified(userId, deviceNumber, verified)
+    fun isVerified(deviceId: String): Boolean = ctx.signalStore.pinnedIdentity(deviceId)?.verified == true
 
     /**
-     * Identity changes waiting for a decision: `(userId, deviceNumber)` with the key that was presented. The UI shows
-     * a warning for them and offers [acceptIdentity] after the user compared safety numbers.
+     * Marks the pinned identity of an approved device as verified (safety numbers compared) or not. Once a user has a
+     * verified device, every new device of that user is blocked until the local user accepts it ([acceptIdentity]).
+     */
+    fun setVerified(deviceId: String, verified: Boolean) = ctx.signalStore.setVerified(deviceId, verified)
+
+    /**
+     * Devices waiting for a decision: a changed identity key or owner, and new devices that appeared next to verified
+     * ones. The UI shows a warning for them and offers [acceptIdentity] after the user compared safety numbers. Sending to
+     * and receiving from them is blocked meanwhile.
      */
     suspend fun pendingIdentityChanges(): List<IdentityChange> {
         val out = ArrayList<IdentityChange>()
         for (u in ctx.store.getUsers()) for (d in ctx.store.getDevices(u.id)) {
-            val v = ctx.store.getMeta("${SyncProcessor.IDENTITY_META_PREFIX}${u.id}:${d.number}") ?: continue
-            out += IdentityChange(u.id, d.number, v.takeIf { it.isNotEmpty() }?.let { Base64.getDecoder().decode(it) })
+            val conflict = directory.pendingConflict(d.id)
+            if (conflict != null) {
+                out += IdentityChange(u.id, d.id, d.name, conflict.takeIf { it.isNotEmpty() }, IdentityChange.Kind.CHANGED)
+                continue
+            }
+            val pin = ctx.signalStore.pinnedIdentity(d.id)
+            if (pin != null && !pin.approved && pin.userId == u.id) {
+                out += IdentityChange(u.id, d.id, d.name, pin.identityKey, IdentityChange.Kind.NEW_DEVICE)
+            }
         }
         return out
     }
 
     /**
-     * Trusts [newIdentityKey] for the device after the user confirmed it: pins it, drops the old session, retries
-     * messages that could not be decrypted because of the change and re-queues sends that failed because of it.
+     * Trusts [newIdentityKey] for the device after the user confirmed it: pins it (for [userId]), approves the device,
+     * drops the old session, retries messages that could not be decrypted and re-queues sends that failed because of it.
+     *
+     * The key must be the one the server lists for the device right now; a key that only showed up in a prekey message or
+     * bundle (and contradicts the device list) cannot be accepted. Returns false in that case, and nothing changes.
      */
-    suspend fun acceptIdentity(userId: String, deviceNumber: Int, newIdentityKey: ByteArray) {
-        ctx.signalStore.acceptIdentity(userId, deviceNumber, newIdentityKey)
-        ctx.store.setMeta("${SyncProcessor.IDENTITY_META_PREFIX}$userId:$deviceNumber", null)
-        syncer.retryUndecrypted(userId, deviceNumber)
+    suspend fun acceptIdentity(userId: String, deviceId: String, newIdentityKey: ByteArray): Boolean {
+        directory.refreshDevices(userId)
+        val listed = ctx.store.getDevices(userId).firstOrNull { it.id == deviceId }?.identityKey
+            ?.let { se.familychat.core.crypto.DeviceAddress.decodeIdentityKey(it) }
+        if (listed == null || !listed.contentEquals(newIdentityKey)) return false
+        ctx.crypto.exclusive { ctx.signalStore.acceptIdentity(userId, deviceId, newIdentityKey) }
+        directory.clearConflict(deviceId)
+        syncer.retryUndecrypted(userId, deviceId)
         sender.retryFailed(FailureReason.IDENTITY_CHANGED)
         requestOutbox()
+        return true
     }
 }
 
-/** An identity key change that needs the user's decision. [newIdentityKey] may be null if it could not be determined. */
-class IdentityChange(val userId: String, val deviceNumber: Int, val newIdentityKey: ByteArray?)
+/**
+ * A device that needs the user's decision. [newIdentityKey] is the key in question (the pinned key for
+ * [Kind.NEW_DEVICE]); it may be null if it could not be determined.
+ */
+class IdentityChange(
+    val userId: String,
+    val deviceId: String,
+    val deviceName: String,
+    val newIdentityKey: ByteArray?,
+    val kind: Kind,
+) {
+    enum class Kind {
+        /** The identity key (or owner) of a known device changed. */
+        CHANGED,
+
+        /** A new device next to verified ones; blocked until accepted. */
+        NEW_DEVICE,
+    }
+}
 
 /** A file to send. [mime] is the real type; [kind] is `image|video|voice|file`. */
 class OutgoingAttachment(

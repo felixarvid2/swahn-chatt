@@ -68,10 +68,18 @@ class Session(Base):
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
     device_id: Mapped[str] = mapped_column(ForeignKey("devices.id"), index=True)
     refresh_token_hash: Mapped[str] = mapped_column(String(64), unique=True)
-    previous_token_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     created_at: Mapped[int] = mapped_column(BigInteger)
     expires_at: Mapped[int] = mapped_column(BigInteger)
     revoked_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+
+
+class SessionToken(Base):
+    """Every refresh token hash a session has ever issued (current one included), for reuse detection."""
+
+    __tablename__ = "session_tokens"
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    session_id: Mapped[str] = mapped_column(ForeignKey("sessions.id", ondelete="CASCADE"), index=True)
+    issued_at: Mapped[int] = mapped_column(BigInteger)
 
 
 class DeviceKey(Base):

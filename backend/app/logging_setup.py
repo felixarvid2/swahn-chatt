@@ -2,8 +2,26 @@
 
 import json
 import logging
+import re
 import sys
 import time
+
+_URL_QUERY = re.compile(r"(/[^\s\"?]*)\?[^\s\"]*")
+_TOKEN_PARAM = re.compile(r"(access_token|refresh_token|token)=[^&\s\"]+", re.IGNORECASE)
+
+
+class RedactQueryFilter(logging.Filter):
+    """Strip URL query strings from log records (uvicorn.error logs `WebSocket /ws?access_token=... [accepted]`)."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            text = record.getMessage()
+        except Exception:
+            return True
+        if "?" in text or "token=" in text.lower():
+            record.msg = _TOKEN_PARAM.sub(r"\1=[redacted]", _URL_QUERY.sub(r"\1?[redacted]", text))
+            record.args = None
+        return True
 
 
 class JsonFormatter(logging.Formatter):
@@ -23,6 +41,10 @@ class JsonFormatter(logging.Formatter):
 
 
 def configure_logging(level: str = "INFO") -> None:
+    for name in ("uvicorn", "uvicorn.error"):
+        lg = logging.getLogger(name)
+        if not any(isinstance(f, RedactQueryFilter) for f in lg.filters):
+            lg.addFilter(RedactQueryFilter())
     root = logging.getLogger()
     for h in list(root.handlers):
         if getattr(h, "_familychat", False):
@@ -34,6 +56,7 @@ def configure_logging(level: str = "INFO") -> None:
     handler = logging.StreamHandler(sys.stdout)
     handler._familychat = True  # type: ignore[attr-defined]
     handler.setFormatter(JsonFormatter())
+    handler.addFilter(RedactQueryFilter())
     root.addHandler(handler)
     root.setLevel(level.upper())
     # The access log would contain ?access_token= for WebSockets; we log requests ourselves.

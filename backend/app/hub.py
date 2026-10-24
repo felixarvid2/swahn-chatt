@@ -8,13 +8,25 @@ from dataclasses import dataclass, field
 log = logging.getLogger("familychat.hub")
 
 
+QUEUE_LIMIT = 256  # outgoing messages a connection may have waiting; a client that does not read is dropped
+
+
 @dataclass(eq=False)
 class Connection:
     device_id: str
     user_id: str
-    queue: asyncio.Queue = field(default_factory=asyncio.Queue)
+    queue: asyncio.Queue = field(default_factory=lambda: asyncio.Queue(maxsize=QUEUE_LIMIT))
     closed: asyncio.Event = field(default_factory=asyncio.Event)
     close_code: int = 1000
+
+    def offer(self, message: dict) -> None:
+        """Queue a message (event loop only). A full queue means the peer stopped reading: close with 1008
+        instead of buffering without bound. Events live in the database, so the client just syncs again."""
+        try:
+            self.queue.put_nowait(message)
+        except asyncio.QueueFull:
+            self.close_code = 1008
+            self.closed.set()
 
 
 class Hub:
@@ -57,7 +69,7 @@ class Hub:
             return False
         for conn in conns:
             try:
-                loop.call_soon_threadsafe(conn.queue.put_nowait, message)
+                loop.call_soon_threadsafe(conn.offer, message)
             except RuntimeError:  # loop closed
                 return False
         return True

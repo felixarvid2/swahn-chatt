@@ -242,20 +242,14 @@ internal class SendPipeline(private val ctx: EngineContext, private val director
             repeat(ctx.config.maxMismatchRetries + 1) {
                 val conversation = ctx.store.getConversation(entry.conversationId)
                     ?: return fail(entry, FailureReason.NOT_A_MEMBER)
-                val prepared: List<Recipient>
-                val envelopes: List<Envelope>
-                if (entry.kind == MessageKind.DELETE) {
-                    prepared = emptyList()
-                    envelopes = emptyList()
-                } else {
-                    val recipients = directory.recipientsFor(conversation)
-                    prepared = directory.ensureSessions(recipients)
-                    val content = buildContent(entry) ?: return fail(entry, FailureReason.TOO_LARGE)
-                    envelopes = encryptMissing(entry, prepared, content)
-                    if (envelopes != entry.envelopes) {
-                        entry = entry.copy(envelopes = envelopes)
-                        ctx.store.putOutbox(entry)
-                    }
+                // Messages, edits and deletes all carry ciphertext for the full device set (the server cannot forge a delete).
+                val recipients = directory.recipientsFor(conversation)
+                val prepared = directory.ensureSessions(recipients)
+                val content = buildContent(entry) ?: return fail(entry, FailureReason.TOO_LARGE)
+                val envelopes = encryptMissing(entry, prepared, content)
+                if (envelopes != entry.envelopes) {
+                    entry = entry.copy(envelopes = envelopes)
+                    ctx.store.putOutbox(entry)
                 }
                 val request = SendMessageRequest(
                     id = entry.messageId, conversationId = entry.conversationId, kind = entry.kind,
@@ -277,8 +271,12 @@ internal class SendPipeline(private val ctx: EngineContext, private val director
         } catch (e: AttachmentSourceMissing) {
             return fail(entry, FailureReason.ATTACHMENT_MISSING)
         } catch (e: IdentityChangedException) {
-            ctx.emit(EngineEvent.IdentityChanged(e.userId, e.deviceNumber, e.newKey))
-            return fail(entry, FailureReason.IDENTITY_CHANGED)
+            // Same path as a refused receive: pending change, event and a notice in the conversations with the user.
+            if (!e.unapproved) directory.noteIdentityChange(e.userId, e.deviceId, e.newKey)
+            else ctx.emit(EngineEvent.IdentityChanged(e.userId, e.deviceId, e.newKey))
+            // A message can be re-queued after the user decided; an edit or delete must not be lost, so it just waits.
+            return if (entry.kind == MessageKind.MESSAGE) fail(entry, FailureReason.IDENTITY_CHANGED)
+            else SendOutcome.Retry(offline = false, error = "identity_changed")
         } catch (e: IOException) {
             return SendOutcome.Retry(offline = true, error = e.message ?: "network")
         } catch (e: ApiException) {
@@ -354,10 +352,20 @@ internal class SendPipeline(private val ctx: EngineContext, private val director
                 durationMs = a.durationMs, thumbnail = a.thumbnail,
             )
         }
-        var content = if (entry.kind == MessageKind.EDIT) {
-            Content(type = ContentType.EDIT, text = entry.text)
-        } else {
-            Content(type = ContentType.TEXT, text = entry.text, attachments = refs, replyTo = entry.replyTo)
+        // The content repeats the ids the server sees, so a receiver can tell if the server moved or relabelled it.
+        var content = when (entry.kind) {
+            MessageKind.EDIT -> Content(
+                type = ContentType.EDIT, text = entry.text, conversationId = entry.conversationId,
+                messageId = entry.messageId, targetMessageId = entry.targetMessageId,
+            )
+            MessageKind.DELETE -> Content(
+                type = ContentType.DELETE, conversationId = entry.conversationId,
+                messageId = entry.messageId, targetMessageId = entry.targetMessageId,
+            )
+            else -> Content(
+                type = ContentType.TEXT, text = entry.text, attachments = refs, replyTo = entry.replyTo,
+                conversationId = entry.conversationId, messageId = entry.messageId,
+            )
         }
         if (ContentCodec.encode(content).size > MAX_CONTENT_BYTES) {
             // Thumbnails are optional; drop them before giving up.
@@ -378,23 +386,27 @@ internal class SendPipeline(private val ctx: EngineContext, private val director
     }
 
     /**
-     * 409 handling: re-read the device lists of the users involved (this also drops the sessions of devices that
-     * vanished), refresh the conversation, and forget ciphertexts for extra devices. Returns the entry to retry with, or
-     * null if we are no longer a member.
+     * 409 handling: refresh the conversation, re-read the device lists of the members involved (this also drops the
+     * sessions of devices that vanished, and is the only way new devices enter: pinned, announced and, next to verified
+     * devices, blocked until approved) and forget ciphertexts for extra devices. Returns the entry to retry with, or null
+     * if we are no longer a member.
+     *
+     * The device ids in the 409 body are the server's claim; they only decide whose list to re-read, and only members of
+     * the conversation (and this account) are ever read.
      */
     private suspend fun resolveMismatch(entry: OutboxEntry, e: ApiException.MismatchedDevices): OutboxEntry? {
-        val users = (e.missingDevices + e.extraDevices).map { it.userId }.distinct()
-        for (u in users) directory.refreshDevices(u)
-        for (d in e.extraDevices) {
-            ctx.store.getDevices(d.userId).firstOrNull { it.id == d.deviceId }?.let { ctx.crypto.deleteSession(d.userId, it.number) }
-        }
-        try {
-            val fresh = ctx.api.getConversation(entry.conversationId)
-            ctx.store.upsertConversation(fresh)
-            for (m in fresh.members) if (ctx.store.getDevices(m.userId).isEmpty()) directory.refreshDevices(m.userId)
+        val account = ctx.requireAccount()
+        val fresh = try {
+            ctx.api.getConversation(entry.conversationId)
         } catch (nf: ApiException.NotFound) {
             return null
         }
+        directory.applyConversation(fresh)
+        val members = fresh.members.mapTo(LinkedHashSet()) { it.userId } + account.userId
+        val users = (e.missingDevices + e.extraDevices).map { it.userId }.distinct().filter { it in members }
+        for (u in users) directory.refreshDevices(u)
+        for (m in fresh.members) if (ctx.store.getDevices(m.userId).isEmpty()) directory.refreshDevices(m.userId)
+        for (d in e.extraDevices) directory.dropSession(d.userId, d.deviceId)
         val extraIds = e.extraDevices.mapTo(HashSet()) { it.deviceId }
         return entry.copy(envelopes = entry.envelopes?.filter { it.deviceId !in extraIds }).also {
             if (it != entry) ctx.store.putOutbox(it)

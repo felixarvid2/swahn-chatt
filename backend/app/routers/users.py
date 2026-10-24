@@ -3,8 +3,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import Settings
-from app.deps import Principal, get_db, get_ip, get_limiter, get_principal, get_settings_dep
-from app.errors import ApiError, invalid, not_found
+from app.deps import Principal, get_db, get_limiter, get_principal, get_read_db, get_settings_dep
+from app.errors import ApiError, conflict, invalid, not_found
 from app.models import Attachment, Device, User
 from app.ratelimit import RateLimiter
 from app.schemas import DeviceOut, PasswordChange, ProfileUpdate, UserOut
@@ -16,12 +16,12 @@ router = APIRouter(prefix="/users", tags=["users"])
 
 
 @router.get("", response_model=list[UserOut])
-def list_users(_: Principal = Depends(get_principal), db: Session = Depends(get_db)):
+def list_users(_: Principal = Depends(get_principal), db: Session = Depends(get_read_db)):
     return [user_out(u) for u in db.scalars(select(User).where(User.disabled_at.is_(None)).order_by(User.created_at))]
 
 
 @router.get("/me", response_model=UserOut)
-def me(p: Principal = Depends(get_principal), db: Session = Depends(get_db)):
+def me(p: Principal = Depends(get_principal), db: Session = Depends(get_read_db)):
     return user_out(db.get(User, p.user_id))
 
 
@@ -52,21 +52,27 @@ def change_password(
     p: Principal = Depends(get_principal),
     settings: Settings = Depends(get_settings_dep),
     limiter: RateLimiter = Depends(get_limiter),
-    ip: str = Depends(get_ip),
+    rdb: Session = Depends(get_read_db),
     db: Session = Depends(get_db),
 ):
     limiter.check(f"password:{p.user_id}", 5)
-    user = db.get(User, p.user_id)
-    if not verify_password(settings, user.password_hash, body.current_password):
+    current = rdb.scalar(select(User.password_hash).where(User.id == p.user_id))
+    rdb.rollback()  # no transaction while Argon2 runs
+    if current is None or not verify_password(settings, current, body.current_password):
         raise ApiError(403, "invalid_credentials", "current password is wrong")
-    user.password_hash = hash_password(settings, body.new_password)
+    new_hash = hash_password(settings, body.new_password)
+    user = db.get(User, p.user_id)
+    if user is None or user.password_hash != current:  # changed by a concurrent request while we were hashing
+        db.rollback()
+        raise conflict("the password was changed concurrently; try again")
+    user.password_hash = new_hash
     accounts.revoke_other_sessions(db, p.user_id, p.device_id)
     db.commit()
     return Response(status_code=204)
 
 
 @router.get("/{user_id}/devices", response_model=list[DeviceOut])
-def user_devices(user_id: str, _: Principal = Depends(get_principal), db: Session = Depends(get_db)):
+def user_devices(user_id: str, _: Principal = Depends(get_principal), db: Session = Depends(get_read_db)):
     user = db.get(User, user_id)
     if user is None or user.disabled_at is not None:
         raise not_found("user not found")

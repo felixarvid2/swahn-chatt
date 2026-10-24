@@ -1,5 +1,7 @@
 """Public key storage and one-time prekey consumption (the server never sees private keys)."""
 
+from collections.abc import Callable
+
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
@@ -86,7 +88,26 @@ def status(db: Session, device_id: str) -> dict:
     }
 
 
-def fetch_bundles(db: Session, user_id: str, exclude_device_id: str, only_device_id: str | None) -> list[dict]:
+def _first_one_time(db: Session, model, device_id: str):
+    return db.scalars(
+        select(model)
+        .where(model.device_id == device_id)
+        .order_by(model.key_id)
+        .limit(1)
+        .with_for_update(skip_locked=True)
+    ).first()
+
+
+def fetch_bundles(
+    db: Session,
+    user_id: str,
+    exclude_device_id: str,
+    only_device_id: str | None,
+    may_consume: Callable[[str], bool] | None = None,
+) -> list[dict]:
+    """Bundles for the user's active devices. `may_consume(device_id)` False means the caller used up its share
+    for that device: the bundle then has no one-time keys (signed prekey and last-resort PQ key only) and nothing
+    is deleted."""
     q = (
         select(Device, DeviceKey)
         .join(DeviceKey, DeviceKey.device_id == Device.id)
@@ -99,20 +120,11 @@ def fetch_bundles(db: Session, user_id: str, exclude_device_id: str, only_device
         q = q.where(Device.id == only_device_id)
     out = []
     for device, key in db.execute(q).all():
-        otk = db.scalars(
-            select(OneTimePrekey)
-            .where(OneTimePrekey.device_id == device.id)
-            .order_by(OneTimePrekey.key_id)
-            .limit(1)
-            .with_for_update(skip_locked=True)
-        ).first()
-        pq = db.scalars(
-            select(OneTimePqPrekey)
-            .where(OneTimePqPrekey.device_id == device.id)
-            .order_by(OneTimePqPrekey.key_id)
-            .limit(1)
-            .with_for_update(skip_locked=True)
-        ).first()
+        consume = may_consume is None or may_consume(device.id)
+        otk = pq = None
+        if consume:
+            otk = _first_one_time(db, OneTimePrekey, device.id)
+            pq = _first_one_time(db, OneTimePqPrekey, device.id)
         bundle = {
             "device_id": device.id,
             "device_number": device.number,

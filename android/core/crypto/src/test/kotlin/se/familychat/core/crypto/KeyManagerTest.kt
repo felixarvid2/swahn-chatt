@@ -119,10 +119,11 @@ class KeyManagerTest {
         val server = FakeKeyServer()
         d.register(server)
         val alice = TestDevice("bob", 1).also { it.register(server) }
-        alice.crypto.processBundle("alice", server.bundle(d)) // bundle references signed prekey 1
+        alice.trust(d); d.trust(alice)
+        alice.crypto.processBundle(d.userId, d.deviceId, server.bundle(d)) // bundle references signed prekey 1
         now += 31L * 24 * 3600 * 1000
         d.keys.buildMaintenanceUpload(server.status(d))?.let { server.put(d, it) }
-        val enc = alice.crypto.encrypt(text("late"), "alice", 1)
-        assertEquals("late", String(d.crypto.decrypt("bob", 1, enc.type, enc.body)))
+        val enc = alice.crypto.encrypt(text("late"), d.userId, d.deviceId)
+        assertEquals("late", String(d.crypto.decrypt(alice.userId, alice.deviceId, enc.type, enc.body)))
     }
 }

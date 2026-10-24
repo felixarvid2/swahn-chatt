@@ -14,6 +14,14 @@ services:
     env_file: .env
     volumes:
       - familychat-data:/data
+    # Hardening: the process runs as an unprivileged user, writes only to /data and /tmp.
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     ports:
       # Never publish this on 0.0.0.0: it is plain HTTP. Tailscale or Caddy reach it on the host/network.
       - "127.0.0.1:8000:8000"
@@ -32,7 +40,7 @@ services:
 
   caddy:
     profiles: ["caddy"]
-    image: caddy:2
+    image: caddy:2.11.7   # pinned; bump deliberately (check the release notes), then `docker compose pull`
     restart: unless-stopped
     depends_on:
       backend:
@@ -40,6 +48,13 @@ services:
     environment:
       FAMILYCHAT_DOMAIN: ${FAMILYCHAT_DOMAIN:-localhost}
       NTFY_DOMAIN: ${NTFY_DOMAIN:-ntfy.localhost}
+      CADDY_MAX_UPLOAD: ${CADDY_MAX_UPLOAD:-110MB}
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE   # ports 80/443
     ports:
       - "80:80"
       - "443:443"
@@ -56,7 +71,7 @@ services:
 
   ntfy:
     profiles: ["ntfy"]
-    image: binwiederhier/ntfy
+    image: binwiederhier/ntfy:v2.33.1   # pinned; bump deliberately, then `docker compose pull`
     command: ["serve"]
     restart: unless-stopped
     environment:
@@ -68,6 +83,10 @@ services:
       NTFY_LISTEN_HTTP: ":80"
     volumes:
       - ntfy-cache:/var/cache/ntfy
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     ports:
       # For `tailscale serve --https=8443 http://127.0.0.1:2586`; with the caddy profile Caddy reaches it as ntfy:80.
       - "127.0.0.1:2586:80"

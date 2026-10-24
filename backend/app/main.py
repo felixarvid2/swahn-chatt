@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.config import Settings, get_settings
-from app.db import make_engine, make_session_factory
+from app.db import make_engine, make_read_session_factory, make_session_factory
 from app.errors import ApiError, install_error_handlers
 from app.hub import Hub
 from app.logging_setup import configure_logging
@@ -39,15 +39,26 @@ JSON_BODY_LIMIT = 8 * 1024 * 1024
 MAINTENANCE_INTERVAL_S = 3600
 
 
+UPLOAD_PATH = "/api/v1/attachments"
+
+
+def is_upload(scope: Scope) -> bool:
+    """Only POST of the attachment upload endpoint streams to disk and enforces its own (larger) limit."""
+    path = scope["path"]
+    if path.endswith("/"):
+        path = path[:-1]
+    return scope["method"] == "POST" and path == UPLOAD_PATH
+
+
 class BodyLimitMiddleware:
-    """Reject oversized non-attachment requests (checks Content-Length and counts streamed bytes)."""
+    """Reject oversized non-upload requests (checks Content-Length and counts streamed bytes)."""
 
     def __init__(self, app: ASGIApp, limit: int = JSON_BODY_LIMIT):
         self.app = app
         self.limit = limit
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http" or scope["path"].rstrip("/").endswith("/attachments"):
+        if scope["type"] != "http" or is_upload(scope):
             await self.app(scope, receive, send)
             return
         headers = dict(scope["headers"])
@@ -57,17 +68,31 @@ class BodyLimitMiddleware:
             await JSONResponse(body, 413)(scope, receive, send)
             return
         seen = 0
+        exceeded = False
+        swallow = False
 
         async def limited() -> Message:
-            nonlocal seen
+            nonlocal seen, exceeded
             message = await receive()
             if message["type"] == "http.request":
                 seen += len(message.get("body", b""))
                 if seen > self.limit:
+                    exceeded = True
                     raise ApiError(413, "payload_too_large", "request body too large")
             return message
 
-        await self.app(scope, limited, send)
+        async def guarded_send(message: Message) -> None:
+            # FastAPI turns any error while reading the body into a 400; report the real reason instead.
+            nonlocal swallow
+            if exceeded and not swallow and message["type"] == "http.response.start":
+                swallow = True
+                body = {"code": "payload_too_large", "message": "request body too large"}
+                await JSONResponse(body, 413)(scope, receive, send)
+                return
+            if not swallow:
+                await send(message)
+
+        await self.app(scope, limited, guarded_send)
 
 
 def create_app(settings: Settings | None = None, push_transport=None) -> FastAPI:
@@ -81,12 +106,20 @@ def create_app(settings: Settings | None = None, push_transport=None) -> FastAPI
     limiter = RateLimiter(enabled=settings.rate_limit_enabled)
     info: dict = {}
     session_factory = make_session_factory(engine, info)
+    read_session_factory = make_read_session_factory(engine)
     push = PushService(
         session_factory,
+        read_session_factory=read_session_factory,
         allow_http=settings.push_allow_http,
         allowed_hosts=parse_hosts(settings.push_allowed_hosts),
+        require_allowlist=settings.push_requires_allowlist,
         transport=push_transport,
     )
+    if settings.push_requires_allowlist and not parse_hosts(settings.push_allowed_hosts):
+        log.warning(
+            "FAMILYCHAT_PUSH_ALLOWED_HOSTS is empty: push (UnifiedPush) registration is refused until it lists "
+            "the push server's host name"
+        )
     info["dispatcher"] = Dispatcher(hub, push)
 
     @asynccontextmanager
@@ -116,6 +149,7 @@ def create_app(settings: Settings | None = None, push_transport=None) -> FastAPI
     app.state.settings = settings
     app.state.engine = engine
     app.state.session_factory = session_factory
+    app.state.read_session_factory = read_session_factory
     app.state.hub = hub
     app.state.limiter = limiter
     app.state.push = push

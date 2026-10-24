@@ -8,8 +8,8 @@ class InMemoryProtocolStorage : ProtocolStorage {
     private val signedPreKeys = LinkedHashMap<Int, ByteArray>()
     private val kyber = LinkedHashMap<Int, StoredKyberPreKey>()
     private val usedBaseKeys = HashSet<String>()
-    private val sessions = HashMap<Pair<String, Int>, ByteArray>()
-    private val identities = HashMap<Pair<String, Int>, StoredIdentity>()
+    private val sessions = HashMap<String, ByteArray>()
+    private val identities = HashMap<String, StoredIdentity>()
     private val counters = HashMap<KeyIdKind, Int>()
 
     override fun getLocalIdentity() = synchronized(lock) { local }
@@ -35,18 +35,14 @@ class InMemoryProtocolStorage : ProtocolStorage {
     override fun markLastResortUsed(kyberPreKeyId: Int, signedPreKeyId: Int, baseKey: ByteArray) =
         synchronized(lock) { usedBaseKeys.add("$kyberPreKeyId/$signedPreKeyId/${baseKey.joinToString("") { "%02x".format(it) }}") }
 
-    override fun loadSession(name: String, deviceNumber: Int) = synchronized(lock) { sessions[name to deviceNumber]?.copyOf() }
-    override fun storeSession(name: String, deviceNumber: Int, record: ByteArray) =
-        synchronized(lock) { sessions[name to deviceNumber] = record.copyOf(); Unit }
+    override fun loadSession(name: String) = synchronized(lock) { sessions[name]?.copyOf() }
+    override fun storeSession(name: String, record: ByteArray) = synchronized(lock) { sessions[name] = record.copyOf(); Unit }
+    override fun deleteSession(name: String) = synchronized(lock) { sessions.remove(name); Unit }
+    override fun deleteSessionsWithPrefix(prefix: String) = synchronized(lock) { sessions.keys.removeAll { it.startsWith(prefix) }; Unit }
 
-    override fun deleteSession(name: String, deviceNumber: Int) = synchronized(lock) { sessions.remove(name to deviceNumber); Unit }
-    override fun deleteAllSessions(name: String) = synchronized(lock) { sessions.keys.removeAll { it.first == name }; Unit }
-    override fun sessionDeviceNumbers(name: String) =
-        synchronized(lock) { sessions.keys.filter { it.first == name }.map { it.second }.sorted() }
-
-    override fun getIdentity(name: String, deviceNumber: Int) = synchronized(lock) { identities[name to deviceNumber] }
-    override fun putIdentity(name: String, deviceNumber: Int, identity: StoredIdentity) =
-        synchronized(lock) { identities[name to deviceNumber] = identity; Unit }
+    override fun getIdentity(deviceId: String) = synchronized(lock) { identities[deviceId] }
+    override fun putIdentity(identity: StoredIdentity) = synchronized(lock) { identities[identity.deviceId] = identity; Unit }
+    override fun identitiesOf(userId: String) = synchronized(lock) { identities.values.filter { it.userId == userId } }
 
     override fun reserveKeyIds(kind: KeyIdKind, count: Int): Int = synchronized(lock) {
         require(count in 1..MAX_ID)

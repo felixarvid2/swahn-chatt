@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy.orm import Session
 
-from app.deps import Principal, get_db, get_principal
+from app.deps import Principal, get_db, get_principal, get_read_db
 from app.schemas import AckRequest, SyncResponse
 from app.services import sync as svc
 
@@ -13,7 +13,7 @@ def get_sync(
     after: int = Query(0, ge=0),
     limit: int = Query(200, ge=1, le=500),
     p: Principal = Depends(get_principal),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_read_db),
 ):
     return svc.read_events(db, p, after, limit)
 

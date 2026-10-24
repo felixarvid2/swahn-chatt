@@ -17,15 +17,49 @@ import org.signal.libsignal.protocol.state.SignedPreKeyRecord
 import java.util.UUID
 
 /**
+ * How a remote device is addressed in libsignal: `SignalProtocolAddress("<userId>/<deviceUuid>", 1)`. The immutable
+ * device UUID identifies the device; the server's device number is informational only and never reaches libsignal.
+ * libsignal requires a device id in 1..127, so the constant 1 stands in.
+ */
+object DeviceAddress {
+    const val DEVICE_ID = 1
+
+    fun name(userId: String, deviceId: String): String = "$userId/$deviceId"
+    fun of(userId: String, deviceId: String) = SignalProtocolAddress(name(userId, deviceId), DEVICE_ID)
+
+    /** `(userId, deviceId)` of an address name, or null if it is not one of ours. */
+    fun parse(name: String): Pair<String, String>? {
+        val i = name.indexOf('/')
+        if (i <= 0 || i == name.length - 1) return null
+        return name.substring(0, i) to name.substring(i + 1)
+    }
+
+    /** The serialized `IdentityKey` bytes of an API `identity_key` (base64), or null if it is not a valid key. */
+    fun decodeIdentityKey(base64: String): ByteArray? = try {
+        java.util.Base64.getDecoder().decode(base64).also { IdentityKey(it) }
+    } catch (e: Exception) {
+        null
+    }
+
+    /** Ids from the server end up in [name]; a `/` in the user id would let two devices share a name. */
+    fun isSafe(userId: String, deviceId: String): Boolean =
+        userId.isNotEmpty() && deviceId.isNotEmpty() && '/' !in userId && '/' !in deviceId
+}
+
+/**
  * libsignal's [SignalProtocolStore] on top of [ProtocolStorage].
  *
- * Trust model (TOFU, trust on first use):
- * - The first identity key seen for an address `(userId, deviceNumber)` is pinned.
- * - A different key for a known address is **not trusted**: [isTrustedIdentity] returns false, so libsignal refuses to
- *   build a session or decrypt (`UntrustedIdentityException`) and [MessageCrypto] reports it as
- *   [UntrustedIdentityException]. Nothing is replaced automatically.
- * - After the user confirmed the change (compared safety numbers), call [acceptIdentity] to pin the new key and drop
- *   the old session. [setVerified] marks a key as verified by the user (safety numbers compared).
+ * Trust model (pin per device UUID, no libsignal-level TOFU):
+ * - Identities are pinned by the directory layer ([pinDevice], from the device list) and only there. A device that was
+ *   never pinned is **not trusted**, so a session cannot be built with, and a message cannot be accepted from, a
+ *   device nobody listed.
+ * - The pin is keyed by the device UUID and remembers the owning user. [isTrustedIdentity] is true only if the pin
+ *   exists, belongs to the user named in the address, holds exactly this key and is approved. Anything else (another
+ *   key, another owner, a device waiting for approval) makes libsignal refuse (`UntrustedIdentityException`), which
+ *   [MessageCrypto] reports as [UntrustedIdentityException]. Nothing is replaced automatically.
+ * - After the user confirmed the change (compared safety numbers), call [acceptIdentity] to pin the new key / owner,
+ *   approve the device and drop the old session. [setVerified] marks a key as verified by the user.
+ * - Pins are never deleted while the account is signed in (removing and re-adding a device must not look new).
  *
  * One-time EC and Kyber prekeys are deleted when libsignal marks them used; the **last-resort** Kyber key is never
  * deleted, but each use is recorded so that an exact replay is rejected.
@@ -47,23 +81,16 @@ class PersistentSignalProtocolStore(private val storage: ProtocolStorage) : Sign
     override fun getLocalRegistrationId(): Int =
         (storage.getLocalIdentity() ?: throw IllegalStateException("No local identity yet")).registrationId
 
-    @Synchronized
+    /**
+     * libsignal calls this after it accepted a key as trusted. Pins are only created by [pinDevice] and only changed by
+     * [acceptIdentity], so this never writes.
+     */
     override fun saveIdentity(address: SignalProtocolAddress, identityKey: IdentityKey): IdentityKeyStore.IdentityChange {
-        val known = storage.getIdentity(address.name, address.deviceId)
-        val bytes = identityKey.serialize()
-        return when {
-            known == null -> {
-                storage.putIdentity(address.name, address.deviceId, StoredIdentity(bytes, verified = false))
-                IdentityKeyStore.IdentityChange.NEW_OR_UNCHANGED
-            }
-            known.identityKey.contentEquals(bytes) -> IdentityKeyStore.IdentityChange.NEW_OR_UNCHANGED
-            else -> {
-                // libsignal only gets here after isTrustedIdentity() said yes, which never happens for a changed key.
-                // Keep the contract anyway: replace, unverified, and drop the session built on the old key.
-                storage.putIdentity(address.name, address.deviceId, StoredIdentity(bytes, verified = false))
-                storage.deleteSession(address.name, address.deviceId)
-                IdentityKeyStore.IdentityChange.REPLACED_EXISTING
-            }
+        val pin = pinFor(address)
+        return if (pin == null || pin.identityKey.contentEquals(identityKey.serialize())) {
+            IdentityKeyStore.IdentityChange.NEW_OR_UNCHANGED
+        } else {
+            IdentityKeyStore.IdentityChange.REPLACED_EXISTING
         }
     }
 
@@ -72,33 +99,64 @@ class PersistentSignalProtocolStore(private val storage: ProtocolStorage) : Sign
         identityKey: IdentityKey,
         direction: IdentityKeyStore.Direction,
     ): Boolean {
-        val known = storage.getIdentity(address.name, address.deviceId) ?: return true // TOFU
-        return known.identityKey.contentEquals(identityKey.serialize())
+        val (userId, _) = DeviceAddress.parse(address.name) ?: return false
+        val pin = pinFor(address) ?: return false
+        return pin.approved && pin.userId == userId && pin.identityKey.contentEquals(identityKey.serialize())
     }
 
-    override fun getIdentity(address: SignalProtocolAddress): IdentityKey? =
-        storage.getIdentity(address.name, address.deviceId)?.let { IdentityKey(it.identityKey) }
+    override fun getIdentity(address: SignalProtocolAddress): IdentityKey? {
+        val (userId, _) = DeviceAddress.parse(address.name) ?: return null
+        return pinFor(address)?.takeIf { it.userId == userId }?.let { IdentityKey(it.identityKey) }
+    }
 
-    /** The pinned identity of a device, or null if none has been seen. */
-    fun pinnedIdentity(userId: String, deviceNumber: Int): StoredIdentity? = storage.getIdentity(userId, deviceNumber)
+    private fun pinFor(address: SignalProtocolAddress): StoredIdentity? =
+        DeviceAddress.parse(address.name)?.let { storage.getIdentity(it.second) }
+
+    /** The pinned identity of a device (by UUID), or null if none has been pinned. */
+    fun pinnedIdentity(deviceId: String): StoredIdentity? = storage.getIdentity(deviceId)
+
+    /** All pins owned by [userId]. */
+    fun pinsOf(userId: String): List<StoredIdentity> = storage.identitiesOf(userId)
+
+    /** True if the user marked at least one pinned device of [userId] as verified. */
+    fun hasVerifiedDevice(userId: String): Boolean = storage.identitiesOf(userId).any { it.verified }
 
     /**
-     * Pins [newIdentityKey] (a serialized `IdentityKey`) for the device, replacing the old one, and deletes the session
-     * with it: the next message from that device must come as a new prekey message, and the next send needs a fresh
-     * bundle. Call only after the user explicitly accepted the change.
+     * Pins [identityKey] (a serialized `IdentityKey`) for a device seen for the first time. Does nothing and returns
+     * false if the device is already pinned (a later, different key is an identity change, not a new pin). With
+     * [approved] false the device stays untrusted until [acceptIdentity].
      */
     @Synchronized
-    fun acceptIdentity(userId: String, deviceNumber: Int, newIdentityKey: ByteArray) {
+    fun pinDevice(userId: String, deviceId: String, identityKey: ByteArray, approved: Boolean): Boolean {
+        if (storage.getIdentity(deviceId) != null) return false
+        IdentityKey(identityKey) // validates
+        storage.putIdentity(StoredIdentity(deviceId, userId, identityKey.copyOf(), verified = false, approved = approved))
+        return true
+    }
+
+    /**
+     * Pins [newIdentityKey] for the device (owned by [userId]), replacing the old pin, approves it and deletes the
+     * session with it: the next message from that device must come as a new prekey message, and the next send needs a
+     * fresh bundle. Call only after the user explicitly accepted the change.
+     */
+    @Synchronized
+    fun acceptIdentity(userId: String, deviceId: String, newIdentityKey: ByteArray) {
         IdentityKey(newIdentityKey) // validates
-        storage.putIdentity(userId, deviceNumber, StoredIdentity(newIdentityKey.copyOf(), verified = false))
-        storage.deleteSession(userId, deviceNumber)
+        val old = storage.getIdentity(deviceId)
+        val same = old != null && old.userId == userId && old.identityKey.contentEquals(newIdentityKey)
+        storage.putIdentity(
+            StoredIdentity(deviceId, userId, newIdentityKey.copyOf(), verified = same && old!!.verified, approved = true),
+        )
+        // The session (if any) was built on the old key or owner.
+        old?.let { storage.deleteSession(DeviceAddress.name(it.userId, deviceId)) }
+        storage.deleteSession(DeviceAddress.name(userId, deviceId))
     }
 
     /** Marks the currently pinned key of the device as verified (or not). No-op if nothing is pinned. */
     @Synchronized
-    fun setVerified(userId: String, deviceNumber: Int, verified: Boolean) {
-        val known = storage.getIdentity(userId, deviceNumber) ?: return
-        storage.putIdentity(userId, deviceNumber, StoredIdentity(known.identityKey, verified))
+    fun setVerified(deviceId: String, verified: Boolean) {
+        val known = storage.getIdentity(deviceId) ?: return
+        storage.putIdentity(StoredIdentity(known.deviceId, known.userId, known.identityKey, verified, known.approved))
     }
 
     // --- one-time EC prekeys ---------------------------------------------------------------------------------------
@@ -157,22 +215,22 @@ class PersistentSignalProtocolStore(private val storage: ProtocolStorage) : Sign
     // --- sessions --------------------------------------------------------------------------------------------------
 
     override fun loadSession(address: SignalProtocolAddress): SessionRecord =
-        storage.loadSession(address.name, address.deviceId)?.let { SessionRecord(it) } ?: SessionRecord()
+        storage.loadSession(address.name)?.let { SessionRecord(it) } ?: SessionRecord()
 
     override fun loadExistingSessions(addresses: MutableList<SignalProtocolAddress>): MutableList<SessionRecord> =
         addresses.mapTo(ArrayList()) { a ->
-            storage.loadSession(a.name, a.deviceId)?.let { SessionRecord(it) }
+            storage.loadSession(a.name)?.let { SessionRecord(it) }
                 ?: throw NoSessionException(a, "No session for $a")
         }
 
-    override fun getSubDeviceSessions(name: String): MutableList<Int> =
-        storage.sessionDeviceNumbers(name).toMutableList()
+    /** Device ids are encoded in the address name, so there are no "sub device" sessions. */
+    override fun getSubDeviceSessions(name: String): MutableList<Int> = ArrayList()
 
     override fun storeSession(address: SignalProtocolAddress, record: SessionRecord) =
-        storage.storeSession(address.name, address.deviceId, record.serialize())
+        storage.storeSession(address.name, record.serialize())
 
     override fun containsSession(address: SignalProtocolAddress): Boolean {
-        val bytes = storage.loadSession(address.name, address.deviceId) ?: return false
+        val bytes = storage.loadSession(address.name) ?: return false
         return try {
             val r = SessionRecord(bytes)
             r.hasSenderChain()
@@ -182,10 +240,13 @@ class PersistentSignalProtocolStore(private val storage: ProtocolStorage) : Sign
     }
 
     /** True if any session record (even an archived one) is stored for the device. */
-    fun hasSessionRecord(userId: String, deviceNumber: Int): Boolean = storage.loadSession(userId, deviceNumber) != null
+    fun hasSessionRecord(userId: String, deviceId: String): Boolean =
+        storage.loadSession(DeviceAddress.name(userId, deviceId)) != null
 
-    override fun deleteSession(address: SignalProtocolAddress) = storage.deleteSession(address.name, address.deviceId)
-    override fun deleteAllSessions(name: String) = storage.deleteAllSessions(name)
+    override fun deleteSession(address: SignalProtocolAddress) = storage.deleteSession(address.name)
+
+    /** [name] is a user id: deletes the sessions with all that user's devices. */
+    override fun deleteAllSessions(name: String) = storage.deleteSessionsWithPrefix("$name/")
 
     // --- sender keys (group sessions; unused, FamilyChat fans out pairwise) -----------------------------------------
 

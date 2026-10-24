@@ -212,13 +212,15 @@ class EngineTest {
         alice.engine.sendText(convId, "both"); alice.engine.processOutbox()
         bob2.engine.sync()
         val extraNumber = server.devices.getValue(bob2.deviceIdOnServer()).number
-        server.revokeDevice(bob2.deviceIdOnServer()) // alice does not know yet
+        val extraId = bob2.deviceIdOnServer()
+        assertNotNull(alice.protocol.loadSession(se.familychat.core.crypto.DeviceAddress.name(bob.userId(), extraId)))
+        server.revokeDevice(extraId) // alice does not know yet
 
         val id = alice.engine.sendText(convId, "only bob1")
         assertEquals(1, alice.engine.processOutbox().sent)
         assertEquals(1, server.messages.getValue(id).envelopes.size)
         assertEquals(extraNumber, 2)
-        assertFalse(alice.protocol.sessionDeviceNumbers(bob.userId()).contains(extraNumber))
+        assertNull(alice.protocol.loadSession(se.familychat.core.crypto.DeviceAddress.name(bob.userId(), extraId)))
     }
 
     @Test
@@ -451,6 +453,10 @@ class EngineTest {
         val reply = bob2.engine.sendText(convId, "from my second phone"); bob2.engine.processOutbox()
         alice.engine.sync(); bob.engine.sync()
         assertEquals("from my second phone", alice.store.getMessage(reply)!!.text)
+        // bob's first phone does not trust the new phone of his own account until bob approves it there
+        assertEquals(DecryptError.UNTRUSTED_IDENTITY, bob.store.getMessage(reply)!!.decryptError)
+        assertNull(bob.store.getMessage(reply)!!.text)
+        bob.approveAllPending()
         val onBob1 = bob.store.getMessage(reply)!!
         assertEquals("from my second phone", onBob1.text)
         assertTrue(onBob1.outgoing) // sent by bob himself, from another device
@@ -463,6 +469,7 @@ class EngineTest {
         alice2.engine.login("https://fake.example", "alice", "password-alice")
         alice2.engine.refreshDirectory()
         alice.engine.refreshDevices(alice.userId())
+        alice.approveAllPending() // the old phone approves the new one of the same account
         val id = alice.engine.sendText(convId, "to everyone"); alice.engine.processOutbox()
         alice2.engine.sync()
         val m = alice2.store.getMessage(id)!!
@@ -500,17 +507,17 @@ class EngineTest {
     fun `changed identity of a known device blocks decryption until accepted`() = runBlocking<Unit> {
         val (alice, bob, convId) = pair()
         alice.engine.sendText(convId, "hi"); alice.engine.processOutbox(); bob.engine.sync()
-        val aliceNumber = alice.engine.account.value!!.deviceNumber
-        val oldDevice = alice.deviceIdOnServer()
-        // alice reinstalls: the old device disappears and the new one gets the same device number (lowest free)
-        server.revokeDevice(oldDevice)
-        val alice2 = client("alice")
-        alice2.engine.login("https://fake.example", "alice", "password-alice")
-        alice2.engine.refreshDirectory()
-        assertEquals(aliceNumber, alice2.engine.account.value!!.deviceNumber)
+        val aliceDevice = alice.deviceIdOnServer()
+        // The server swaps the identity of alice's device for a key of its own (same uuid) and has that device write.
+        val rogue = RogueDevice(alice.userId())
+        server.swapIdentity(aliceDevice, rogue.upload, announce = true)
+        val id = java.util.UUID.randomUUID().toString()
+        val content = se.familychat.core.model.Content(text = "I am new", conversationId = convId, messageId = id)
+        val env = rogue.encryptFor(
+            se.familychat.core.crypto.Recipient(bob.userId(), bob.deviceIdOnServer()), server.bundleFor(aliceDevice, bob), content,
+        )
+        server.injectMessage(bob.deviceIdOnServer(), forgedMessage(id, convId, alice.userId(), aliceDevice, env))
 
-        bob.engine.sync() // devices_changed
-        val id = alice2.engine.sendText(convId, "I am new"); alice2.engine.processOutbox()
         val events = mutableListOf<EngineEvent>()
         val job = scope.launch { bob.engine.events.collect { events += it } }
         kotlinx.coroutines.delay(50)
@@ -523,8 +530,9 @@ class EngineTest {
         assertTrue(bob.store.getMessages(convId, 20).any { it.systemEvent is SystemEvent.IdentityChanged })
         val pending = bob.engine.pendingIdentityChanges().single()
         assertEquals(alice.userId(), pending.userId)
+        assertEquals(aliceDevice, pending.deviceId)
 
-        bob.engine.acceptIdentity(pending.userId, pending.deviceNumber, pending.newIdentityKey!!)
+        assertTrue(bob.engine.acceptIdentity(pending.userId, pending.deviceId, pending.newIdentityKey!!))
         val fixed = bob.store.getMessage(id)!!
         assertNull(fixed.decryptError)
         assertEquals("I am new", fixed.text)
@@ -535,13 +543,15 @@ class EngineTest {
     fun `safety numbers match on both sides`() = runBlocking<Unit> {
         val (alice, bob, convId) = pair()
         alice.engine.sendText(convId, "hi"); alice.engine.processOutbox(); bob.engine.sync()
-        val a = alice.engine.safetyNumber(bob.userId(), bob.engine.account.value!!.deviceNumber)!!
-        val b = bob.engine.safetyNumber(alice.userId(), alice.engine.account.value!!.deviceNumber)!!
+        val aliceDevice = alice.engine.account.value!!.deviceId
+        val bobDevice = bob.engine.account.value!!.deviceId
+        val a = alice.engine.safetyNumber(bob.userId(), bobDevice)!!
+        val b = bob.engine.safetyNumber(alice.userId(), aliceDevice)!!
         assertEquals(a.digits, b.digits)
         assertEquals(60, a.digits.length)
-        assertFalse(alice.engine.isVerified(bob.userId(), 1))
-        alice.engine.setVerified(bob.userId(), 1, true)
-        assertTrue(alice.engine.isVerified(bob.userId(), 1))
+        assertFalse(alice.engine.isVerified(bobDevice))
+        alice.engine.setVerified(bobDevice, true)
+        assertTrue(alice.engine.isVerified(bobDevice))
     }
 
     @Test

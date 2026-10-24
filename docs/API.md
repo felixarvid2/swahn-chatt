@@ -49,6 +49,10 @@ The running server also serves a generated OpenAPI document at `/api/v1/openapi.
 
 `direct` conversations have exactly two members and `name: null`; the client shows the other person's name.
 
+Clients identify devices by `id`. `Device.number` and `device_number` in key bundles are informational only.
+All sender, conversation and target fields on message events are claims that clients check against the decrypted
+content (see SECURITY.md, "Content is bound to its context").
+
 ## Health
 
 | Method | Path | Result |
@@ -72,16 +76,19 @@ Display name: 1–64 characters. Device name: 1–64 characters.
 | Method | Path | Body | Result |
 |---|---|---|---|
 | POST | `/auth/invite/redeem` | `{code, username, password, display_name, device_name}` | `201 AuthResponse`. `404 invalid_invite` for unknown/expired/used codes, `409 username_taken` |
-| POST | `/auth/login` | `{username, password, device_name}` | `200 AuthResponse`. Every login registers a **new device**. `401 invalid_credentials` (same answer for unknown user and wrong password) |
-| POST | `/auth/refresh` | `{refresh_token}` | `200 AuthResponse` with a **new** refresh token; the old one stops working. Reusing a rotated refresh token revokes the whole session and its device (`401 token_reused`) |
+| POST | `/auth/login` | `{username, password, device_name}` | `200 AuthResponse`. Every login registers a **new device**. `401 invalid_credentials` (same answer for unknown user and wrong password). `409 device_limit` when the account already has the maximum number of active devices (default 10, `FAMILYCHAT_MAX_DEVICES_PER_USER`; the `message` says so: remove a device, then log in again). `429 rate_limited` while the username is locked after repeated failures (see below) |
+| POST | `/auth/refresh` | `{refresh_token}` | `200 AuthResponse` with a **new** refresh token; the old one stops working. Presenting **any** refresh token the session issued earlier (not only the previous one) revokes the whole session and its device (`401 token_reused`) |
 | POST | `/auth/logout` | – (auth) | `204`. Revokes the session and the device, deletes the device's public keys |
 
 - Access tokens are JWT (HS256) valid for 15 minutes (`FAMILYCHAT_ACCESS_TOKEN_MINUTES`). Refresh tokens are
   random 256-bit values, stored hashed, valid for 60 days (`FAMILYCHAT_REFRESH_TOKEN_DAYS`), sliding on refresh.
 - Each request re-checks that the session, device and user are still active, so revocation is immediate.
 - An expired access token returns `401 {"code":"token_expired"}`; the client refreshes and retries once.
-- Rate limits (per client IP, in-process): login 10/min/IP and 5/min per IP+username, redeem 10/min,
-  refresh 30/min, key-bundle fetches 120/min per device. Exceeding returns `429` with `Retry-After`.
+- Rate limits (in-process): per client IP (IPv6 clients per /64 prefix) login 10/min and 5/min per IP+username,
+  redeem 10/min, refresh 30/min; key-bundle fetches 120/min per user. Exceeding returns `429` with `Retry-After`.
+- Per-username lockout: after 10 failed logins within an hour (or 30 within a day) for a username, from any
+  addresses, further logins for that username get `429 rate_limited` (with `Retry-After`) until the failures age
+  out, even with the right password. Unknown usernames behave identically. Signed-in devices are not affected.
 
 ## Administration (admins only, else `403`)
 
@@ -106,7 +113,7 @@ Bootstrap and server-side administration use the CLI (see `docs/RASPBERRY_PI_SET
 | PUT | `/users/me/password` | `{current_password, new_password}` | `204`. Revokes all other sessions and devices |
 | GET | `/users/{user_id}/devices` | – | `200 [Device]` (active devices) |
 | GET | `/devices/me` | – | `200 Device` |
-| PUT | `/devices/me/push` | `{kind: "unifiedpush", endpoint: "https://..."}` | `204` |
+| PUT | `/devices/me/push` | `{kind: "unifiedpush", endpoint: "https://..."}` | `204`. `422` when the endpoint is not https or its host is not in the server's `FAMILYCHAT_PUSH_ALLOWED_HOSTS` (IP-literal hosts only if listed). `409 push_not_configured` when the production server has no allowed hosts configured, i.e. push is unavailable there |
 | DELETE | `/devices/me/push` | – | `204` |
 | DELETE | `/devices/{device_id}` | – | `204`. Only the caller's own devices |
 
@@ -142,8 +149,11 @@ PQ keys are `KEMPublicKey` (Kyber1024, 1569 bytes), signatures are 64 bytes.
    "pq_prekey": {"key_id": 2, "public_key": "b64", "signature": "b64"},
    "one_time_prekey": {"key_id": 5, "public_key": "b64"}}]}
 ```
-Each fetch consumes (deletes) one one-time EC prekey and one one-time PQ prekey per returned device.
-`one_time_prekey` is `null` when exhausted; `pq_prekey` falls back to the last-resort PQ key. Only active
+Each fetch consumes (deletes) one one-time EC prekey and one one-time PQ prekey per returned device, but only
+for the first 10 fetches per hour by the same calling **user** for the same target device; later fetches in that
+hour return the bundle without one-time keys (`one_time_prekey: null`, `pq_prekey` = last-resort key) and consume
+nothing. Fetches are also limited to 120 per minute per calling user (`429`).
+`one_time_prekey` is `null` when exhausted or rationed; `pq_prekey` falls back to the last-resort PQ key. Only active
 devices that have uploaded keys are returned. The caller's own current device is never returned.
 
 ## Conversations
@@ -179,8 +189,10 @@ nothing on the server side; their devices are excluded from future envelopes.
   "extra_devices": [{"user_id", "device_id"}]}`. The client refreshes device lists/keys and retries with the
   same message `id`.
 - `kind: "edit"` and `kind: "delete"` need `target_message_id` naming a non-deleted message by the same sender
-  in the same conversation. `delete` carries no envelopes (`[]`); the server marks the target deleted and
-  drops its undelivered ciphertexts. `edit` carries envelopes with the new encrypted content.
+  in the same conversation. Both carry envelopes for the full device set, like a normal message: an edit holds
+  the new encrypted content, a delete holds an encrypted `{"v":2,"type":"delete","conversation_id","message_id","target_message_id"}` content. Recipients apply a delete
+  only after decrypting it, so the server cannot forge one. The server marks the target deleted and drops its
+  undelivered ciphertexts. Deletes carry no attachments.
 - `attachment_ids` must be `message` attachments uploaded by the sender. Members of the conversation may then
   download them.
 - Idempotency: the message `id` is the idempotency key. Re-sending an `id` already stored for the same sender
@@ -235,6 +247,14 @@ Client → server:
 - `{"type": "ping"}`
 
 The server sends a WebSocket ping every 25 s and drops connections that do not answer within 60 s.
+
+Limits: frames larger than 64 KiB are rejected; more than 100 inbound frames in 10 s (valid or not) close the
+socket with `1008`; beyond 20 typing frames or 5 pings per 10 s the extra ones are silently ignored. A client
+that does not read (more than 256 queued server messages) is closed with `1008`; nothing is lost, reconnect and
+`GET /sync`. The server re-checks the session about every 60 s and closes with `4401` when the session, device
+or user has been revoked or disabled (also when that happened through the server CLI); a socket outlives the
+15 minute access token, only revocation ends it. Prefer the `Authorization` header: the query-string token is
+redacted in server logs, but proxies and other logs may still record it.
 
 ## Attachments
 
