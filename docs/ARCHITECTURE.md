@@ -38,7 +38,7 @@
   `app/schemas.py`; `app/security.py` (Argon2id, JWT, token hashing); `app/ratelimit.py`;
   `app/routers/*` (auth, admin, users, devices, keys, conversations, messages, sync, attachments, ws, health);
   `app/services/*` (events fan-out, membership, delivery receipts, push, password reset, backup/verify, config check, maintenance);
-  `app/metrics.py` (Prometheus `/metrics`, no client library); `app/services/presence.py` (opt-in online status, debounced); `app/services/lockout.py`; `app/services/uploads.py` (resumable uploads); `app/hub.py` (in-memory WebSocket
+  `app/metrics.py` (Prometheus `/metrics`, no client library); `app/services/presence.py` (opt-in online status, debounced); `app/services/lockout.py`; `app/services/alerts.py` (optional operator alerts through ntfy); `app/services/dbmaint.py` (weekly database maintenance); `SecurityHeadersMiddleware` in `app/main.py`; `app/services/uploads.py` (resumable uploads); `app/hub.py` (in-memory WebSocket
   connection registry; one process, so no broker is needed); `app/cli.py` (invites, users, password reset, backup,
   verify-backup, restore, check-config, seed-dev).
 - WebSocket fan-out works because there is exactly one worker. Running several workers would need a broker
@@ -50,7 +50,7 @@
 |---|---|
 | `users` | id, username (unique), display_name, password_hash, is_admin, avatar_attachment_id, created_at, disabled_at, suspended_at (admin suspension: no sign-in or API use, data kept), share_presence (opt-in, default false), presence_last_seen_at (only kept while sharing) |
 | `invitations` | id, code_hash (unique), note, is_admin, created_by, created_at, expires_at, used_at, used_by, revoked_at, max_uses (1..20), uses (redeemed so far; used_at/used_by = used up / latest redeemer) |
-| `devices` | id, user_id, number (1..127, unique per user), name, created_at, last_seen_at, revoked_at, push_kind, push_endpoint, acked_cursor |
+| `devices` | id, user_id, number (1..127, unique per user), name, created_at, last_seen_at, revoked_at, push_kind, push_endpoint, acked_cursor, push health: last_push_at, last_push_status (HTTP status, 0 = no answer), push_failures (pushes in a row that failed for good) |
 | `sessions` | id, user_id, device_id, refresh_token_hash (unique), created_at, expires_at, revoked_at |
 | `session_tokens` | token_hash (PK), session_id — every refresh token a session issued, for reuse detection |
 | `device_keys` | device_id (PK), registration_id, identity_key, signed_prekey_id/public/signature, pq_last_resort_id/public/signature, updated_at |
@@ -68,6 +68,7 @@
 | `audit_events` | id (autoincrement), at, actor_user_id, action, target_user_id, target_id, ip, details (JSON; never secrets) |
 | `login_failures` | id, key_hash (HMAC of the username, never the name), at — failed logins of the last 24 h, replayed into the in-memory lockout counters at startup |
 | `upload_sessions` | id (becomes the attachment id), user_id, purpose, size (reserved quota), sha256, offset, created_at, expires_at (24 h); bytes in `attachments/.tmp/uploads/<id>.part` |
+| `server_state` | key (PK), value (JSON), updated_at — the server's own bookkeeping; today the last database maintenance result (`db_maintenance`) |
 | `counters` | name, value (used for monotonic message `seq`, works on SQLite and PostgreSQL) |
 
 ### Sync cursor and the database
@@ -87,6 +88,34 @@ behaviour the code was written against. Cost: no write concurrency, which one Pi
 never runs inside a transaction, so the lock is held for milliseconds). The monotonic message `seq` uses the
 `counters` row (`UPDATE ... SET value = value + 1` takes the row lock on both databases).
 `tests/test_postgres.py` proves the ordering and shows what goes wrong without the lock.
+
+**Receipt coalescing.** A device that is offline (or slow to acknowledge) would otherwise collect one `read` receipt
+per tap and one `delivered` receipt per batch. When a receipt is written (`emit_receipt` in `app/services/events.py`)
+the receipts of the same conversation, user and type that the target device has not acknowledged are *deleted* and one
+merged row is inserted: the highest `up_to_seq` for `read`, the union of `message_ids` (in order) for `delivered`.
+The merged row is a new insert, never an update in place, so it gets a new, higher `seq`: a device whose cursor has
+already passed the old row (fetched, not yet acknowledged) still receives the merged event on its next sync, and no
+cursor ever has to move backwards. Pagination is untouched; clients see fewer events, of the same shape.
+
+**Push delivery.** The push worker thread sends the content-free `{"t":"sync"}` once; a transient failure (network
+error, timeout, `429`, `5xx`) is put on a retry schedule (5 s, 30 s, 2 min) kept in memory and processed by the same
+thread between other pushes, so a slow or dead push server never holds up other devices (a fresh push for the device
+replaces its scheduled retry; a restart drops pending retries, which is fine for a hint). Every attempt stores
+`last_push_at` / `last_push_status` on the device; `push_failures` counts pushes that failed for good in a row and is
+reset by a success. `404`/`410` clears the endpoint as before.
+
+**Security headers.** `SecurityHeadersMiddleware` adds the headers to every HTTP response, including errors and the
+body-limit `413`; a header a route sets itself wins. `Cache-Control: no-store` is the default, the strict CSP
+(`default-src 'none'`) applies everywhere except the Swagger UI page, which needs `cdn.jsdelivr.net` (script and
+stylesheet), `fastapi.tiangolo.com` (favicon) and one inline script. HSTS only with `FAMILYCHAT_HSTS=true`.
+
+**Maintenance.** The hourly loop (a worker thread, `asyncio.to_thread`) prunes data and, once per
+`FAMILYCHAT_DB_MAINTENANCE_DAYS` (7), runs `app/services/dbmaint.py`: on SQLite `PRAGMA optimize`, `ANALYZE`, a WAL
+checkpoint (TRUNCATE) and `VACUUM` only when more than 20 % of the pages are free, the disk has 1.25 times the
+database size free and no request arrived for a minute (VACUUM holds the write lock for the seconds it takes; a
+postponed VACUUM is retried every hour); on PostgreSQL `ANALYZE` only. The result is stored in `server_state` and shown
+by `GET /admin/stats`. The same loop checks free disk space and sends operator alerts (`app/services/alerts.py`, see
+SECURITY.md) when maintenance fails or disk is low.
 
 Run the suite against PostgreSQL with `FAMILYCHAT_TEST_DATABASE_URL=postgresql+psycopg://user:pw@host:5432/postgres`
 (a role that may create databases); tests that need the SQLite file itself are skipped there. SQLite stays the

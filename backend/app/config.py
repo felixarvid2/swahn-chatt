@@ -6,6 +6,7 @@ import secrets
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -58,6 +59,15 @@ class Settings(BaseSettings):
     presence_debounce_seconds: float = Field(10.0, ge=0.0)
     # /readyz answers 503 "low_disk" when the data volume has less free space than this (0 disables the check).
     min_free_disk_mb: int = Field(200, ge=0)
+    # Send Strict-Transport-Security. Only turn this on when every client reaches the server over HTTPS (a reverse
+    # proxy or `tailscale serve` in front): browsers then refuse plain http for a year.
+    hsts: bool = False
+    # Weekly database maintenance (SQLite: optimize, ANALYZE, WAL checkpoint, VACUUM when worthwhile; PostgreSQL:
+    # ANALYZE). Days between runs; 0 turns it off.
+    db_maintenance_days: int = Field(7, ge=0)
+    # Optional operator alerts: a full ntfy topic URL (https; http only in development) and an optional access token.
+    admin_ntfy_url: str = ""
+    admin_ntfy_token: str = ""
 
     @model_validator(mode="after")
     def _finish(self) -> "Settings":
@@ -72,6 +82,18 @@ class Settings(BaseSettings):
             else:
                 log.warning("FAMILYCHAT_SECRET_KEY not set: using an ephemeral key (tokens die on restart)")
             self.secret_key = secrets.token_urlsafe(48)
+        if self.admin_ntfy_url:
+            parts = urlsplit(self.admin_ntfy_url.strip())
+            # The topic URL is a secret of sorts: never put it into the message.
+            if not parts.hostname or parts.scheme not in ("https", "http"):
+                raise ConfigError(
+                    "FAMILYCHAT_ADMIN_NTFY_URL must be a full topic URL such as https://ntfy.example.org/topic"
+                )
+            if parts.scheme == "http" and self.env != "development":
+                raise ConfigError(
+                    "FAMILYCHAT_ADMIN_NTFY_URL must use https (plain http is only allowed in development)"
+                )
+            self.admin_ntfy_url = self.admin_ntfy_url.strip()
         if not self.database_url:
             self.database_url = f"sqlite:///{(self.data_dir / 'familychat.db').resolve()}"
         if self.attachments_dir is None:

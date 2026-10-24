@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app import __version__, clock
 from app.config import Settings
-from app.deps import Principal, get_db, get_ip, get_read_db, get_settings_dep, require_admin
+from app.deps import Principal, get_alerts, get_db, get_ip, get_read_db, get_settings_dep, require_admin
 from app.errors import conflict, error_responses, invalid, not_found
 from app.migrate import code_head, db_revision
 from app.models import Attachment, Device, Invitation, User
@@ -22,7 +22,8 @@ from app.schemas import (
     PasswordResetCreated,
 )
 from app.security import hash_invite_code, new_invite_code
-from app.services import accounts, audit, password_reset, stats
+from app.services import accounts, audit, dbmaint, password_reset, stats
+from app.services.alerts import AdminAlerts
 
 router = APIRouter(prefix="/admin", tags=["admin"], responses=error_responses(401, 403))
 
@@ -220,6 +221,25 @@ def _admin_users(db: Session, user_id: str | None = None) -> list[dict]:
     )
     if user_id is not None:
         query = query.where(User.id == user_id)
+    rows = db.execute(query).all()
+    by_user: dict[str, list[dict]] = {}
+    if rows:
+        dquery = select(Device).where(Device.revoked_at.is_(None)).order_by(Device.user_id, Device.number)
+        if user_id is not None:
+            dquery = dquery.where(Device.user_id == user_id)
+        for d in db.scalars(dquery):
+            by_user.setdefault(d.user_id, []).append(
+                {
+                    "id": d.id,
+                    "number": d.number,
+                    "name": d.name,
+                    "last_seen_at": d.last_seen_at,
+                    "push_registered": bool(d.push_kind and d.push_endpoint),
+                    "last_push_at": d.last_push_at,
+                    "last_push_status": d.last_push_status,
+                    "push_failures": d.push_failures,
+                }
+            )
     return [
         {
             "id": u.id,
@@ -232,8 +252,9 @@ def _admin_users(db: Session, user_id: str | None = None) -> list[dict]:
             "last_seen_at": last_seen,
             "active_devices": int(active or 0),
             "attachment_bytes": int(size or 0),
+            "devices": by_user.get(u.id, []),
         }
-        for u, last_seen, active, size in db.execute(query).all()
+        for u, last_seen, active, size in rows
     ]
 
 
@@ -302,6 +323,7 @@ def update_user(
     body: AdminUserUpdate,
     p: Principal = Depends(require_admin),
     ip: str = Depends(get_ip),
+    alerts: AdminAlerts = Depends(get_alerts),
     db: Session = Depends(get_db),
 ):
     """Set `is_admin`. The last active administrator (not removed, not suspended) cannot be demoted, yourself
@@ -323,6 +345,8 @@ def update_user(
         )
         accounts.broadcast_user_updated(db, user)
         db.commit()
+        if body.is_admin:
+            alerts.send("admin_granted")
     (out,) = _admin_users(db, user.id)
     return out
 
@@ -342,6 +366,7 @@ def get_stats(
         "version": __version__,
         "migration": {"head": code_head(), "current": db_revision(request.app.state.engine)},
         "uptime_seconds": int(time.monotonic() - request.app.state.started_at),
+        "db_maintenance": dbmaint.last_run(db),
     }
 
 

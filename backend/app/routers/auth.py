@@ -9,6 +9,7 @@ from app import clock
 from app.config import Settings
 from app.deps import (
     Principal,
+    get_alerts,
     get_db,
     get_ip,
     get_limiter,
@@ -24,6 +25,7 @@ from app.ratelimit import RateLimiter
 from app.schemas import AuthResponse, LoginRequest, PasswordResetRequest, RedeemRequest, RefreshRequest
 from app.security import hash_invite_code, hash_password, hash_token, verify_password
 from app.services import accounts, audit, lockout, password_reset
+from app.services.alerts import AdminAlerts
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -40,6 +42,7 @@ def redeem(
     addr: str = Depends(get_ip),
     ip: str = Depends(get_rate_ip),
     limiter: RateLimiter = Depends(get_limiter),
+    alerts: AdminAlerts = Depends(get_alerts),
     settings: Settings = Depends(get_settings_dep),
     rdb: Session = Depends(get_read_db),
     db: Session = Depends(get_db),
@@ -106,6 +109,8 @@ def redeem(
     if is_admin:
         audit.record(db, "admin_granted", target_user=user.id, target=inv_id, ip=addr, via="invitation")
     db.commit()
+    if is_admin:
+        alerts.send("admin_granted")
     return result
 
 
@@ -159,6 +164,7 @@ def login(
     addr: str = Depends(get_ip),
     ip: str = Depends(get_rate_ip),
     limiter: RateLimiter = Depends(get_limiter),
+    alerts: AdminAlerts = Depends(get_alerts),
     settings: Settings = Depends(get_settings_dep),
     rdb: Session = Depends(get_read_db),
     db: Session = Depends(get_db),
@@ -175,7 +181,8 @@ def login(
     stored = found.password_hash if found else None
     ok = verify_password(settings, stored, body.password)
     if not ok or found is None:
-        lockout.record_failure(db, limiter, settings, body.username)
+        if lockout.record_failure(db, limiter, settings, body.username):
+            alerts.send("login_lockout")
         _audit_login_failure(db, addr, found.id if found else None, body.username if found else None)
         raise unauthorized("invalid username or password", "invalid_credentials")
     if found.suspended_at is not None:
@@ -207,6 +214,7 @@ def refresh(
     addr: str = Depends(get_ip),
     ip: str = Depends(get_rate_ip),
     limiter: RateLimiter = Depends(get_limiter),
+    alerts: AdminAlerts = Depends(get_alerts),
     settings: Settings = Depends(get_settings_dep),
     db: Session = Depends(get_db),
 ):
@@ -232,6 +240,7 @@ def refresh(
                 session=reused.id,
             )
             db.commit()
+            alerts.send("token_reuse")
             raise unauthorized("refresh token was already used; session revoked", "token_reused")
         raise unauthorized("invalid refresh token", "invalid_token")
     user = db.get(User, session.user_id)

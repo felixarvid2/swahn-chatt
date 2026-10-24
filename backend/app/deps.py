@@ -16,6 +16,7 @@ from app.models import Device, User
 from app.models import Session as AuthSession
 from app.ratelimit import RateLimiter, client_ip, rate_key
 from app.security import AccessClaims, decode_access_token
+from app.services.alerts import AdminAlerts
 
 log = logging.getLogger("familychat.deps")
 
@@ -54,6 +55,10 @@ def get_read_db(request: Request) -> Iterator[Session]:
 
 def get_limiter(request: Request) -> RateLimiter:
     return request.app.state.limiter
+
+
+def get_alerts(request: Request) -> AdminAlerts:
+    return request.app.state.alerts
 
 
 def get_ip(request: Request) -> str:

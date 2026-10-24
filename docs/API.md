@@ -24,6 +24,12 @@ The running server also serves a generated OpenAPI document at `/api/v1/openapi.
 - OpenAPI: every operation has a tag, a summary and its error responses (`401`/`403`/`404`/`409`/`413`/`422`/`429` as
   applicable, all with the `{"code","message"}` model). Unknown JSON fields in responses must be ignored by clients:
   new fields are only ever added.
+- Response headers: every response carries `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`,
+  `X-Frame-Options: DENY`, `Permissions-Policy`, `Cross-Origin-Resource-Policy: same-site` and
+  `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'` (the Swagger UI page at `/api/v1/docs` gets a
+  relaxed policy that allows its CDN assets). API responses are `Cache-Control: no-store` unless a route sets its own
+  (attachment downloads: `private, no-store`). `Strict-Transport-Security` is sent only when the administrator sets
+  `FAMILYCHAT_HSTS=true` (HTTPS only). Clients can ignore all of these.
 - Ordering: `seq` values are integers assigned by the server from one monotonic counter. Message `seq` orders
   messages; event `seq` is the sync cursor. They are different counters.
 
@@ -120,10 +126,10 @@ Display name: 1–64 characters. Device name: 1–64 characters.
 | POST | `/admin/users/{user_id}/suspend` | – | `204`. The account cannot sign in or use the API (`403 account_suspended` on every request, login with the right password and refresh), open WebSockets are closed with `4401` (a reconnect or refresh then gets the `403`). Data, conversation memberships, devices and sessions stay, so other members keep encrypting for its devices and **unsuspend restores everything**. Idempotent. `409` for yourself, `404` for an unknown or removed user. Audit: `user_suspended` |
 | POST | `/admin/users/{user_id}/unsuspend` | – | `204`, idempotent, `404` as above. Audit: `user_unsuspended` |
 | PATCH | `/admin/users/{user_id}` | `{is_admin: bool}` | `200` the account as in `GET /admin/users`. Promotes or demotes (takes effect on the user's next request; contacts get `user_updated`). `409 last_admin` when it would leave no active administrator (not removed, not suspended), yourself included; no change is a quiet no-op. Audit: `admin_granted` / `admin_revoked` (`details.via` = `admin`) |
-| GET | `/admin/users` | – | `200 [{id, username, display_name, is_admin, created_at, disabled_at, suspended_at, last_seen_at, active_devices, attachment_bytes}]`, oldest account first, removed accounts included (`disabled_at` set). `last_seen_at` is the newest over all the user's devices (`null` if none), `attachment_bytes` the storage the user has uploaded |
+| GET | `/admin/users` | – | `200 [{id, username, display_name, is_admin, created_at, disabled_at, suspended_at, last_seen_at, active_devices, attachment_bytes, devices: [{id, number, name, last_seen_at, push_registered, last_push_at, last_push_status, push_failures}]}]`, oldest account first, removed accounts included (`disabled_at` set). `last_seen_at` is the newest over all the user's devices (`null` if none), `attachment_bytes` the storage the user has uploaded. `devices` lists the active devices with their push health: `last_push_status` is the HTTP status of the last push attempt (`0` = no answer), `push_failures` the number of pushes in a row that failed for good (all retries used up, or refused), reset by a success. The push endpoint itself is never shown |
 | POST | `/admin/users/{user_id}/password-reset` | – | `201 {code, expires_at}`. The `code` is shown only here (single use, 24 h, stored hashed). `404` for an unknown or removed user. Audit: `password_reset_issued` |
 | DELETE | `/admin/users/{user_id}/devices/{device_id}` | – | `204`. Lost phone: revokes that device with the same effects as the owner doing it (keys and queued data deleted, sessions revoked, `devices_changed` events sent, its WebSocket closed with `4401`). `404` if the device is not an active device of that user; `409` for the admin's own current device (use logout) |
-| GET | `/admin/stats` | – | `200 {users, active_devices, conversations, messages, undelivered_envelopes, attachments, db_bytes, attachments_bytes, disk_free_bytes, version, migration: {head, current}, uptime_seconds}`. `users` counts active accounts; `undelivered_envelopes` only those for active devices; `db_bytes` is the SQLite file with its WAL (`null` for other databases); `disk_free_bytes` is free space on the data volume |
+| GET | `/admin/stats` | – | `200 {users, active_devices, conversations, messages, undelivered_envelopes, attachments, db_bytes, attachments_bytes, disk_free_bytes, version, migration: {head, current}, uptime_seconds, db_maintenance}`. `db_maintenance` is the last weekly database maintenance run, `null` before the first: `{at, dialect, ok, steps, vacuum, duration_ms, freelist_ratio, error}` (`vacuum` is `done`, `not_needed`, `disk_space`, `busy` (waits for a quiet moment, retried hourly) or `n/a`; `error` is only an exception type name). `users` counts active accounts; `undelivered_envelopes` only those for active devices; `db_bytes` is the SQLite file with its WAL (`null` for other databases); `disk_free_bytes` is free space on the data volume |
 | GET | `/admin/audit?before_id=&limit=` | – | `200 [{id, at, actor_user_id, action, target_user_id, target_id, ip, details}]`, newest first. `limit` 1..200 (default 50); pass the smallest `id` of a page as `before_id` for the next (older) page. See "Audit log" in `SECURITY.md` for the actions |
 
 Monitoring: `GET /metrics` (not under `/api/v1`) serves Prometheus text format: `familychat_http_requests_total` and
@@ -153,9 +159,14 @@ Bootstrap and server-side administration use the CLI (see `docs/RASPBERRY_PI_SET
 | DELETE | `/users/me` | `{password}` | `204`. Deletes the caller's own account with the same effect as an administrator removing it: the account is disabled, every device, session and key is revoked, the user leaves all conversations (their messages stay in them for the others), the avatar is unlinked and uploaded files that no message references are garbage-collected at the next hourly run. `403 invalid_credentials` for a wrong password (audited as `self_delete_failed`), `409 last_admin` for the only active administrator (promote someone first), `429` after 5 attempts per minute. Audit: `user_removed` with `details.via` = `self` |
 | PUT | `/users/me/password` | `{current_password, new_password}` | `204`. Revokes all other sessions and devices |
 | GET | `/users/{user_id}/devices` | – | `200 [Device]` (active devices). For another user who has not opted in to presence, `last_seen_at` is the device's `created_at` (device activity would be presence) |
-| GET | `/devices/me` | – | `200 Device` |
+| GET | `/devices/me` | – | `200 Device` plus `last_push_at` (when the server last tried to push to this device, `null` if never) and `last_push_status` (HTTP status the push server answered, `0` = no answer such as a network error or timeout, `null` if never). These two fields are shown only here, never to other users |
+| POST | `/devices/me/push/test` | – | `202 {"status":"queued"}`. Queues one push (the usual content-free `{"t":"sync"}`, so older clients simply sync) to the endpoint this device registered; read the outcome from `last_push_at` / `last_push_status` of `GET /devices/me` a moment later. `409 push_not_configured` when no endpoint is registered or the server has no push allow-list in production. Rate limited to 3 per 10 minutes per device (`429`, `Retry-After`) |
 | PUT | `/devices/me/push` | `{kind: "unifiedpush", endpoint: "https://..."}` | `204`. `422` when the endpoint is not https or its host is not in the server's `FAMILYCHAT_PUSH_ALLOWED_HOSTS` (IP-literal hosts only if listed). `409 push_not_configured` when the production server has no allowed hosts configured, i.e. push is unavailable there |
 | DELETE | `/devices/me/push` | – | `204` |
+
+Push delivery: the server retries a push that failed transiently (network error, timeout, `429`, `5xx`) after 5 s, 30 s and 2 min
+(four attempts in all) without delaying anything else, and keeps the outcome per device (visible to the owner and to
+administrators). `404`/`410` from the push server still clears the registered endpoint.
 | DELETE | `/devices/{device_id}` | – | `204`. Only the caller's own devices |
 
 ## End-to-end encryption keys (Signal protocol, see `SECURITY.md`)
@@ -210,7 +221,7 @@ devices that have uploaded keys are returned. The caller's own current device is
 | PATCH | `/conversations/{id}/members/{user_id}` | `{role: "admin|member"}` | `200 Conversation` (group admins only) |
 | DELETE | `/conversations/{id}/members/{user_id}` | – | `204`. Admins remove others; anyone may remove themselves (leave). When the last admin leaves, the longest-standing member becomes admin |
 | GET | `/conversations/{id}/messages?before_seq=&limit=50` | – | `200 [Message]` newest first, max 200 |
-| POST | `/conversations/{id}/read` | `{up_to_seq}` | `204`. Moves the caller's read pointer forward (never back) and emits `receipt` read events |
+| POST | `/conversations/{id}/read` | `{up_to_seq, notify?: true}` | `204`. Moves the caller's read pointer forward (never back) and emits `receipt` read events. With `"notify": false` (silent read; default `true`, older clients never send it) the pointer moves and the caller's own other devices still get the `read` receipt (their unread counts stay in sync), but the other members get none. A silent read cannot be announced later: the same pointer position is not sent again |
 
 Non-members get `404` for every conversation route (no existence oracle). Members removed from a group keep
 nothing on the server side; their devices are excluded from future envelopes.
@@ -273,7 +284,7 @@ receives events created after the device was registered (use `GET /conversations
 | `type` | `data` |
 |---|---|
 | `message` | `Message` with this device's envelope (also used for edits, deletes and reactions: see `data.kind`) |
-| `receipt` | `{"conversation_id", "user_id", "type": "delivered", "message_ids": [...]}` or `{"conversation_id", "user_id", "type": "read", "up_to_seq": 0}` |
+| `receipt` | `{"conversation_id", "user_id", "type": "delivered", "message_ids": [...]}` or `{"conversation_id", "user_id", "type": "read", "up_to_seq": 0}`. Receipts a device has not acknowledged yet are coalesced: per (conversation, user, type) the device has at most one queued `read` receipt (the highest `up_to_seq`) and one `delivered` receipt (all `message_ids`). The merged receipt gets a new, higher event `seq`, so a device that already fetched an older one receives it again on its next sync (process it idempotently, as always) |
 | `conversation_updated` | `Conversation` (created, renamed, avatar, members or roles changed) |
 | `conversation_removed` | `{"conversation_id"}` — the user left or was removed |
 | `devices_changed` | `{"user_id"}` — a user you share a conversation with added/removed a device or keys |
@@ -282,7 +293,7 @@ receives events created after the device was registered (use `GET /conversations
 
 `POST /sync/ack {"cursor": 123}` → `204`. Confirms that the device processed all events up to `cursor`.
 The server then marks the message envelopes in those events as delivered and emits one `delivered` receipt per
-(message, recipient user) to the sender's devices. Clients must process events idempotently: the same event
+(message, recipient user) to the sender's devices (merged with delivered receipts still waiting there, see `receipt`). Clients must process events idempotently: the same event
 can be returned again until it is acknowledged.
 
 ## WebSocket `/ws`

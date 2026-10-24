@@ -49,8 +49,10 @@ def readyz(request: Request):
             free = free_disk_bytes(settings.data_dir)
         except OSError:
             log.warning("cannot read free disk space of the data directory", exc_info=True)
+            request.app.state.alerts.send("low_disk")
             return _unavailable("low_disk", free_disk_mb=None, min_free_disk_mb=settings.min_free_disk_mb)
         if free < settings.min_free_disk_mb * 1024 * 1024:
+            request.app.state.alerts.send("low_disk")  # debounced inside (once per 6 h)
             return _unavailable(
                 "low_disk", free_disk_mb=free // (1024 * 1024), min_free_disk_mb=settings.min_free_disk_mb
             )

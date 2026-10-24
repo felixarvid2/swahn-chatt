@@ -254,6 +254,10 @@ Risks of libsignal that we accept and mitigate:
 - **Request IDs:** every request gets an `X-Request-ID` (a client value is used only if it matches
   `^[A-Za-z0-9._-]{8,64}$`, so it cannot inject log lines or grow without bound). It appears in the response, in
   every JSON log line of that request and in error bodies, and carries no personal data.
+- **Database maintenance:** once a week the maintenance job runs `PRAGMA optimize`, `ANALYZE`, a WAL checkpoint and, if
+  more than 20 % of the SQLite file is free pages, `VACUUM` (PostgreSQL: `ANALYZE`). It runs on the maintenance thread,
+  not in a request; VACUUM briefly blocks writers, so it waits for a quiet minute and for enough free disk. Backups
+  are unaffected (they use the SQLite online backup API).
 - **Retention:** the hourly maintenance job deletes message envelopes (the ciphertext copies) that were delivered
   more than `FAMILYCHAT_ENVELOPE_RETENTION_DAYS` (default 30) days ago; once a device has fetched its copy the
   server has no use for it. Undelivered envelopes of active devices are kept for as long as the device is
@@ -275,6 +279,27 @@ Risks of libsignal that we accept and mitigate:
   logged-in user cannot make the server call arbitrary URLs (SSRF). The list is **required in production**: while
   it is empty, push registration is refused (`409 push_not_configured`), a warning is logged at startup and no
   push is sent. IP-literal hosts (incl. forms like `2130706433` or `0x7f.1`) are refused unless listed explicitly.
+- Response headers on every reply: `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`,
+  `X-Frame-Options: DENY`, a minimal `Permissions-Policy` (camera, microphone, geolocation, payment, usb off),
+  `Cross-Origin-Resource-Policy: same-site`, `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'` and
+  `Cache-Control: no-store` (a route may set its own, e.g. attachment downloads). Only the Swagger UI page
+  (`/api/v1/docs`, off in production unless `FAMILYCHAT_EXPOSE_DOCS=true`) gets a relaxed CSP: it allows scripts and
+  styles from `cdn.jsdelivr.net`, the favicon from `fastapi.tiangolo.com` and inline script/style, which Swagger UI
+  needs, so do not expose the docs on a server you do not control. `Strict-Transport-Security` (`max-age=31536000`, no
+  `includeSubDomains`) is sent only with `FAMILYCHAT_HSTS=true`; turn it on only when every client reaches the server
+  over HTTPS (Caddy or `tailscale serve`), because browsers then refuse plain http for that host for a year.
+- Operator alerts (optional): `FAMILYCHAT_ADMIN_NTFY_URL` (the full topic URL, `https` only except in development) and
+  `FAMILYCHAT_ADMIN_NTFY_TOKEN` make the server post a short fixed plain-text message to that ntfy topic when disk
+  space is low (once per 6 h), the hourly or database maintenance fails (once per 6 h), a login lockout was triggered
+  (it says only that, not for whom, once per 30 min), a refresh token was reused (once per 10 min) and a new
+  administrator was granted (once per minute); at most 20 alerts per hour in all. Alerts contain no user names,
+  addresses, message data or secrets and are sent from a background thread, so a dead ntfy server never delays a request
+  (failures are logged without the URL). Failing backups are not seen by the server (they run outside it): use the
+  systemd `OnFailure` unit described in the operations handbook. Use a topic that only you can read: anyone who knows
+  the topic URL can read the alerts, and with an open ntfy server also post to it.
+- Push health and test: the server stores when it last pushed to each device and the HTTP status it got, and
+  administrators see this in `GET /admin/users` (never the endpoint URL). `POST /devices/me/push/test` lets a device
+  send itself one content-free push (3 per 10 minutes).
 - The API listens on `127.0.0.1` in the Docker deployment; only Tailscale or the HTTPS reverse proxy reaches it.
   The containers run with `no-new-privileges`, all Linux capabilities dropped (Caddy keeps only
   `NET_BIND_SERVICE`) and, for the backend, a read-only root filesystem; the Caddy and ntfy images are pinned to

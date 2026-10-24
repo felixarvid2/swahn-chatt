@@ -238,3 +238,26 @@ def test_0006_backfills_invitation_uses_and_keeps_existing_data(blank_db):
     assert not cols & {"max_uses", "uses", "suspended_at", "share_presence", "presence_last_seen_at"}
     assert rows(blank_db, "SELECT id FROM invitations") == {("used",), ("fresh",)}
     command.upgrade(cfg, "head")
+
+
+def test_0007_adds_push_health_and_server_state_and_keeps_devices(blank_db):
+    cfg = alembic_config(blank_db)
+    command.upgrade(cfg, "0006")
+    execute(
+        blank_db,
+        "INSERT INTO users (id, username, display_name, password_hash, is_admin, created_at) "
+        "VALUES ('u','u','U','x',false,1)",
+        "INSERT INTO devices (id, user_id, number, name, created_at, last_seen_at, acked_cursor) "
+        "VALUES ('d','u',1,'Phone',1,1,0)",
+    )
+    command.upgrade(cfg, "0007")
+    assert rows(blank_db, "SELECT last_push_at, last_push_status, push_failures FROM devices") == {(None, None, 0)}
+    assert "server_state" in table_names(blank_db)
+    command.downgrade(cfg, "0006")  # with a device in the table, on SQLite and PostgreSQL
+    assert "server_state" not in table_names(blank_db)
+    engine = create_engine(blank_db, poolclass=NullPool)
+    cols = {c["name"] for c in inspect(engine).get_columns("devices")}
+    engine.dispose()
+    assert not cols & {"last_push_at", "last_push_status", "push_failures"}
+    assert rows(blank_db, "SELECT id FROM devices") == {("d",)}
+    command.upgrade(cfg, "head")

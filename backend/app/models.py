@@ -83,6 +83,11 @@ class Device(Base):
     push_kind: Mapped[str | None] = mapped_column(String(20), nullable=True)
     push_endpoint: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     acked_cursor: Mapped[int] = mapped_column(BigInteger, default=0)
+    # Push health (written by the push worker): time and outcome of the last attempt (HTTP status; 0 = no response)
+    # and how many pushes in a row failed for good (retries exhausted or refused); reset by a success.
+    last_push_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    last_push_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    push_failures: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
 
 
 class Session(Base):
@@ -276,3 +281,12 @@ class UploadSession(Base):
     offset: Mapped[int] = mapped_column(BigInteger, default=0)
     created_at: Mapped[int] = mapped_column(BigInteger)
     expires_at: Mapped[int] = mapped_column(BigInteger, index=True)
+
+
+class ServerState(Base):
+    """Small key/value store for the server's own bookkeeping (e.g. the last database maintenance run)."""
+
+    __tablename__ = "server_state"
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[dict] = mapped_column(SAJSON)
+    updated_at: Mapped[int] = mapped_column(BigInteger)

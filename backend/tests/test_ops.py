@@ -100,8 +100,9 @@ def test_admin_users_lists_everyone_with_usage(factory, app, admin, alice, bob):
     assert users["bob"]["disabled_at"] is not None and users["bob"]["active_devices"] == 0
     assert set(a) == {
         "id", "username", "display_name", "is_admin", "created_at", "disabled_at", "suspended_at", "last_seen_at",
-        "active_devices", "attachment_bytes",
+        "active_devices", "attachment_bytes", "devices",
     }  # fmt: skip
+    assert len(a["devices"]) == 2 and users["bob"]["devices"] == []  # active devices only
     assert "password_hash" not in json.dumps(r.json())
 
 

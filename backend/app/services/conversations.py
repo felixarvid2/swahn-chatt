@@ -16,7 +16,7 @@ from app.models import (
     MessageEnvelope,
     User,
 )
-from app.services.events import active_device_ids, conversation_member_ids, emit
+from app.services.events import active_device_ids, conversation_member_ids, emit, emit_receipt
 from app.services.views import conversations_out
 
 
@@ -232,18 +232,21 @@ def remove_member_checked(db: Session, conv: Conversation, actor_id: str, actor_
     remove_member(db, conv.id, target_id)
 
 
-def mark_read(db: Session, conv: Conversation, member: ConversationMember, device_id: str, up_to_seq: int) -> None:
+def mark_read(
+    db: Session, conv: Conversation, member: ConversationMember, device_id: str, up_to_seq: int, notify: bool = True
+) -> None:
+    """Move the read pointer. With `notify` false only the user's own other devices get the `read` receipt (so their
+    unread counts follow); the other members are told nothing."""
     target = min(up_to_seq, conv.last_message_seq or 0)
     if target <= member.read_seq:
         return
     member.read_seq = target
     db.flush()
-    users = conversation_member_ids(db, conv.id)
+    users = conversation_member_ids(db, conv.id) if notify else [member.user_id]
     devices = [d for d in active_device_ids(db, users) if d != device_id]
-    emit(
+    emit_receipt(
         db,
         devices,
-        "receipt",
         {"conversation_id": conv.id, "user_id": member.user_id, "type": "read", "up_to_seq": target},
         conv.id,
     )

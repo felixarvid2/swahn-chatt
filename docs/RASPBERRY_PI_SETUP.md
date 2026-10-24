@@ -217,12 +217,22 @@ Without push the app only syncs when it is open or every 15 minutes. With push t
    push. With it set, endpoints on any other host are refused, so the server cannot be abused to send requests
    to arbitrary URLs. IP addresses as host names are refused unless you list that exact address. Restart the
    backend after changing it (`docker compose up -d`) and let the phones register again (reopen the app).
+6. Transient push failures (network error, timeout, `429`, `5xx`) are retried after 5 s, 30 s and 2 min without
+   holding up other pushes. The server remembers per device when it last pushed and what the push server answered:
+   administrators see it in `GET /api/v1/admin/users` (`devices[].last_push_status`, `push_failures`), and a phone can
+   test itself with `POST /api/v1/devices/me/push/test` (3 per 10 minutes; result in `GET /devices/me`).
 
 The backend container must be able to resolve and reach the host in the registered endpoint. With public DNS
 (Caddy option) this just works. With a `*.ts.net` name the container has to resolve MagicDNS through the host; if
 pushes never arrive, check `docker compose logs backend | grep push` and test `docker compose exec backend python -c
 "import urllib.request;print(urllib.request.urlopen('https://<ntfy host>/v1/health').read())"`. This path has not
 been verified on real hardware in this repository's test environment.
+
+**Alerts for you (optional).** Set `FAMILYCHAT_ADMIN_NTFY_URL` in `.env` to a full ntfy topic URL (https; pick a long
+random topic name only you subscribe to, add `FAMILYCHAT_ADMIN_NTFY_TOKEN` if the server needs login) and the backend
+posts a short plain-text alert, with no user names or content, when disk space is low, maintenance fails, a login
+lockout is triggered, a refresh token is reused or a new administrator is granted (rate limited, details in
+SECURITY.md and the handbook, section 15). It can be the same ntfy server as above.
 
 ntfy accepts anonymous publishers by default; the UnifiedPush topics are long random strings. If you expose ntfy
 publicly, read the ntfy documentation on access control.
@@ -373,7 +383,10 @@ the last administrator must promote someone else first. All of these are in the 
 A lost or stolen phone: an administrator revokes it with `DELETE /api/v1/admin/users/{user_id}/devices/{device_id}`
 (the owner can do the same from another device). Delivered messages are deleted from the server after
 `FAMILYCHAT_ENVELOPE_RETENTION_DAYS` (30) days and audit entries after `FAMILYCHAT_AUDIT_RETENTION_DAYS` (180);
-both run in the hourly maintenance job. When the server restarts, open apps are disconnected with code 1001 and
+both run in the hourly maintenance job. Once a week (`FAMILYCHAT_DB_MAINTENANCE_DAYS`) the same job also maintains the
+database (SQLite: `PRAGMA optimize`, `ANALYZE`, WAL checkpoint and, only if more than 20 % of the file is free pages and
+the server is quiet, `VACUUM`; PostgreSQL: `ANALYZE`); the last result is `db_maintenance` in `GET /api/v1/admin/stats`.
+When the server restarts, open apps are disconnected with code 1001 and
 reconnect by themselves.
 
 Every response carries an `X-Request-ID` header and error bodies a `request_id`; the same ID is in all log lines

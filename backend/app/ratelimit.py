@@ -68,6 +68,14 @@ class RateLimiter:
         with self._lock:
             self._trim(key, now, window).append(now)
 
+    def count(self, key: str, window: float) -> int:
+        """Events recorded for `key` within `window` seconds."""
+        if not self.enabled:
+            return 0
+        now = self._clock()
+        with self._lock:
+            return len(self._trim(key, now, window))
+
     def seed(self, key: str, window: float, ages: list[float]) -> None:
         """Re-create events that happened `ages` seconds ago (used at startup to restore persisted failure counters)."""
         if not self.enabled:
