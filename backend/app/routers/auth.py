@@ -100,7 +100,9 @@ def redeem(
     device = accounts.create_device(db, user.id, body.device_name, settings.max_devices_per_user)
     result = accounts.start_session(db, settings, user, device)
     accounts.broadcast_user_updated(db, user)
-    audit.record(db, "invitation_redeemed", actor=user.id, target_user=user.id, target=inv_id, ip=addr, is_admin=is_admin)
+    audit.record(
+        db, "invitation_redeemed", actor=user.id, target_user=user.id, target=inv_id, ip=addr, is_admin=is_admin
+    )
     if is_admin:
         audit.record(db, "admin_granted", target_user=user.id, target=inv_id, ip=addr, via="invitation")
     db.commit()
@@ -178,7 +180,12 @@ def refresh(
             # and its device (however many times the thief rotated in between).
             accounts.revoke_device(db, reused.device_id)
             audit.record(
-                db, "refresh_token_reuse", target_user=reused.user_id, target=reused.device_id, ip=addr, session=reused.id
+                db,
+                "refresh_token_reuse",
+                target_user=reused.user_id,
+                target=reused.device_id,
+                ip=addr,
+                session=reused.id,
             )
             db.commit()
             raise unauthorized("refresh token was already used; session revoked", "token_reused")

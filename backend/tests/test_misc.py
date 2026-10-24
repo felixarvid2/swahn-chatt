@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from app import clock
 from app.config import ConfigError, Settings
 from app.main import create_app
+from app.migrate import code_head
 from app.models import Device, Invitation
 from app.models import Session as AuthSession
 from app.services.maintenance import prune
@@ -15,7 +16,8 @@ from tests.conftest import SECRET, Factory, make_settings
 
 def test_health_and_ready(client):
     assert client.get("/healthz").json() == {"status": "ok"}
-    assert client.get("/readyz").json() == {"status": "ready"}
+    ready = client.get("/readyz").json()
+    assert ready["status"] == "ready" and ready["migration"] == code_head()
     assert client.get("/api/v1/healthz").status_code == 200
     assert client.get("/api/v1/readyz").status_code == 200
 
