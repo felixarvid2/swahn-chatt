@@ -13,20 +13,21 @@ class InvalidCiphertextException(message: String, cause: Throwable? = null) : Cr
 class DuplicateMessageException(message: String, cause: Throwable? = null) : CryptoException(message, cause)
 
 /**
- * The remote device's identity key differs from the one pinned on first use (or a bundle/prekey message arrived
- * with another key). Nothing was decrypted or sent. [newIdentityKey] is the key that was presented (serialized
+ * The remote device is not trusted: its identity key differs from the pinned one (bundle or prekey message), the
+ * device UUID is pinned to another user, it was never pinned, or it still waits for approval. Nothing was decrypted or
+ * sent. [newIdentityKey] is the key that was presented (serialized
  * `IdentityKey`), if known; pass it to [PersistentSignalProtocolStore.acceptIdentity] after the user confirmed.
  */
 class UntrustedIdentityException(
     val userId: String,
-    val deviceNumber: Int,
+    val deviceId: String,
     val newIdentityKey: ByteArray?,
     cause: Throwable? = null,
-) : CryptoException("Identity key of $userId.$deviceNumber changed", cause)
+) : CryptoException("Identity of device $deviceId of $userId is not trusted", cause)
 
 /** No session exists for the device (encrypting before a bundle was processed, or decrypting a `whisper` without one). */
-class NoSessionException(val userId: String, val deviceNumber: Int, cause: Throwable? = null) :
-    CryptoException("No session with $userId.$deviceNumber", cause)
+class NoSessionException(val userId: String, val deviceId: String, cause: Throwable? = null) :
+    CryptoException("No session with device $deviceId of $userId", cause)
 
 /** A prekey bundle from the server did not verify (bad signature or malformed key). */
 class InvalidBundleException(message: String, cause: Throwable? = null) : CryptoException(message, cause)

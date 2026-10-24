@@ -98,7 +98,15 @@ data class MessageUi(
     val canDelete: Boolean,
 )
 
-enum class SystemKind { NEW_DEVICE, IDENTITY_CHANGED }
+enum class SystemKind {
+    NEW_DEVICE,
+
+    /** A new device next to verified ones: nothing is sent to or accepted from it until the user approves it. */
+    NEW_DEVICE_BLOCKED,
+    IDENTITY_CHANGED,
+    MEMBER_ADDED,
+    MEMBER_REMOVED,
+}
 
 sealed interface ChatRow {
     val key: String
@@ -118,6 +126,8 @@ sealed interface ChatRow {
         val personName: String,
         val deviceName: String?,
         val time: Long,
+        /** The notice is about this account itself (its own devices). */
+        val own: Boolean = false,
     ) : ChatRow {
         override val key get() = id
     }

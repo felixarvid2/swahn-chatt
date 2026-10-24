@@ -114,13 +114,22 @@ class ChatRowsTest {
     @Test fun `system notices become their own rows with the person's name`() {
         val rows = buildChatRows(
             listOf(
-                m("sys-1", "", text = null).copy(senderUserId = "", systemEvent = SystemEvent.NewDevice("cy", 2, "Pixel")),
-                m("sys-2", "", text = null).copy(senderUserId = "", systemEvent = SystemEvent.IdentityChanged("bob", 1)),
+                m("sys-1", "", text = null).copy(senderUserId = "", systemEvent = SystemEvent.NewDevice("cy", "dev-2", "Pixel")),
+                m("sys-2", "", text = null).copy(senderUserId = "", systemEvent = SystemEvent.IdentityChanged("bob", "dev-1")),
+                m("sys-3", "", text = null).copy(senderUserId = "", systemEvent = SystemEvent.NewDevice("me", "dev-3", "Tablet")),
+                m("sys-4", "", text = null).copy(senderUserId = "", systemEvent = SystemEvent.NewDevice("bob", "dev-4", "Phone", needsApproval = true)),
+                m("sys-5", "", text = null).copy(senderUserId = "", systemEvent = SystemEvent.MemberAdded("cy")),
+                m("sys-6", "", text = null).copy(senderUserId = "", systemEvent = SystemEvent.MemberRemoved("bob")),
             ),
             ctx(),
         ).filterIsInstance<ChatRow.System>()
         assertEquals(SystemKind.NEW_DEVICE, rows[0].kind); assertEquals("Cy", rows[0].personName); assertEquals("Pixel", rows[0].deviceName)
         assertEquals(SystemKind.IDENTITY_CHANGED, rows[1].kind); assertEquals("Bob", rows[1].personName)
+        assertFalse(rows[0].own)
+        assertEquals(SystemKind.NEW_DEVICE, rows[2].kind); assertTrue(rows[2].own, "the own account's devices are marked")
+        assertEquals(SystemKind.NEW_DEVICE_BLOCKED, rows[3].kind)
+        assertEquals(SystemKind.MEMBER_ADDED, rows[4].kind); assertEquals("Cy", rows[4].personName)
+        assertEquals(SystemKind.MEMBER_REMOVED, rows[5].kind)
     }
 
     @Test fun `a reply finds its target in the window or in the referenced messages`() {

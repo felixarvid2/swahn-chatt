@@ -3,8 +3,19 @@ package se.familychat.core.crypto
 /** The device's own identity: serialized `IdentityKeyPair` and the libsignal registration id. */
 class LocalIdentity(val identityKeyPair: ByteArray, val registrationId: Int)
 
-/** A pinned remote identity. [identityKey] is the serialized `IdentityKey` (33 bytes). */
-class StoredIdentity(val identityKey: ByteArray, val verified: Boolean)
+/**
+ * A pinned remote device identity, keyed by the device's immutable server UUID ([deviceId]). [userId] is the account
+ * the device belonged to when it was pinned, [identityKey] the serialized `IdentityKey` (33 bytes). [verified]: the
+ * user compared safety numbers. [approved]: the device may be used; false for a device that appeared next to a
+ * verified one and still waits for the user's explicit decision (nothing is sent to or accepted from it meanwhile).
+ */
+class StoredIdentity(
+    val deviceId: String,
+    val userId: String,
+    val identityKey: ByteArray,
+    val verified: Boolean,
+    val approved: Boolean = true,
+)
 
 /**
  * Persistence primitives the Signal store needs, as plain byte arrays. The app implements this once on top of
@@ -13,8 +24,9 @@ class StoredIdentity(val identityKey: ByteArray, val verified: Boolean)
  * Contract:
  * - All functions are **blocking** and must be thread-safe: libsignal calls the store synchronously from its
  *   native code. [MessageCrypto] additionally serialises all crypto operations of one device behind a lock.
- * - "address" is `(name, deviceNumber)` with `name` = the user's id and `deviceNumber` = the device number
- *   assigned by the server (1..127).
+ * - Sessions are addressed by `name` = `"<userId>/<deviceUuid>"` (see [DeviceAddress]); the server's device number is
+ *   never used for trust or sessions. Pinned identities are keyed by the device UUID alone, so a server that moves a
+ *   known device to another user or number cannot make it look new.
  * - Records are opaque serializations produced by libsignal (`SessionRecord.serialize()` etc.). Store them
  *   as BLOBs, never parse them.
  * - Writes must be durable when the call returns (a ratchet step that is lost cannot be recovered).
@@ -54,17 +66,19 @@ interface ProtocolStorage {
     fun markLastResortUsed(kyberPreKeyId: Int, signedPreKeyId: Int, baseKey: ByteArray): Boolean
 
     // --- sessions ------------------------------------------------------------------------------------------------
-    fun loadSession(name: String, deviceNumber: Int): ByteArray?
-    fun storeSession(name: String, deviceNumber: Int, record: ByteArray)
-    fun deleteSession(name: String, deviceNumber: Int)
-    fun deleteAllSessions(name: String)
+    fun loadSession(name: String): ByteArray?
+    fun storeSession(name: String, record: ByteArray)
+    fun deleteSession(name: String)
 
-    /** Device numbers of [name] that have a session. */
-    fun sessionDeviceNumbers(name: String): List<Int>
+    /** Deletes every session whose name starts with [prefix] (exact prefix match, no wildcards). */
+    fun deleteSessionsWithPrefix(prefix: String)
 
-    // --- trusted remote identities (TOFU) ------------------------------------------------------------------------
-    fun getIdentity(name: String, deviceNumber: Int): StoredIdentity?
-    fun putIdentity(name: String, deviceNumber: Int, identity: StoredIdentity)
+    // --- pinned remote identities --------------------------------------------------------------------------------
+    fun getIdentity(deviceId: String): StoredIdentity?
+    fun putIdentity(identity: StoredIdentity)
+
+    /** All pins whose owner is [userId]. */
+    fun identitiesOf(userId: String): List<StoredIdentity>
 
     // --- id allocation -------------------------------------------------------------------------------------------
     /**

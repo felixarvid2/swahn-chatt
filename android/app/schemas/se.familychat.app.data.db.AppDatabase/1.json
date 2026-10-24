@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "database": {
     "version": 1,
-    "identityHash": "8063ddd8349046095e3168f6bc3eb7f1",
+    "identityHash": "d34e4f795d05167eb0c272d553f3aaa9",
     "entities": [
       {
         "tableName": "account",
@@ -389,7 +389,7 @@
       },
       {
         "tableName": "messages",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `conversationId` TEXT NOT NULL, `senderUserId` TEXT NOT NULL, `senderDeviceId` TEXT, `outgoing` INTEGER NOT NULL, `status` TEXT NOT NULL, `seq` INTEGER, `clientTs` INTEGER NOT NULL, `serverTs` INTEGER, `text` TEXT, `replyTo` TEXT, `attachments` TEXT NOT NULL, `edited` INTEGER NOT NULL, `editedAt` INTEGER, `deleted` INTEGER NOT NULL, `decryptError` TEXT, `failureReason` TEXT, `deliveredTo` TEXT NOT NULL, `readBy` TEXT NOT NULL, `systemType` TEXT, `systemUserId` TEXT, `systemDeviceNumber` INTEGER, `systemDeviceName` TEXT, `pendingEnvelopeType` TEXT, `pendingEnvelopeBody` TEXT, PRIMARY KEY(`id`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `conversationId` TEXT NOT NULL, `senderUserId` TEXT NOT NULL, `senderDeviceId` TEXT, `outgoing` INTEGER NOT NULL, `status` TEXT NOT NULL, `seq` INTEGER, `clientTs` INTEGER NOT NULL, `serverTs` INTEGER, `text` TEXT, `replyTo` TEXT, `attachments` TEXT NOT NULL, `edited` INTEGER NOT NULL, `editedAt` INTEGER, `deleted` INTEGER NOT NULL, `decryptError` TEXT, `failureReason` TEXT, `deliveredTo` TEXT NOT NULL, `readBy` TEXT NOT NULL, `systemType` TEXT, `systemUserId` TEXT, `systemDeviceId` TEXT, `systemDeviceName` TEXT, `pendingEnvelopeType` TEXT, `pendingEnvelopeBody` TEXT, PRIMARY KEY(`id`))",
         "fields": [
           {
             "fieldPath": "id",
@@ -508,9 +508,9 @@
             "affinity": "TEXT"
           },
           {
-            "fieldPath": "systemDeviceNumber",
-            "columnName": "systemDeviceNumber",
-            "affinity": "INTEGER"
+            "fieldPath": "systemDeviceId",
+            "columnName": "systemDeviceId",
+            "affinity": "TEXT"
           },
           {
             "fieldPath": "systemDeviceName",
@@ -778,18 +778,12 @@
       },
       {
         "tableName": "signal_sessions",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`name` TEXT NOT NULL, `deviceNumber` INTEGER NOT NULL, `record` BLOB NOT NULL, PRIMARY KEY(`name`, `deviceNumber`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`name` TEXT NOT NULL, `record` BLOB NOT NULL, PRIMARY KEY(`name`))",
         "fields": [
           {
             "fieldPath": "name",
             "columnName": "name",
             "affinity": "TEXT",
-            "notNull": true
-          },
-          {
-            "fieldPath": "deviceNumber",
-            "columnName": "deviceNumber",
-            "affinity": "INTEGER",
             "notNull": true
           },
           {
@@ -802,25 +796,24 @@
         "primaryKey": {
           "autoGenerate": false,
           "columnNames": [
-            "name",
-            "deviceNumber"
+            "name"
           ]
         }
       },
       {
         "tableName": "signal_identities",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`name` TEXT NOT NULL, `deviceNumber` INTEGER NOT NULL, `identityKey` BLOB NOT NULL, `verified` INTEGER NOT NULL, PRIMARY KEY(`name`, `deviceNumber`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`deviceId` TEXT NOT NULL, `userId` TEXT NOT NULL, `identityKey` BLOB NOT NULL, `verified` INTEGER NOT NULL, `approved` INTEGER NOT NULL, PRIMARY KEY(`deviceId`))",
         "fields": [
           {
-            "fieldPath": "name",
-            "columnName": "name",
+            "fieldPath": "deviceId",
+            "columnName": "deviceId",
             "affinity": "TEXT",
             "notNull": true
           },
           {
-            "fieldPath": "deviceNumber",
-            "columnName": "deviceNumber",
-            "affinity": "INTEGER",
+            "fieldPath": "userId",
+            "columnName": "userId",
+            "affinity": "TEXT",
             "notNull": true
           },
           {
@@ -834,15 +827,31 @@
             "columnName": "verified",
             "affinity": "INTEGER",
             "notNull": true
+          },
+          {
+            "fieldPath": "approved",
+            "columnName": "approved",
+            "affinity": "INTEGER",
+            "notNull": true
           }
         ],
         "primaryKey": {
           "autoGenerate": false,
           "columnNames": [
-            "name",
-            "deviceNumber"
+            "deviceId"
           ]
-        }
+        },
+        "indices": [
+          {
+            "name": "index_signal_identities_userId",
+            "unique": false,
+            "columnNames": [
+              "userId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_signal_identities_userId` ON `${TABLE_NAME}` (`userId`)"
+          }
+        ]
       },
       {
         "tableName": "signal_counters",
@@ -871,7 +880,7 @@
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '8063ddd8349046095e3168f6bc3eb7f1')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'd34e4f795d05167eb0c272d553f3aaa9')"
     ]
   }
 }

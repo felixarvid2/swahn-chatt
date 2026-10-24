@@ -58,6 +58,16 @@ class TwoUserEndToEndTest {
         /** A second, raw API client with this phone's tokens (to look at the server's view). */
         fun rawApi() = ApiClient.create(url, tokens, allowInsecureLan = true).api
 
+        /**
+         * The user of this phone approves every pending device after comparing safety numbers: new phones of the own
+         * account (and, for verified contacts, theirs) wait for it, because a device added to an account receives a copy of
+         * everything that account sends.
+         */
+        suspend fun approveAllPending() {
+            engine.refreshDevices(userId)
+            for (p in engine.pendingIdentityChanges()) assertTrue(engine.acceptIdentity(p.userId, p.deviceId, p.newIdentityKey!!))
+        }
+
         suspend fun texts(conversationId: String) = store.getMessages(conversationId, 1000).filter { !it.isSystem }.map { it.text }
 
         fun close() = scope.cancel()
@@ -109,6 +119,7 @@ class TwoUserEndToEndTest {
         eventually(timeout, "$label to receive $what") { store.getMessage(messageId)?.let { it.text != null || it.deleted || it.decryptError != null } == true }
 
     private suspend fun directChat(a: Phone, b: Phone): String {
+        a.approveAllPending(); b.approveAllPending() // other tests may have added phones to these accounts
         val c = a.engine.createDirect(b.userId)
         b.engine.refreshDirectory()
         return c.id
@@ -279,12 +290,42 @@ class TwoUserEndToEndTest {
             // bob answers from the second phone; alice and bob's first phone both get it
             val reply = bob2.engine.sendText(conv, "svar från telefon två")
             alice.receives(conv, reply); bob.receives(conv, reply)
+            // bob's first phone holds the second phone's message back until bob approves the new phone there
+            bob.approveAllPending()
             assertTrue(bob.store.getMessage(reply)!!.outgoing)
             assertEquals("svar från telefon två", alice.store.getMessage(reply)!!.text)
             Unit
         } finally {
             alice.engine.stopRealtime(); bob.engine.stopRealtime(); bob2.engine.stopRealtime()
         }
+    }
+
+    @Test
+    fun encryptedDeleteReachesEveryDeviceAndTheServerRequiresCiphertextForIt() = runBlocking<Unit> {
+        val conv = directChat(alice, bob)
+        bob.engine.sync()
+        val bob2 = Phone("bob-del").also { phones += it }
+        bob2.engine.login(url, "bob_$run", "bob-password-1")
+        alice.engine.refreshDevices(bob.userId)
+
+        val id = alice.engine.sendText(conv, "to be deleted ${UUID.randomUUID()}")
+        eventually(timeout, "sent") { alice.store.getMessage(id)!!.status != MessageStatus.PENDING }
+        bob.engine.sync(); bob2.engine.sync()
+        assertNotNull(bob.store.getMessage(id)!!.text)
+        assertNotNull(bob2.store.getMessage(id)!!.text)
+
+        // a delete without ciphertext for the full device set is refused: the server cannot issue one on its own either
+        val bare = se.familychat.core.model.SendMessageRequest(UUID.randomUUID().toString(), conv, MessageKind.DELETE, id, 1)
+        assertFailsWith<ApiException.MismatchedDevices> { alice.rawApi().sendMessage(bare) }
+
+        alice.engine.deleteMessage(id)
+        eventually(timeout, "delete delivered to the server") { alice.store.getOutbox().isEmpty() }
+        bob.engine.sync(); bob2.engine.sync()
+        for (p in listOf(bob, bob2)) {
+            assertTrue(p.store.getMessage(id)!!.deleted, "${p.label} must apply the authenticated delete")
+            assertNull(p.store.getMessage(id)!!.text)
+        }
+        assertTrue(alice.store.getMessage(id)!!.deleted)
     }
 
     @Test

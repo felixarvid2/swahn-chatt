@@ -34,6 +34,7 @@ import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.PersonAdd
+import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Smartphone
 import androidx.compose.material.icons.filled.Wifi
@@ -97,12 +98,14 @@ class SettingsCallbacks(
     val onLogout: () -> Unit = {},
     val onOpenSystemNotificationSettings: () -> Unit = {},
     val onOpenLanguageSettings: (() -> Unit)? = null,
+    /** Opens the safety screen of the own account (verify own devices). */
+    val onOpenOwnSafety: () -> Unit = {},
     val onCopy: (String) -> Unit = {},
     val onShare: (String) -> Unit = {},
 )
 
 @Composable
-fun SettingsScreen(onBack: () -> Unit, vm: SettingsViewModel = hiltViewModel()) {
+fun SettingsScreen(onBack: () -> Unit, onOpenSafety: (userId: String) -> Unit = {}, vm: SettingsViewModel = hiltViewModel()) {
     val state by vm.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri -> uri?.let(vm::setAvatar) }
@@ -123,6 +126,7 @@ fun SettingsScreen(onBack: () -> Unit, vm: SettingsViewModel = hiltViewModel()) 
             onOpenLanguageSettings = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 { context.startActivity(Intent(Settings.ACTION_APP_LOCALE_SETTINGS, Uri.fromParts("package", context.packageName, null))) }
             } else null,
+            onOpenOwnSafety = { onOpenSafety(state.userId) },
             onCopy = { copyInvitation(context, it) },
             onShare = { code ->
                 val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, context.getString(R.string.invitation_share_text, code))
@@ -192,6 +196,7 @@ fun SettingsContent(state: SettingsUiState, cb: SettingsCallbacks, modifier: Mod
                 DevicesUi.Failed -> Text(stringResource(R.string.devices_load_failed), modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp), color = MaterialTheme.colorScheme.error)
                 is DevicesUi.Loaded -> d.devices.forEach { device -> DeviceRow(device, onRevoke = { revoke = device }) }
             }
+            SettingRow(Icons.Filled.Security, stringResource(R.string.my_devices_safety), stringResource(R.string.my_devices_safety_hint), onClick = cb.onOpenOwnSafety)
 
             // --- notifications and push ---
             Section(R.string.settings_notifications)

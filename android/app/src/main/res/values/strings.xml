@@ -91,6 +91,9 @@
     <string name="error_server">Servern svarade med ett fel. Försök igen om en stund.</string>
     <string name="error_insecure_url">Bara https:// tillåts. Okrypterad http:// går bara i utvecklingsversionen och bara till lokala nätverksadresser.</string>
     <string name="error_unknown">Något gick fel.</string>
+    <string name="error_open_file">Det gick inte att öppna eller dela filen.</string>
+    <string name="storage_unavailable_title">Det går inte att öppna dina meddelanden just nu</string>
+    <string name="storage_unavailable_text">Telefonens nyckellager svarade inte. Ingenting har raderats. Försök igen om en stund, eller starta om telefonen.</string>
     <string name="error_microphone_permission">Mikrofonen behövs för röstmeddelanden. Ge åtkomst och försök igen.</string>
     <string name="settings">Inställningar</string>
     <string name="new_conversation">Ny konversation</string>
@@ -133,6 +136,11 @@
     <string name="status_failed">Misslyckades</string>
     <string name="system_new_device">%1$s har lagt till en ny enhet (%2$s)</string>
     <string name="system_identity_changed">Säkerhetsnumret för %1$s har ändrats</string>
+    <string name="system_new_own_device">En ny enhet har lagts till på ditt konto (%1$s)</string>
+    <string name="system_new_device_blocked">%1$s har lagt till en ny enhet (%2$s). Inget skickas dit förrän du godkänt den.</string>
+    <string name="system_new_own_device_blocked">En ny enhet har lagts till på ditt konto (%1$s). Inget skickas dit förrän du godkänt den.</string>
+    <string name="system_member_added">%1$s lades till</string>
+    <string name="system_member_removed">%1$s lämnade eller togs bort</string>
     <string name="search_people">Sök personer</string>
     <string name="no_users_found">Inga personer hittades.</string>
     <string name="group_name">Gruppens namn</string>
@@ -158,6 +166,10 @@
     <string name="mark_verified">Markera som verifierad</string>
     <string name="remove_verification">Ta bort verifiering</string>
     <string name="identity_changed_warning">Den här enhetens säkerhetsnyckel har ändrats. Det kan betyda ny telefon eller ominstallation, men också att någon försöker låtsas vara personen. Inga meddelanden skickas till eller tas emot från enheten förrän du godkänner den nya nyckeln.</string>
+    <string name="new_device_warning">Den här enheten har lagts till bredvid en enhet du har verifierat. Det kan vara en ny telefon, men också någon som försöker lyssna med. Inget skickas dit eller tas emot därifrån förrän du godkänner den.</string>
+    <string name="accept_refused">Nyckeln stämmer inte med enhetslistan på servern och kan inte godkännas. Försök igen senare.</string>
+    <string name="my_devices_safety">Säkerhetsnummer för mina enheter</string>
+    <string name="my_devices_safety_hint">Verifiera dina egna enheter så att nya enheter på kontot måste godkännas</string>
     <string name="new_safety_number">Nytt säkerhetsnummer</string>
     <string name="previous_safety_number">Tidigare säkerhetsnummer</string>
     <string name="accept_key_button">Godkänn ny nyckel …</string>

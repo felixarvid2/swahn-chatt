@@ -52,7 +52,7 @@ class ContentTest {
     @Test
     fun `content round trip with attachments`() {
         val c = Content(
-            type = ContentType.TEXT, text = "Hej åäö 👋", replyTo = "r1",
+            type = ContentType.TEXT, text = "Hej åäö 👋", replyTo = "r1", conversationId = "c1", messageId = "m1",
             attachments = listOf(
                 AttachmentRef(
                     "a1", "a2V5", "ab12", 1234, "image/jpeg", "x.jpg", AttachmentKind.IMAGE, 640, 480, null, "dGh1bWI=",
@@ -67,10 +67,12 @@ class ContentTest {
     @Test
     fun `wire format uses snake_case and includes the version`() {
         val json = FamilyChatJson.parseToJsonElement(
-            Padding.unpad(ContentCodec.encode(Content(text = "x", replyTo = "m1"))).decodeToString(),
+            Padding.unpad(ContentCodec.encode(Content(text = "x", replyTo = "m1", conversationId = "c1", messageId = "m2"))).decodeToString(),
         ).jsonObject
-        assertEquals("1", json["v"]!!.jsonPrimitive.content)
+        assertEquals("2", json["v"]!!.jsonPrimitive.content)
         assertEquals("m1", json["reply_to"]!!.jsonPrimitive.content)
+        assertEquals("c1", json["conversation_id"]!!.jsonPrimitive.content)
+        assertEquals("m2", json["message_id"]!!.jsonPrimitive.content)
     }
 
     @Test
@@ -80,6 +82,27 @@ class ContentTest {
         assertFailsWith<IllegalArgumentException> {
             ContentCodec.decode(Padding.pad("""{"v":99,"type":"text"}""".toByteArray()))
         }
+    }
+
+    private fun decodeJson(json: String) = ContentCodec.decode(Padding.pad(json.toByteArray()))
+
+    @Test
+    fun `content must carry its binding fields`() {
+        // old format (v1) and v2 without conversation / message ids
+        assertFailsWith<IllegalArgumentException> { decodeJson("""{"v":1,"type":"text","text":"x"}""") }
+        assertFailsWith<IllegalArgumentException> { decodeJson("""{"v":2,"type":"text","text":"x"}""") }
+        assertFailsWith<IllegalArgumentException> { decodeJson("""{"v":2,"type":"text","text":"x","conversation_id":"c"}""") }
+        assertFailsWith<IllegalArgumentException> { decodeJson("""{"v":2,"type":"text","text":"x","message_id":"m"}""") }
+        // edits and deletes need a target; a plain message must not have one
+        assertFailsWith<IllegalArgumentException> { decodeJson("""{"v":2,"type":"edit","text":"x","conversation_id":"c","message_id":"m"}""") }
+        assertFailsWith<IllegalArgumentException> { decodeJson("""{"v":2,"type":"delete","conversation_id":"c","message_id":"m"}""") }
+        assertFailsWith<IllegalArgumentException> {
+            decodeJson("""{"v":2,"type":"text","text":"x","conversation_id":"c","message_id":"m","target_message_id":"t"}""")
+        }
+        assertFailsWith<IllegalArgumentException> { decodeJson("""{"v":2,"type":"bogus","conversation_id":"c","message_id":"m"}""") }
+        val ok = decodeJson("""{"v":2,"type":"delete","conversation_id":"c","message_id":"m","target_message_id":"t"}""")
+        assertEquals(ContentType.DELETE, ok.type)
+        assertEquals("t", ok.targetMessageId)
     }
 }
 

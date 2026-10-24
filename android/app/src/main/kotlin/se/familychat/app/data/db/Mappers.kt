@@ -121,18 +121,22 @@ internal fun StoredMessage.toEntity(): MessageEntity {
         deliveredTo = deliveredTo.join(), readBy = readBy.join(),
         systemType = when (sys) {
             null -> null
-            is SystemEvent.NewDevice -> SYSTEM_NEW_DEVICE
+            is SystemEvent.NewDevice -> if (sys.needsApproval) SYSTEM_NEW_DEVICE_BLOCKED else SYSTEM_NEW_DEVICE
             is SystemEvent.IdentityChanged -> SYSTEM_IDENTITY_CHANGED
+            is SystemEvent.MemberAdded -> SYSTEM_MEMBER_ADDED
+            is SystemEvent.MemberRemoved -> SYSTEM_MEMBER_REMOVED
         },
         systemUserId = when (sys) {
             null -> null
             is SystemEvent.NewDevice -> sys.userId
             is SystemEvent.IdentityChanged -> sys.userId
+            is SystemEvent.MemberAdded -> sys.userId
+            is SystemEvent.MemberRemoved -> sys.userId
         },
-        systemDeviceNumber = when (sys) {
-            null -> null
-            is SystemEvent.NewDevice -> sys.deviceNumber
-            is SystemEvent.IdentityChanged -> sys.deviceNumber
+        systemDeviceId = when (sys) {
+            is SystemEvent.NewDevice -> sys.deviceId
+            is SystemEvent.IdentityChanged -> sys.deviceId
+            else -> null
         },
         systemDeviceName = (sys as? SystemEvent.NewDevice)?.deviceName,
         pendingEnvelopeType = pendingEnvelopeType, pendingEnvelopeBody = pendingEnvelopeBody,
@@ -141,8 +145,12 @@ internal fun StoredMessage.toEntity(): MessageEntity {
 
 internal fun MessageEntity.toModel(): StoredMessage {
     val sys: SystemEvent? = when (systemType) {
-        SYSTEM_NEW_DEVICE -> SystemEvent.NewDevice(systemUserId.orEmpty(), systemDeviceNumber ?: 0, systemDeviceName.orEmpty())
-        SYSTEM_IDENTITY_CHANGED -> SystemEvent.IdentityChanged(systemUserId.orEmpty(), systemDeviceNumber ?: 0)
+        SYSTEM_NEW_DEVICE -> SystemEvent.NewDevice(systemUserId.orEmpty(), systemDeviceId.orEmpty(), systemDeviceName.orEmpty())
+        SYSTEM_NEW_DEVICE_BLOCKED ->
+            SystemEvent.NewDevice(systemUserId.orEmpty(), systemDeviceId.orEmpty(), systemDeviceName.orEmpty(), needsApproval = true)
+        SYSTEM_IDENTITY_CHANGED -> SystemEvent.IdentityChanged(systemUserId.orEmpty(), systemDeviceId.orEmpty())
+        SYSTEM_MEMBER_ADDED -> SystemEvent.MemberAdded(systemUserId.orEmpty())
+        SYSTEM_MEMBER_REMOVED -> SystemEvent.MemberRemoved(systemUserId.orEmpty())
         else -> null
     }
     return StoredMessage(
@@ -157,7 +165,10 @@ internal fun MessageEntity.toModel(): StoredMessage {
 }
 
 private const val SYSTEM_NEW_DEVICE = "new_device"
+private const val SYSTEM_NEW_DEVICE_BLOCKED = "new_device_blocked"
 private const val SYSTEM_IDENTITY_CHANGED = "identity_changed"
+private const val SYSTEM_MEMBER_ADDED = "member_added"
+private const val SYSTEM_MEMBER_REMOVED = "member_removed"
 
 // --- outbox ---------------------------------------------------------------------------------------------------------
 

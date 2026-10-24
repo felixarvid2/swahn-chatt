@@ -45,19 +45,20 @@ class RoomProtocolStorage(private val db: AppDatabase) : ProtocolStorage {
             SignalLastResortUsedEntity(kyberPreKeyId, signedPreKeyId, baseKey.joinToString("") { "%02x".format(it) }),
         ) != -1L
 
-    override fun loadSession(name: String, deviceNumber: Int): ByteArray? = dao.session(name, deviceNumber)
-    override fun storeSession(name: String, deviceNumber: Int, record: ByteArray) =
-        dao.putSession(SignalSessionEntity(name, deviceNumber, record))
+    override fun loadSession(name: String): ByteArray? = dao.session(name)
+    override fun storeSession(name: String, record: ByteArray) = dao.putSession(SignalSessionEntity(name, record))
+    override fun deleteSession(name: String) = dao.deleteSession(name)
+    override fun deleteSessionsWithPrefix(prefix: String) = dao.deleteSessionsWithPrefix(prefix)
 
-    override fun deleteSession(name: String, deviceNumber: Int) = dao.deleteSession(name, deviceNumber)
-    override fun deleteAllSessions(name: String) = dao.deleteSessions(name)
-    override fun sessionDeviceNumbers(name: String): List<Int> = dao.sessionDeviceNumbers(name)
+    override fun getIdentity(deviceId: String): StoredIdentity? = dao.remoteIdentity(deviceId)?.toModel()
 
-    override fun getIdentity(name: String, deviceNumber: Int): StoredIdentity? =
-        dao.remoteIdentity(name, deviceNumber)?.let { StoredIdentity(it.identityKey, it.verified) }
+    override fun putIdentity(identity: StoredIdentity) = dao.putRemoteIdentity(
+        SignalRemoteIdentityEntity(identity.deviceId, identity.userId, identity.identityKey, identity.verified, identity.approved),
+    )
 
-    override fun putIdentity(name: String, deviceNumber: Int, identity: StoredIdentity) =
-        dao.putRemoteIdentity(SignalRemoteIdentityEntity(name, deviceNumber, identity.identityKey, identity.verified))
+    override fun identitiesOf(userId: String): List<StoredIdentity> = dao.remoteIdentitiesOf(userId).map { it.toModel() }
+
+    private fun SignalRemoteIdentityEntity.toModel() = StoredIdentity(deviceId, userId, identityKey, verified, approved)
 
     override fun reserveKeyIds(kind: KeyIdKind, count: Int): Int = tx {
         require(count in 1..MAX_ID)

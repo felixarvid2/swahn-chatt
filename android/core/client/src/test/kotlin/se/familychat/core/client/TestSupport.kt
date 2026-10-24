@@ -39,6 +39,11 @@ class TestClient(
     /** The device list of this account as the server knows it. */
     fun deviceIdOnServer() = engine.account.value!!.deviceId
 
+    /** The user approves every pending device (changed key or new device) after comparing safety numbers. */
+    suspend fun approveAllPending() {
+        for (p in engine.pendingIdentityChanges()) check(engine.acceptIdentity(p.userId, p.deviceId, p.newIdentityKey!!)) { "not accepted: ${p.deviceId}" }
+    }
+
     suspend fun messages(conversationId: String) = store.getMessages(conversationId, 1000)
     suspend fun texts(conversationId: String) = messages(conversationId).filter { !it.isSystem }.map { it.text }
 }
@@ -52,3 +57,32 @@ suspend fun eventually(timeoutMs: Long = 8_000, what: String = "condition", cond
         throw AssertionError("Timed out waiting for $what")
     }
 }
+
+/** Delivers [msg] to [deviceId] as a `message` event, whatever the server really stored (a malicious server can). */
+fun FakeServer.injectMessage(deviceId: String, msg: se.familychat.core.model.Message) {
+    injectEvent(
+        deviceId, se.familychat.core.model.EventType.MESSAGE, msg.conversationId,
+        se.familychat.core.model.FamilyChatJson.encodeToJsonElement(se.familychat.core.model.Message.serializer(), msg),
+    )
+}
+
+private val injectedSeq = java.util.concurrent.atomic.AtomicLong(1_000_000)
+
+/** A message as the attacker would label it: [kind] from [senderDevice] of [senderUser] in [conversationId]. */
+fun forgedMessage(
+    id: String,
+    conversationId: String,
+    senderUser: String,
+    senderDevice: String,
+    envelope: se.familychat.core.model.Envelope?,
+    kind: String = se.familychat.core.model.MessageKind.MESSAGE,
+    target: String? = null,
+) = se.familychat.core.model.Message(
+    id = id, conversationId = conversationId, senderUserId = senderUser, senderDeviceId = senderDevice, kind = kind,
+    targetMessageId = target, clientTs = 1, serverTs = 1000, seq = injectedSeq.incrementAndGet(),
+    envelope = envelope?.let { se.familychat.core.model.MessageEnvelope(it.type, it.body) },
+)
+
+/** The bundle the server would give [asDevice] for [target]'s device (consumes a one-time key). */
+suspend fun FakeServer.bundleFor(asDevice: String, target: TestClient) =
+    connect(asDevice).api.getKeys(target.userId(), target.deviceIdOnServer()).devices.single()

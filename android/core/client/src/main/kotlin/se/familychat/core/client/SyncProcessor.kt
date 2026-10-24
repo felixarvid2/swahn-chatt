@@ -21,7 +21,6 @@ import se.familychat.core.model.parseEvent
 import se.familychat.core.network.ApiException
 import java.io.File
 import java.io.IOException
-import java.util.Base64
 
 /**
  * Pulls `GET /sync` pages, applies every event idempotently, commits the cursor, and only then acknowledges.
@@ -77,7 +76,7 @@ internal class SyncProcessor(private val ctx: EngineContext, private val directo
             is ParsedEvent.MessageReceived -> applyMessage(e.message)
             is ParsedEvent.Receipt -> applyReceipt(e.receipt)
             is ParsedEvent.ConversationUpdated -> {
-                ctx.store.upsertConversation(e.conversation)
+                directory.applyConversation(e.conversation)
                 ctx.emit(EngineEvent.ConversationChanged(e.conversation.id))
             }
             is ParsedEvent.ConversationRemoved -> {
@@ -89,11 +88,7 @@ internal class SyncProcessor(private val ctx: EngineContext, private val directo
                 ctx.store.upsertUsers(listOf(e.user))
                 ctx.emit(EngineEvent.DirectoryChanged(e.user.id))
             }
-            is ParsedEvent.UserRemoved -> {
-                ctx.store.replaceDevices(e.userId, emptyList())
-                ctx.crypto.deleteAllSessions(e.userId)
-                ctx.emit(EngineEvent.DirectoryChanged(e.userId))
-            }
+            is ParsedEvent.UserRemoved -> directory.forgetUser(e.userId)
             is ParsedEvent.Unknown -> Unit // newer server or malformed: skip, never block the queue
         }
     }
@@ -128,13 +123,21 @@ internal class SyncProcessor(private val ctx: EngineContext, private val directo
             }
         }
         if (m.deleted || envelope == null) {
-            // deleted before we synced: keep a tombstone so ordering and counts stay right
+            // deleted before we synced (the server dropped the ciphertext): keep a tombstone so ordering and counts stay
+            // right. No content is involved, so there is nothing to authenticate.
             write(base.copy(deleted = true))
         } else {
-            decryptAndWrite(m, envelope.type, envelope.body) { r ->
-                write(
-                    when (r) {
-                        is Decrypted.Ok -> base.copy(
+            // Network work (sender lookup, membership) happens before the transaction opens.
+            val deviceKnown = resolveSender(m.senderUserId, m.senderDeviceId)
+            val member = deviceKnown && senderIsMember(m.conversationId, m.senderUserId)
+            var rejected = false
+            decryptAndWrite(
+                m.senderUserId, m.senderDeviceId.takeIf { deviceKnown }, envelope.type, envelope.body,
+                check = { c -> member && isBoundTo(c, m, ContentType.TEXT) },
+            ) { r ->
+                when (r) {
+                    is Decrypted.Ok -> write(
+                        base.copy(
                             text = r.content.text, replyTo = r.content.replyTo,
                             attachments = r.content.attachments.map { a ->
                                 LocalAttachment(
@@ -143,15 +146,21 @@ internal class SyncProcessor(private val ctx: EngineContext, private val directo
                                     localPath = null, downloadState = DownloadState.NONE,
                                 )
                             },
-                        )
-                        is Decrypted.Failed -> base.copy(
+                        ),
+                    )
+                    // Authentic ciphertext that does not belong here (wrong conversation or id, or the sender is not a
+                    // member): consumed and dropped. Nothing is stored under the conversation the server claimed.
+                    is Decrypted.Rejected -> rejected = true
+                    is Decrypted.Failed -> write(
+                        base.copy(
                             decryptError = r.error,
                             pendingEnvelopeType = if (r.error == DecryptError.UNTRUSTED_IDENTITY) envelope.type else null,
                             pendingEnvelopeBody = if (r.error == DecryptError.UNTRUSTED_IDENTITY) envelope.body else null,
-                        )
-                    },
-                )
+                        ),
+                    )
+                }
             }
+            if (rejected) return
         }
         ctx.emit(EngineEvent.MessageReceived(m.conversationId, m.id, fromSelfOtherDevice = mine))
     }
@@ -172,18 +181,46 @@ internal class SyncProcessor(private val ctx: EngineContext, private val directo
 
     private sealed interface Decrypted {
         data class Ok(val content: Content) : Decrypted
+
+        /** Decrypted, but the content is not bound to this event or its sender is not allowed to send it. */
+        data object Rejected : Decrypted
         data class Failed(val error: DecryptError) : Decrypted
     }
 
-    private suspend fun senderDeviceNumber(m: Message): Int? {
-        ctx.store.findDevice(m.senderDeviceId)?.let { return it.number }
-        directory.refreshDevices(m.senderUserId)
-        return ctx.store.findDevice(m.senderDeviceId)?.number
+    /** The content must be the one the sender wrote for exactly this event: type, conversation, message id, target. */
+    private fun isBoundTo(c: Content, m: Message, type: String): Boolean =
+        c.type == type && c.conversationId == m.conversationId && c.messageId == m.id && c.targetMessageId == m.targetMessageId
+
+    /**
+     * True if device [deviceId] is listed for [userId] with a key. Looks at the stored list first and re-reads the user's
+     * devices when it is not there. The server's claim about who sent a message is only a hint: the device must belong to
+     * that user according to the directory, and the pin (checked by the crypto layer) must agree.
+     */
+    private suspend fun resolveSender(userId: String, deviceId: String): Boolean {
+        suspend fun known() = ctx.store.getDevices(userId).any { it.id == deviceId && it.identityKey != null }
+        if (known()) return true
+        directory.refreshDevices(userId)
+        return known()
+    }
+
+    /** True if [userId] is a member of the conversation; asks the server once when the local view says no. */
+    private suspend fun senderIsMember(conversationId: String, userId: String): Boolean {
+        fun isMember(c: Conversation?) = c != null && c.members.any { it.userId == userId }
+        if (isMember(ctx.store.getConversation(conversationId))) return true
+        return try {
+            val fresh = ctx.api.getConversation(conversationId)
+            directory.applyConversation(fresh)
+            ctx.emit(EngineEvent.ConversationChanged(conversationId))
+            isMember(fresh)
+        } catch (e: ApiException.NotFound) {
+            false
+        }
     }
 
     /** Decrypts one envelope; never throws for a bad message. Blocking: call with the crypto lock held, off the main thread. */
-    private fun decryptNow(senderUserId: String, number: Int, type: String, body: String): Attempt = try {
-        Attempt(Decrypted.Ok(ctx.crypto.decryptContent(senderUserId, number, type, body)))
+    private fun decryptNow(senderUserId: String, deviceId: String, type: String, body: String, check: (Content) -> Boolean): Attempt = try {
+        val content = ctx.crypto.decryptContent(senderUserId, deviceId, type, body)
+        Attempt(if (check(content)) Decrypted.Ok(content) else Decrypted.Rejected)
     } catch (e: UntrustedIdentityException) {
         Attempt(Decrypted.Failed(DecryptError.UNTRUSTED_IDENTITY), untrustedKey = e.newIdentityKey, untrusted = true)
     } catch (e: DuplicateMessageException) {
@@ -198,22 +235,21 @@ internal class SyncProcessor(private val ctx: EngineContext, private val directo
     private class Attempt(val result: Decrypted, val untrustedKey: ByteArray? = null, val untrusted: Boolean = false)
 
     /**
-     * Decrypts the envelope of [m] and runs [write] with the outcome, both inside one `blockingTransaction` (see the class
-     * comment) on an IO thread. The sender's device number is looked up first, because that may need the network, which
-     * must never happen inside a database transaction. [write] runs with `runBlocking`, on the transaction's thread, and
-     * must only call the store.
+     * Decrypts the envelope from device [deviceId] of [senderUserId] and runs [write] with the outcome, both inside one
+     * `blockingTransaction` (see the class comment) on an IO thread. [deviceId] is null when the sender's device is not
+     * listed for that user ([DecryptError.UNKNOWN_SENDER_DEVICE]); everything that may need the network happens before.
+     * [check] judges the decrypted content (binding to the event, sender allowed) and must not block. [write] runs with
+     * `runBlocking`, on the transaction's thread, and must only call the store.
      */
-    private suspend fun <R> decryptAndWrite(m: Message, type: String, body: String, write: suspend (Decrypted) -> R): R? =
-        decryptAndWrite(m.senderUserId, senderDeviceNumber(m), type, body, write)
-
     private suspend fun <R> decryptAndWrite(
         senderUserId: String,
-        number: Int?,
+        deviceId: String?,
         type: String,
         body: String,
+        check: (Content) -> Boolean,
         write: suspend (Decrypted) -> R,
     ): R? {
-        if (number == null) {
+        if (deviceId == null) {
             write(Decrypted.Failed(DecryptError.UNKNOWN_SENDER_DEVICE))
             return null
         }
@@ -221,68 +257,61 @@ internal class SyncProcessor(private val ctx: EngineContext, private val directo
             // Lock order: crypto lock first, then the transaction (see MessageCrypto.exclusive).
             ctx.crypto.exclusive {
                 ctx.store.blockingTransaction {
-                    val a = decryptNow(senderUserId, number, type, body)
+                    val a = decryptNow(senderUserId, deviceId, type, body, check)
                     a to runBlocking { write(a.result) }
                 }
             }
         }
-        if (attempt.untrusted) noteIdentityChange(senderUserId, number, attempt.untrustedKey)
+        if (attempt.untrusted) directory.noteIdentityChange(senderUserId, deviceId, attempt.untrustedKey)
         return result
     }
 
-    /** Remembers the offending key so the UI can offer to accept it, and tells the user once. */
-    suspend fun noteIdentityChange(userId: String, deviceNumber: Int, key: ByteArray?) {
-        val metaKey = "$IDENTITY_META_PREFIX$userId:$deviceNumber"
-        val encoded = key?.let { Base64.getEncoder().encodeToString(it) } ?: ""
-        val previous = ctx.store.getMeta(metaKey)
-        ctx.store.setMeta(metaKey, encoded)
-        if (previous == encoded) return
-        ctx.emit(EngineEvent.IdentityChanged(userId, deviceNumber, key))
-        for (c in ctx.store.getConversations()) {
-            if (c.members.none { it.userId == userId }) continue
-            val id = "sys-idchg-${c.id}-$userId-$deviceNumber-${encoded.hashCode()}"
-            if (ctx.store.getMessage(id) != null) continue
-            ctx.store.upsertMessage(systemNotice(id, c, SystemEvent.IdentityChanged(userId, deviceNumber)))
-            ctx.emit(EngineEvent.MessageReceived(c.id, id, fromSelfOtherDevice = false))
-        }
-    }
-
-    private fun systemNotice(id: String, c: Conversation, event: SystemEvent): StoredMessage = StoredMessage(
-        id = id, conversationId = c.id, senderUserId = "", senderDeviceId = null, outgoing = false,
-        status = MessageStatus.RECEIVED, seq = c.lastMessageSeq ?: 0, clientTs = ctx.now(), serverTs = null,
-        text = null, replyTo = null, systemEvent = event,
-    )
-
-    private suspend fun applyEdit(m: Message) {
+    /**
+     * Edits and deletes act on a message of the sender only, in the conversation the sender wrote them for. The server
+     * names the target in the clear but the *decrypted* content must name the same target, conversation and message id,
+     * and the sender must be a member and the author of the target. Events without ciphertext are ignored: the server
+     * cannot edit or delete anything on its own.
+     */
+    private suspend fun applyChange(m: Message, type: String, apply: suspend (target: StoredMessage, content: Content) -> Boolean) {
         val targetId = m.targetMessageId ?: return
-        val target = ctx.store.getMessage(targetId) ?: return
-        if (target.senderUserId != m.senderUserId || target.conversationId != m.conversationId) return // only the author may edit
         val envelope = m.envelope ?: return
-        val applied = decryptAndWrite(m, envelope.type, envelope.body) { r ->
-            // Failed: a replay of an applied edit (duplicate) or undecryptable; keep what we have.
-            val content = (r as? Decrypted.Ok)?.content?.takeIf { it.type == ContentType.EDIT } ?: return@decryptAndWrite false
-            ctx.store.updateMessage(targetId) { cur ->
-                if (cur.deleted) cur
-                else cur.copy(text = content.text, edited = true, editedAt = m.serverTs, decryptError = null)
-            }
-            true
+        val target = ctx.store.getMessage(targetId) ?: return
+        if (target.senderUserId != m.senderUserId || target.conversationId != m.conversationId) return // only the author
+        val deviceKnown = resolveSender(m.senderUserId, m.senderDeviceId)
+        val member = deviceKnown && senderIsMember(m.conversationId, m.senderUserId)
+        val applied = decryptAndWrite(
+            m.senderUserId, m.senderDeviceId.takeIf { deviceKnown }, envelope.type, envelope.body,
+            check = { c -> member && isBoundTo(c, m, type) },
+        ) { r ->
+            // Failed: a replay of an applied change (duplicate), untrusted or undecryptable; keep what we have.
+            val content = (r as? Decrypted.Ok)?.content ?: return@decryptAndWrite false
+            apply(target, content)
         }
         if (applied == true) ctx.emit(EngineEvent.MessageChanged(m.conversationId, targetId))
     }
 
+    private suspend fun applyEdit(m: Message) = applyChange(m, ContentType.EDIT) { target, content ->
+        ctx.store.updateMessage(target.id) { cur ->
+            if (cur.deleted) cur
+            else cur.copy(text = content.text, edited = true, editedAt = m.serverTs, decryptError = null)
+        }
+        true
+    }
+
     private suspend fun applyDelete(m: Message) {
-        val targetId = m.targetMessageId ?: return
-        val target = ctx.store.getMessage(targetId) ?: return
-        if (target.senderUserId != m.senderUserId || target.conversationId != m.conversationId) return
-        ctx.store.updateMessage(targetId) {
-            it.copy(
-                text = null, replyTo = null, attachments = emptyList(), deleted = true, decryptError = null,
-                pendingEnvelopeType = null, pendingEnvelopeBody = null,
-            )
+        var wiped: StoredMessage? = null
+        applyChange(m, ContentType.DELETE) { target, _ ->
+            ctx.store.updateMessage(target.id) {
+                it.copy(
+                    text = null, replyTo = null, attachments = emptyList(), deleted = true, decryptError = null,
+                    pendingEnvelopeType = null, pendingEnvelopeBody = null,
+                )
+            }
+            wiped = target
+            true
         }
         // Downloaded copies of the deleted message's attachments go too.
-        for (a in target.attachments) deleteDownloaded(a)
-        ctx.emit(EngineEvent.MessageChanged(m.conversationId, targetId))
+        wiped?.attachments?.forEach { deleteDownloaded(it) }
     }
 
     private fun deleteDownloaded(a: LocalAttachment) {
@@ -335,41 +364,34 @@ internal class SyncProcessor(private val ctx: EngineContext, private val directo
     }
 
     private suspend fun applyDevicesChanged(userId: String) {
-        val refresh = directory.refreshDevices(userId)
-        val account = ctx.requireAccount()
-        if (userId != account.userId && refresh.hadPrevious) {
-            for (device in refresh.added) {
-                for (c in ctx.store.getConversations()) {
-                    if (c.members.none { it.userId == userId }) continue
-                    val id = "sys-newdev-${c.id}-${device.id}"
-                    if (ctx.store.getMessage(id) != null) continue
-                    ctx.store.upsertMessage(
-                        systemNotice(id, c, SystemEvent.NewDevice(userId, device.number, device.name)),
-                    )
-                    ctx.emit(EngineEvent.MessageReceived(c.id, id, fromSelfOtherDevice = false))
-                }
-            }
-        }
+        directory.refreshDevices(userId) // pins, notices and conflicts are all handled there
         ctx.emit(EngineEvent.DirectoryChanged(userId))
     }
 
     private suspend fun ensureConversation(id: String) {
         if (ctx.store.getConversation(id) != null) return
         try {
-            ctx.store.upsertConversation(ctx.api.getConversation(id))
+            directory.applyConversation(ctx.api.getConversation(id))
             ctx.emit(EngineEvent.ConversationChanged(id))
         } catch (e: ApiException.NotFound) {
-            // Not (or no longer) a member; the message is stored anyway and removed with the conversation event.
+            // Not (or no longer) a member; the tombstone is removed with the conversation event.
         }
     }
 
-    /** Re-decrypts messages that failed with UNTRUSTED_IDENTITY after the user accepted the new key. */
-    suspend fun retryUndecrypted(userId: String, deviceNumber: Int) {
-        val device = ctx.store.getDevices(userId).firstOrNull { it.number == deviceNumber } ?: return
-        for (m in ctx.store.undecryptedFrom(userId, device.id)) {
+    /** Re-decrypts messages that failed with UNTRUSTED_IDENTITY after the user accepted the device. */
+    suspend fun retryUndecrypted(userId: String, deviceId: String) {
+        for (m in ctx.store.undecryptedFrom(userId, deviceId)) {
             val type = m.pendingEnvelopeType ?: continue
             val body = m.pendingEnvelopeBody ?: continue
-            val done = decryptAndWrite(userId, deviceNumber, type, body) { r ->
+            val deviceKnown = resolveSender(userId, deviceId)
+            val member = deviceKnown && senderIsMember(m.conversationId, userId)
+            val done = decryptAndWrite(
+                userId, deviceId.takeIf { deviceKnown }, type, body,
+                check = { c ->
+                    member && c.type == ContentType.TEXT && c.conversationId == m.conversationId &&
+                        c.messageId == m.id && c.targetMessageId == null
+                },
+            ) { r ->
                 ctx.store.updateMessage(m.id) {
                     when (r) {
                         is Decrypted.Ok -> it.copy(
@@ -386,6 +408,9 @@ internal class SyncProcessor(private val ctx: EngineContext, private val directo
                         is Decrypted.Failed -> if (r.error == DecryptError.UNTRUSTED_IDENTITY) it else it.copy(
                             decryptError = DecryptError.CORRUPT, pendingEnvelopeType = null, pendingEnvelopeBody = null,
                         )
+                        Decrypted.Rejected -> it.copy(
+                            decryptError = DecryptError.CORRUPT, pendingEnvelopeType = null, pendingEnvelopeBody = null,
+                        )
                     }
                 }
                 true
@@ -396,6 +421,5 @@ internal class SyncProcessor(private val ctx: EngineContext, private val directo
 
     companion object {
         const val PAGE_SIZE = 200
-        const val IDENTITY_META_PREFIX = "identity_conflict:"
     }
 }

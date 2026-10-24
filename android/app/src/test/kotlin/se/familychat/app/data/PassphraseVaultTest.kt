@@ -3,6 +3,8 @@ package se.familychat.app.data
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import se.familychat.app.data.security.DatabaseProvider
+import se.familychat.app.data.security.KeyLostException
 import se.familychat.app.data.security.PassphraseVault
 import se.familychat.app.data.security.SecretWrapper
 import java.security.GeneralSecurityException
@@ -81,5 +83,80 @@ class PassphraseVaultTest {
         vault.reset()
         assertFalse(vault.exists())
         assertFalse(original.contentEquals(vault.getOrCreate()))
+    }
+
+    // --- F7: only a conclusive loss of the key may cost the database -----------------------------------------------
+
+    /** Fails the first [failures] calls of wrap/unwrap with [error], then behaves like [delegate]. */
+    private class FlakyWrapper(
+        private val delegate: SecretWrapper,
+        var failures: Int,
+        private val error: () -> Exception,
+    ) : SecretWrapper {
+        var calls = 0
+        private fun maybeFail() {
+            calls++
+            if (failures > 0) { failures--; throw error() }
+        }
+
+        override fun wrap(plain: ByteArray): ByteArray { maybeFail(); return delegate.wrap(plain) }
+        override fun unwrap(blob: ByteArray): ByteArray { maybeFail(); return delegate.unwrap(blob) }
+    }
+
+    private fun vault(file: java.io.File, wrapper: SecretWrapper) = PassphraseVault(file, wrapper, retryDelayMs = 0)
+
+    @Test fun `a runtime failure of the key store is retried and then succeeds`() {
+        val file = tmp.newFolder("e").resolve("k")
+        val soft = SoftwareWrapper()
+        val original = vault(file, soft).getOrCreate()
+        for (error in listOf<() -> Exception>({ IllegalStateException("keystore daemon died") }, { java.security.ProviderException("busy") }, { GeneralSecurityException("not now") }, { RuntimeException("x") })) {
+            val flaky = FlakyWrapper(soft, failures = 2, error = error)
+            assertContentEquals(original, vault(file, flaky).getOrCreate())
+            assertEquals(3, flaky.calls)
+        }
+    }
+
+    @Test fun `a persistent runtime failure is temporary unavailability and never unreadable`() {
+        val file = tmp.newFolder("f").resolve("k")
+        val soft = SoftwareWrapper()
+        val original = vault(file, soft).getOrCreate()
+        val blob = file.readBytes()
+        val flaky = FlakyWrapper(soft, failures = 100) { IllegalStateException("keystore daemon died") }
+        assertFailsWith<PassphraseVault.TemporarilyUnavailableException> { vault(file, flaky).getOrCreate() }
+        assertTrue(file.isFile, "the stored key must stay in place")
+        assertContentEquals(blob, file.readBytes())
+        assertContentEquals(original, vault(file, soft).getOrCreate(), "and still works when the key store is back")
+    }
+
+    @Test fun `a missing or invalidated key is a conclusive loss`() {
+        val file = tmp.newFolder("g").resolve("k")
+        vault(file, SoftwareWrapper()).getOrCreate()
+        val gone = FlakyWrapper(SoftwareWrapper(), failures = 100) { KeyLostException("alias missing") }
+        val e = assertFailsWith<PassphraseVault.UnreadableException> { vault(file, gone).getOrCreate() }
+        assertTrue(e.cause is KeyLostException)
+        assertEquals(1, gone.calls, "a conclusive answer is not retried")
+    }
+
+    @Test fun `failing to create the key is not a lost database and stores nothing`() {
+        val file = tmp.newFolder("h").resolve("k")
+        val flaky = FlakyWrapper(SoftwareWrapper(), failures = 100) { GeneralSecurityException("cannot generate") }
+        assertFailsWith<PassphraseVault.TemporarilyUnavailableException> { vault(file, flaky).getOrCreate() }
+        assertFalse(file.exists())
+    }
+
+    @Test fun `the database is wiped only when the key is conclusively lost`() {
+        val file = tmp.newFolder("i").resolve("k")
+        val soft = SoftwareWrapper()
+        vault(file, soft).getOrCreate()
+        var wiped = 0
+        // transient: passed on, nothing wiped, key file untouched
+        val busy = FlakyWrapper(soft, failures = 100) { IllegalStateException("busy") }
+        assertFailsWith<PassphraseVault.TemporarilyUnavailableException> { DatabaseProvider.passphrase(vault(file, busy)) { wiped++ } }
+        assertEquals(0, wiped)
+        assertTrue(file.isFile)
+        // lost: wiped once, new key
+        val fresh = DatabaseProvider.passphrase(vault(file, SoftwareWrapper())) { wiped++ }
+        assertEquals(1, wiped)
+        assertEquals(32, fresh.size)
     }
 }

@@ -92,6 +92,8 @@ class BubbleActions(
     val onDownload: (messageId: String, attachment: AttachmentUi) -> Unit = { _, _ -> },
     val onToggleVoice: (messageId: String, attachment: AttachmentUi) -> Unit = { _, _ -> },
     val onReviewIdentity: () -> Unit = {},
+    /** Opens the safety screen of a user (also the own account), from a system notice. */
+    val onOpenContact: (userId: String) -> Unit = {},
     val onJumpTo: (String) -> Unit = {},
 )
 

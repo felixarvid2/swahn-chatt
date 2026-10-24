@@ -124,10 +124,15 @@ fun buildChatRows(messages: List<StoredMessage>, ctx: ChatRowContext): List<Chat
         if (event != null) {
             previousSender = null
             val (userId, deviceName, kind) = when (event) {
-                is SystemEvent.NewDevice -> Triple(event.userId, event.deviceName, SystemKind.NEW_DEVICE)
+                is SystemEvent.NewDevice ->
+                    Triple(event.userId, event.deviceName, if (event.needsApproval) SystemKind.NEW_DEVICE_BLOCKED else SystemKind.NEW_DEVICE)
                 is SystemEvent.IdentityChanged -> Triple(event.userId, null, SystemKind.IDENTITY_CHANGED)
+                is SystemEvent.MemberAdded -> Triple(event.userId, null, SystemKind.MEMBER_ADDED)
+                is SystemEvent.MemberRemoved -> Triple(event.userId, null, SystemKind.MEMBER_REMOVED)
             }
-            rows += ChatRow.System(m.id, kind, userId, ctx.users[userId]?.displayName ?: ctx.unknownName, deviceName, time)
+            rows += ChatRow.System(
+                m.id, kind, userId, ctx.users[userId]?.displayName ?: ctx.unknownName, deviceName, time, own = userId == ctx.myUserId,
+            )
             continue
         }
         val sender = m.senderUserId

@@ -11,8 +11,8 @@ class SafetyNumbersTest {
     private val bob = TestDevice("bob", 2).also { it.keys.createIdentity() }
 
     private fun num(local: TestDevice, remote: TestDevice) = SafetyNumbers.compute(
-        local.userId, local.number, local.keys.identityPublicKey(),
-        remote.userId, remote.number, remote.keys.identityPublicKey(),
+        local.userId, local.deviceId, local.keys.identityPublicKey(),
+        remote.userId, remote.deviceId, remote.keys.identityPublicKey(),
     )
 
     @Test
@@ -29,13 +29,13 @@ class SafetyNumbersTest {
     @Test
     fun `differs when a key or a device differs`() {
         val base = num(alice, bob)
-        val carol = TestDevice("bob", 2).also { it.keys.createIdentity() } // same address, different key
+        val carol = TestDevice("bob", 2, deviceId = bob.deviceId).also { it.keys.createIdentity() } // same device id, different key
         assertNotEquals(base.digits, num(alice, carol).digits)
         val bob3 = TestDevice("bob", 3).also { it.keys.createIdentity() }
         assertNotEquals(base.digits, num(alice, bob3).digits)
-        // same keys but a different address binds differently
+        // same keys but another device id binds differently
         val swapped = SafetyNumbers.compute(
-            "alice", 1, alice.keys.identityPublicKey(), "bob", 9, bob.keys.identityPublicKey(),
+            "alice", alice.deviceId, alice.keys.identityPublicKey(), "bob", "another-device", bob.keys.identityPublicKey(),
         )
         assertNotEquals(base.digits, swapped.digits)
     }

@@ -19,15 +19,17 @@ object DatabaseProvider {
     }
 
     /**
-     * The passphrase for opening the database. If the Keystore key was lost (restored device image, cleared credential
-     * storage) the database cannot be opened any more: start with an empty one; the user logs in again, which creates a
-     * new device.
+     * The passphrase for opening the database. If the Keystore key was lost for good (restored device image, cleared
+     * credential storage: [PassphraseVault.UnreadableException]) the database cannot be opened any more: start with an
+     * empty one; the user logs in again, which creates a new device.
+     *
+     * Any other failure ([PassphraseVault.TemporarilyUnavailableException]: the Keystore did not answer) is passed on and
+     * the database is left alone; the app shows an error screen and the next attempt retries.
      */
-    private fun passphrase(context: Context, vault: PassphraseVault): ByteArray = try {
+    internal fun passphrase(vault: PassphraseVault, wipeDatabase: () -> Unit): ByteArray = try {
         vault.getOrCreate()
     } catch (e: PassphraseVault.UnreadableException) {
-        Log.w(TAG, "Database key unreadable, resetting the local database", e)
-        context.deleteDatabase(AppDatabase.FILE_NAME)
+        wipeDatabase()
         vault.reset()
         vault.getOrCreate()
     }
@@ -41,7 +43,12 @@ object DatabaseProvider {
         val app = context.applicationContext
         val factory = LazyOpenHelperFactory {
             loadNative()
-            SupportOpenHelperFactory(passphrase(app, vault))
+            SupportOpenHelperFactory(
+                passphrase(vault) {
+                    Log.w(TAG, "Database key unreadable, resetting the local database")
+                    app.deleteDatabase(AppDatabase.FILE_NAME)
+                },
+            )
         }
         return AppDatabase.build(app, factory)
     }

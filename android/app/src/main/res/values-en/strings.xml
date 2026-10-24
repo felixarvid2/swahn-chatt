@@ -91,6 +91,9 @@
     <string name="error_server">The server reported an error. Try again in a moment.</string>
     <string name="error_insecure_url">Only https:// is allowed. Unencrypted http:// works only in the development build and only for local network addresses.</string>
     <string name="error_unknown">Something went wrong.</string>
+    <string name="error_open_file">The file could not be opened or shared.</string>
+    <string name="storage_unavailable_title">Your messages cannot be opened right now</string>
+    <string name="storage_unavailable_text">The phone\'s key store did not answer. Nothing has been deleted. Try again in a moment, or restart the phone.</string>
     <string name="error_microphone_permission">The microphone is needed for voice messages. Allow access and try again.</string>
     <string name="settings">Settings</string>
     <string name="new_conversation">New conversation</string>
@@ -133,6 +136,11 @@
     <string name="status_failed">Failed</string>
     <string name="system_new_device">%1$s added a new device (%2$s)</string>
     <string name="system_identity_changed">The safety number for %1$s has changed</string>
+    <string name="system_new_own_device">A new device was added to your account (%1$s)</string>
+    <string name="system_new_device_blocked">%1$s added a new device (%2$s). Nothing is sent to it until you approve it.</string>
+    <string name="system_new_own_device_blocked">A new device was added to your account (%1$s). Nothing is sent to it until you approve it.</string>
+    <string name="system_member_added">%1$s was added</string>
+    <string name="system_member_removed">%1$s left or was removed</string>
     <string name="search_people">Search people</string>
     <string name="no_users_found">No people found.</string>
     <string name="group_name">Group name</string>
@@ -158,6 +166,10 @@
     <string name="mark_verified">Mark as verified</string>
     <string name="remove_verification">Remove verification</string>
     <string name="identity_changed_warning">This device\'s safety key has changed. It may be a new phone or a reinstall, but it can also mean someone is pretending to be the person. No messages are sent to or accepted from the device until you accept the new key.</string>
+    <string name="new_device_warning">This device was added next to a device you have verified. It may be a new phone, but it can also be somebody trying to listen in. Nothing is sent to or accepted from it until you approve it.</string>
+    <string name="accept_refused">The key does not match the device list on the server and cannot be accepted. Try again later.</string>
+    <string name="my_devices_safety">Safety numbers of my devices</string>
+    <string name="my_devices_safety_hint">Verify your own devices so that new devices on the account must be approved</string>
     <string name="new_safety_number">New safety number</string>
     <string name="previous_safety_number">Previous safety number</string>
     <string name="accept_key_button">Accept new key …</string>

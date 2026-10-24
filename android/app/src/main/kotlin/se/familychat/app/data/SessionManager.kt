@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import se.familychat.app.data.security.PassphraseVault
 import se.familychat.app.di.ApplicationScope
 import se.familychat.app.platform.notify.Notifier
 import se.familychat.app.platform.push.PushManager
@@ -29,6 +30,12 @@ sealed interface SessionState {
     data object Loading : SessionState
     data object SignedOut : SessionState
     data class SignedIn(val account: Account) : SessionState
+
+    /**
+     * The encrypted database cannot be opened right now (the Keystore did not answer). Nothing was deleted; the app shows an
+     * error screen with a retry button instead of the login screen (signing in would start over with an empty database).
+     */
+    data object StorageUnavailable : SessionState
 }
 
 /** What went wrong in a way the UI can word. */
@@ -68,9 +75,11 @@ class SessionManager @Inject constructor(
     private val preparer: se.familychat.app.media.AttachmentPreparer,
 ) {
     private val restored = MutableStateFlow(false)
+    private val storageUnavailable = MutableStateFlow(false)
 
-    val state: StateFlow<SessionState> = combine(restored, engine.account) { done, account ->
+    val state: StateFlow<SessionState> = combine(restored, engine.account, storageUnavailable) { done, account, storageDown ->
         when {
+            storageDown -> SessionState.StorageUnavailable
             !done -> SessionState.Loading
             account == null -> SessionState.SignedOut
             else -> SessionState.SignedIn(account)
@@ -79,16 +88,7 @@ class SessionManager @Inject constructor(
 
     /** Call once from Application.onCreate. */
     fun start() {
-        scope.launch {
-            try {
-                if (engine.restoreSession() != null) onSignedIn()
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                Log.e(TAG, "Could not restore the session", e)
-            }
-            restored.value = true
-        }
+        scope.launch { restore() }
         scope.launch {
             engine.events.collect { event ->
                 if (event is EngineEvent.SessionEnded) {
@@ -97,6 +97,29 @@ class SessionManager @Inject constructor(
                 }
             }
         }
+    }
+
+    private suspend fun restore() {
+        storageUnavailable.value = false
+        try {
+            if (engine.restoreSession() != null) onSignedIn()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            if (generateSequence<Throwable>(e) { it.cause }.any { it is PassphraseVault.TemporarilyUnavailableException }) {
+                // Not a lost key: leave the database alone and let the user try again.
+                Log.w(TAG, "The database key is temporarily unavailable", e)
+                storageUnavailable.value = true
+                return
+            }
+            Log.e(TAG, "Could not restore the session", e)
+        }
+        restored.value = true
+    }
+
+    /** Tries to open the database again after [SessionState.StorageUnavailable]. */
+    fun retryRestore() {
+        scope.launch { restore() }
     }
 
     suspend fun login(serverUrl: String, username: String, password: String, deviceName: String): UiError? =

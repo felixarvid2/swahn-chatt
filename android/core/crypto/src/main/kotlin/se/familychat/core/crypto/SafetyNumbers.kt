@@ -28,7 +28,8 @@ class SafetyNumber internal constructor(val digits: String, private val fingerpr
 
 /**
  * Safety numbers for verifying a contact's device out of band. Identities are per device (each device has its own
- * identity key), so a number covers one local device and one remote device; both sides compute the same value.
+ * identity key), so a number covers one local device and one remote device; both sides compute the same value. Devices are
+ * identified by their immutable UUID, never by the server-assigned number.
  */
 object SafetyNumbers {
     private const val ITERATIONS = 5200
@@ -37,20 +38,20 @@ object SafetyNumbers {
     /** @param localIdentityKey / [remoteIdentityKey] serialized `IdentityKey`s (33 bytes, as in the API) */
     fun compute(
         localUserId: String,
-        localDeviceNumber: Int,
+        localDeviceId: String,
         localIdentityKey: ByteArray,
         remoteUserId: String,
-        remoteDeviceNumber: Int,
+        remoteDeviceId: String,
         remoteIdentityKey: ByteArray,
     ): SafetyNumber {
         val fp = NumericFingerprintGenerator(ITERATIONS).createFor(
             VERSION,
-            stableId(localUserId, localDeviceNumber), IdentityKey(localIdentityKey),
-            stableId(remoteUserId, remoteDeviceNumber), IdentityKey(remoteIdentityKey),
+            stableId(localUserId, localDeviceId), IdentityKey(localIdentityKey),
+            stableId(remoteUserId, remoteDeviceId), IdentityKey(remoteIdentityKey),
         )
         return SafetyNumber(fp.displayableFingerprint.displayText, fp.scannableFingerprint)
     }
 
-    private fun stableId(userId: String, deviceNumber: Int): ByteArray =
-        "$userId:$deviceNumber".toByteArray(Charsets.UTF_8)
+    private fun stableId(userId: String, deviceId: String): ByteArray =
+        "$userId:$deviceId".toByteArray(Charsets.UTF_8)
 }

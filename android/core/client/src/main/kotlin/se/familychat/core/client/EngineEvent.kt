@@ -20,10 +20,11 @@ sealed interface EngineEvent {
     data class DirectoryChanged(val userId: String?) : EngineEvent
 
     /**
-     * A device's identity key differs from the pinned one. Messages from/to it are blocked until the user calls
+     * A device is not trusted: its identity key (or owner) differs from the pinned one, or it is a new device next to
+     * verified ones and waits for approval. Messages from/to it are blocked until the user calls
      * `FamilyChatEngine.acceptIdentity`. [newIdentityKey] is the serialized key that was presented.
      */
-    class IdentityChanged(val userId: String, val deviceNumber: Int, val newIdentityKey: ByteArray?) : EngineEvent
+    class IdentityChanged(val userId: String, val deviceId: String, val newIdentityKey: ByteArray?) : EngineEvent
 
     /** A sync run finished; [applied] events were processed. */
     data class SyncCompleted(val applied: Int) : EngineEvent

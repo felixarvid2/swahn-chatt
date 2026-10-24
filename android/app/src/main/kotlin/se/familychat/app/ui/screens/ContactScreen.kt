@@ -62,10 +62,14 @@ import se.familychat.app.data.ChatRepository
 import se.familychat.app.ui.components.Avatar
 import se.familychat.app.ui.model.UserUi
 import se.familychat.core.client.FamilyChatEngine
+import se.familychat.core.client.IdentityChange
 import javax.inject.Inject
 
-/** A new key that was presented for a device and is blocked until the user accepts it. */
-class PendingKeyUi(val newKey: ByteArray, val safetyGroups: List<String>)
+/**
+ * A key that is blocked until the user accepts it: a changed key of a known device, or ([newDevice]) the key of a device
+ * that was added next to verified ones.
+ */
+class PendingKeyUi(val newKey: ByteArray, val safetyGroups: List<String>, val newDevice: Boolean = false)
 
 data class DeviceSafetyUi(
     val deviceId: String,
@@ -81,6 +85,8 @@ data class ContactUiState(
     val user: UserUi? = null,
     val devices: List<DeviceSafetyUi> = emptyList(),
     val loading: Boolean = true,
+    /** The last accept was refused because the key does not match what the server lists for the device. */
+    val acceptRefused: Boolean = false,
 )
 
 @HiltViewModel
@@ -92,22 +98,26 @@ class ContactViewModel @Inject constructor(
     val userId: String = checkNotNull(savedState["userId"])
     private val refresh = MutableStateFlow(0)
     private val loading = MutableStateFlow(true)
+    private val refused = MutableStateFlow(false)
 
-    val state: StateFlow<ContactUiState> = combine(repo.user(userId), repo.devicesOf(userId), refresh, loading) { user, devices, _, l ->
+    val state: StateFlow<ContactUiState> = combine(repo.user(userId), repo.devicesOf(userId), refresh, loading, refused) { user, devices, _, l, r ->
         // CPU- and database-bound (5200 hash rounds per number, blocking reads of the pinned identity)
         val built = withContext(Dispatchers.Default) {
-            val pending = engine.pendingIdentityChanges().filter { it.userId == userId }.associateBy { it.deviceNumber }
-            devices.filter { it.identityKey != null || pending.containsKey(it.number) }.map { d ->
-                val p = pending[d.number]
+            val pending = engine.pendingIdentityChanges().filter { it.userId == userId }.associateBy { it.deviceId }
+            val thisDevice = engine.account.value?.deviceId
+            devices.filter { it.id != thisDevice && (it.identityKey != null || pending.containsKey(it.id)) }.map { d ->
+                val p = pending[d.id]
                 DeviceSafetyUi(
                     deviceId = d.id, number = d.number, name = d.name,
-                    groups = engine.safetyNumber(userId, d.number)?.groups.orEmpty(),
-                    verified = engine.isVerified(userId, d.number),
-                    pending = p?.newIdentityKey?.let { key -> PendingKeyUi(key, engine.safetyNumberFor(userId, d.number, key)?.groups.orEmpty()) },
+                    groups = engine.safetyNumber(userId, d.id)?.groups.orEmpty(),
+                    verified = engine.isVerified(d.id),
+                    pending = p?.newIdentityKey?.let { key ->
+                        PendingKeyUi(key, engine.safetyNumberFor(userId, d.id, key)?.groups.orEmpty(), p.kind == IdentityChange.Kind.NEW_DEVICE)
+                    },
                 )
             }
         }
-        ContactUiState(user, built, l)
+        ContactUiState(user, built, l, r)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ContactUiState())
 
     init {
@@ -117,16 +127,20 @@ class ContactViewModel @Inject constructor(
         }
     }
 
-    fun setVerified(number: Int, verified: Boolean) {
+    fun setVerified(deviceId: String, verified: Boolean) {
         viewModelScope.launch {
-            withContext(Dispatchers.IO) { engine.setVerified(userId, number, verified) }
+            withContext(Dispatchers.IO) { engine.setVerified(deviceId, verified) }
             refresh.value++
         }
     }
 
-    fun accept(number: Int, key: ByteArray) {
+    fun accept(deviceId: String, key: ByteArray) {
         viewModelScope.launch {
-            engine.acceptIdentity(userId, number, key)
+            refused.value = try {
+                !engine.acceptIdentity(userId, deviceId, key)
+            } catch (e: java.io.IOException) {
+                true // the device list could not be checked; nothing was accepted
+            }
             refresh.value++
         }
     }
@@ -143,8 +157,8 @@ fun ContactScreen(onBack: () -> Unit, vm: ContactViewModel = hiltViewModel()) {
 fun ContactContent(
     state: ContactUiState,
     onBack: () -> Unit,
-    onVerified: (number: Int, verified: Boolean) -> Unit,
-    onAccept: (number: Int, key: ByteArray) -> Unit,
+    onVerified: (deviceId: String, verified: Boolean) -> Unit,
+    onAccept: (deviceId: String, key: ByteArray) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var confirm by remember { mutableStateOf<Pair<DeviceSafetyUi, PendingKeyUi>?>(null) }
@@ -168,6 +182,12 @@ fun ContactContent(
                         stringResource(R.string.safety_explainer), style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 12.dp),
                     )
+                    if (state.acceptRefused) {
+                        Text(
+                            stringResource(R.string.accept_refused), style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 12.dp),
+                        )
+                    }
                     if (state.loading && state.devices.isEmpty()) CircularProgressIndicator(Modifier.padding(top = 16.dp))
                 }
             }
@@ -175,7 +195,7 @@ fun ContactContent(
                 item(key = "none") { Text(stringResource(R.string.safety_no_devices), style = MaterialTheme.typography.bodyMedium) }
             }
             items(state.devices, key = { it.deviceId }) { d ->
-                DeviceCard(d, onVerified = { onVerified(d.number, it) }, onAccept = { d.pending?.let { p -> confirm = d to p } })
+                DeviceCard(d, onVerified = { onVerified(d.deviceId, it) }, onAccept = { d.pending?.let { p -> confirm = d to p } })
             }
         }
     }
@@ -185,7 +205,7 @@ fun ContactContent(
             icon = { Icon(Icons.Filled.Warning, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
             title = { Text(stringResource(R.string.accept_key_title)) },
             text = { Text(stringResource(R.string.accept_key_text, state.user?.name.orEmpty(), device.name)) },
-            confirmButton = { TextButton(onClick = { onAccept(device.number, pending.newKey); confirm = null }) { Text(stringResource(R.string.accept_key_confirm)) } },
+            confirmButton = { TextButton(onClick = { onAccept(device.deviceId, pending.newKey); confirm = null }) { Text(stringResource(R.string.accept_key_confirm)) } },
             dismissButton = { TextButton(onClick = { confirm = null }) { Text(stringResource(R.string.action_cancel)) } },
         )
     }
@@ -204,7 +224,7 @@ private fun DeviceCard(d: DeviceSafetyUi, onVerified: (Boolean) -> Unit, onAccep
                 Row(verticalAlignment = Alignment.Top) {
                     Icon(Icons.Filled.Warning, contentDescription = null, tint = MaterialTheme.colorScheme.error)
                     Text(
-                        stringResource(R.string.identity_changed_warning), style = MaterialTheme.typography.bodyMedium,
+                        stringResource(if (d.pending.newDevice) R.string.new_device_warning else R.string.identity_changed_warning), style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onErrorContainer, modifier = Modifier.padding(start = 12.dp),
                     )
                 }

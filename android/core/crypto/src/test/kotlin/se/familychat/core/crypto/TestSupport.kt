@@ -18,7 +18,12 @@ class TestDevice(
     val store = PersistentSignalProtocolStore(storage)
     val keys = KeyManager(store, storage, clock)
     val crypto = MessageCrypto(store)
-    val recipient get() = Recipient(userId, number, deviceId)
+    val recipient get() = Recipient(userId, deviceId)
+
+    /** Pins [other]'s identity as the directory layer does after reading the device list. */
+    fun trust(other: TestDevice, approved: Boolean = true) {
+        store.pinDevice(other.userId, other.deviceId, other.keys.identityPublicKey(), approved)
+    }
 
     /** Registers with [server] (initial upload) and returns the request. */
     fun register(server: FakeKeyServer): UploadKeysRequest = keys.buildInitialUpload().also { server.put(this, it) }
@@ -70,7 +75,9 @@ class FakeKeyServer {
 
 /** Alice (device 1) and Bob (device 1) with sessions established in the direction [aliceStarts]. */
 fun connect(from: TestDevice, to: TestDevice, server: FakeKeyServer, withOneTimeEc: Boolean = true) {
-    from.crypto.processBundle(to.userId, server.bundle(to, withOneTimeEc))
+    from.trust(to)
+    to.trust(from)
+    from.crypto.processBundle(to.userId, to.deviceId, server.bundle(to, withOneTimeEc))
 }
 
 fun text(s: String) = s.toByteArray(Charsets.UTF_8)

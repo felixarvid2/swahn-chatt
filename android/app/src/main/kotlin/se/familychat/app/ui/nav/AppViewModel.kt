@@ -19,13 +19,15 @@ import javax.inject.Inject
 /** State of the window around all screens: sign-in state, theme, and whether the server address is plain http. */
 @HiltViewModel
 class AppViewModel @Inject constructor(
-    sessionManager: SessionManager,
+    private val sessionManager: SessionManager,
     prefs: AppPrefs,
     private val engine: FamilyChatEngine,
 ) : ViewModel() {
     val session: StateFlow<SessionState> = sessionManager.state
 
     val theme: StateFlow<ThemeMode> = prefs.theme
+
+    fun retryStorage() = sessionManager.retryRestore()
 
     /** True while the address in use (the account's, or the one typed on the login screen) starts with http://. */
     val insecure: StateFlow<Boolean> = combine(sessionManager.state, prefs.serverUrl) { s, typed ->

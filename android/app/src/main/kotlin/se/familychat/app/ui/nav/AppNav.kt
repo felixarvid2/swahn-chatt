@@ -1,6 +1,14 @@
 package se.familychat.app.ui.nav
 
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Button
+import androidx.compose.material3.Text
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.dp
+import se.familychat.app.R
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.consumeWindowInsets
@@ -80,6 +88,7 @@ fun AppRoot(vm: AppViewModel = hiltViewModel()) {
     AppFrame(insecure) {
         when (session) {
             SessionState.Loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+            SessionState.StorageUnavailable -> StorageUnavailableScreen(onRetry = vm::retryStorage)
             else -> AppNavHost(signedIn = session is SessionState.SignedIn)
         }
     }
@@ -150,7 +159,9 @@ private fun AppNavHost(signedIn: Boolean) {
                 onOpenMember = { nav.navigate(Routes.contact(it)) },
             )
         }
-        composable(Routes.SETTINGS) { SettingsScreen(onBack = { nav.popBackStack() }) }
+        composable(Routes.SETTINGS) {
+            SettingsScreen(onBack = { nav.popBackStack() }, onOpenSafety = { nav.navigate(Routes.contact(it)) })
+        }
         composable(Routes.CONTACT, arguments = listOf(navArgument("userId") { type = NavType.StringType })) {
             ContactScreen(onBack = { nav.popBackStack() })
         }
@@ -161,3 +172,20 @@ private fun AppNavHost(signedIn: Boolean) {
     }
 }
 
+
+/** The key store did not answer. Nothing was deleted; trying again is safe. */
+@Composable
+fun StorageUnavailableScreen(onRetry: () -> Unit) {
+    Column(
+        Modifier.fillMaxSize().padding(32.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(stringResource(R.string.storage_unavailable_title), style = MaterialTheme.typography.titleLarge)
+        Text(
+            stringResource(R.string.storage_unavailable_text), style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(vertical = 16.dp),
+        )
+        Button(onClick = onRetry, modifier = Modifier.heightIn(min = 48.dp)) { Text(stringResource(R.string.action_retry)) }
+    }
+}

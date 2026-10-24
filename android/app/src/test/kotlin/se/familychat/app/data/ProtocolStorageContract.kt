@@ -68,29 +68,44 @@ abstract class ProtocolStorageContract {
         assertTrue(s.markLastResortUsed(2, 2, bytes(7, 7)))
     }
 
-    @Test fun `sessions are stored per address and can be deleted one or all`() {
-        assertNull(s.loadSession("u1", 1))
-        s.storeSession("u1", 2, bytes(2)); s.storeSession("u1", 1, bytes(1)); s.storeSession("u2", 1, bytes(3))
-        s.storeSession("u1", 1, bytes(11))
-        assertContentEquals(bytes(11), s.loadSession("u1", 1))
-        assertEquals(listOf(1, 2), s.sessionDeviceNumbers("u1"))
-        assertEquals(listOf(1), s.sessionDeviceNumbers("u2"))
-        s.deleteSession("u1", 1)
-        assertEquals(listOf(2), s.sessionDeviceNumbers("u1"))
-        s.deleteAllSessions("u1")
-        assertTrue(s.sessionDeviceNumbers("u1").isEmpty())
-        assertNotNull(s.loadSession("u2", 1))
+    @Test fun `sessions are stored per address and can be deleted one or by exact prefix`() {
+        assertNull(s.loadSession("u1/d1"))
+        s.storeSession("u1/d2", bytes(2)); s.storeSession("u1/d1", bytes(1)); s.storeSession("u2/d1", bytes(3))
+        s.storeSession("u1/d1", bytes(11))
+        assertContentEquals(bytes(11), s.loadSession("u1/d1"))
+        s.deleteSession("u1/d1")
+        assertNull(s.loadSession("u1/d1"))
+        assertNotNull(s.loadSession("u1/d2"))
+        s.deleteSessionsWithPrefix("u1/")
+        assertNull(s.loadSession("u1/d2"))
+        assertNotNull(s.loadSession("u2/d1"))
     }
 
-    @Test fun `remote identities are pinned with their verified flag`() {
-        assertNull(s.getIdentity("u1", 1))
-        s.putIdentity("u1", 1, StoredIdentity(bytes(4, 4), verified = false))
-        assertFalse(s.getIdentity("u1", 1)!!.verified)
-        s.putIdentity("u1", 1, StoredIdentity(bytes(4, 4), verified = true))
-        val id = s.getIdentity("u1", 1)!!
-        assertTrue(id.verified)
+    @Test fun `deleting by prefix is not a pattern match`() {
+        s.storeSession("u%/d1", bytes(1)); s.storeSession("u_/d1", bytes(2)); s.storeSession("ux/d1", bytes(3)); s.storeSession("u1/d1", bytes(4))
+        s.deleteSessionsWithPrefix("u%/")
+        assertNull(s.loadSession("u%/d1"))
+        assertNotNull(s.loadSession("u_/d1")); assertNotNull(s.loadSession("ux/d1")); assertNotNull(s.loadSession("u1/d1"))
+        s.deleteSessionsWithPrefix("u_/")
+        assertNull(s.loadSession("u_/d1")); assertNotNull(s.loadSession("ux/d1"))
+    }
+
+    @Test fun `remote identities are pinned by device uuid with owner verified and approved flags`() {
+        assertNull(s.getIdentity("d1"))
+        s.putIdentity(StoredIdentity("d1", "u1", bytes(4, 4), verified = false, approved = false))
+        val first = s.getIdentity("d1")!!
+        assertFalse(first.verified); assertFalse(first.approved); assertEquals("u1", first.userId); assertEquals("d1", first.deviceId)
+        s.putIdentity(StoredIdentity("d1", "u1", bytes(4, 4), verified = true, approved = true))
+        val id = s.getIdentity("d1")!!
+        assertTrue(id.verified); assertTrue(id.approved)
         assertContentEquals(bytes(4, 4), id.identityKey)
-        assertNull(s.getIdentity("u1", 2))
+        assertNull(s.getIdentity("d2"))
+        // the owner is data, not part of the key: the same uuid for another user replaces the pin (only accept does that)
+        s.putIdentity(StoredIdentity("d2", "u1", bytes(5), verified = true))
+        s.putIdentity(StoredIdentity("d3", "u2", bytes(6), verified = false))
+        assertEquals(setOf("d1", "d2"), s.identitiesOf("u1").map { it.deviceId }.toSet())
+        assertEquals(listOf("d3"), s.identitiesOf("u2").map { it.deviceId })
+        assertTrue(s.identitiesOf("nobody").isEmpty())
     }
 
     @Test fun `key ids start at one are consecutive and per kind`() {
@@ -120,12 +135,12 @@ abstract class ProtocolStorageContract {
 
     @Test fun `clearAll forgets everything including counters`() {
         s.setLocalIdentity(LocalIdentity(bytes(1), 1)); s.storePreKey(1, bytes(1)); s.storeSignedPreKey(1, bytes(1))
-        s.storeKyberPreKey(1, bytes(1), true); s.markLastResortUsed(1, 1, bytes(1)); s.storeSession("u", 1, bytes(1))
-        s.putIdentity("u", 1, StoredIdentity(bytes(1), true)); s.reserveKeyIds(KeyIdKind.PRE_KEY, 10)
+        s.storeKyberPreKey(1, bytes(1), true); s.markLastResortUsed(1, 1, bytes(1)); s.storeSession("u/d", bytes(1))
+        s.putIdentity(StoredIdentity("d", "u", bytes(1), true)); s.reserveKeyIds(KeyIdKind.PRE_KEY, 10)
         s.clearAll()
         assertNull(s.getLocalIdentity()); assertNull(s.loadPreKey(1)); assertEquals(0, s.countPreKeys())
         assertTrue(s.loadSignedPreKeys().isEmpty()); assertTrue(s.loadKyberPreKeys().isEmpty())
-        assertNull(s.loadSession("u", 1)); assertNull(s.getIdentity("u", 1))
+        assertNull(s.loadSession("u/d")); assertNull(s.getIdentity("d"))
         assertTrue(s.markLastResortUsed(1, 1, bytes(1)))
         assertEquals(1, s.reserveKeyIds(KeyIdKind.PRE_KEY, 1))
     }

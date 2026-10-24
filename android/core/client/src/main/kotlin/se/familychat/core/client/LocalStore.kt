@@ -52,7 +52,7 @@ enum class DecryptError {
     /** The sender's identity key changed and has not been accepted. Recoverable via `acceptIdentity`. */
     UNTRUSTED_IDENTITY,
 
-    /** The sender's device is not known (yet). */
+    /** The sender's device is not known (yet), or not listed for the user the message claims to come from. */
     UNKNOWN_SENDER_DEVICE,
 }
 
@@ -87,13 +87,30 @@ data class LocalAttachment(
     val downloadState: DownloadState,
 )
 
-/** A notice inserted into a conversation by the engine instead of a real message. */
+/**
+ * A notice inserted into a conversation by the engine instead of a real message. Devices are named by their immutable
+ * server UUID ([deviceId]); the server's device number is never used.
+ */
 sealed interface SystemEvent {
-    /** [userId] registered a new device ([deviceName]). */
-    data class NewDevice(val userId: String, val deviceNumber: Int, val deviceName: String) : SystemEvent
+    /**
+     * [userId] (possibly this account itself) has a new device ([deviceName]). With [needsApproval] the user has verified
+     * devices of [userId], so the new one is blocked until the user accepts it in the safety screen.
+     */
+    data class NewDevice(
+        val userId: String,
+        val deviceId: String,
+        val deviceName: String,
+        val needsApproval: Boolean = false,
+    ) : SystemEvent
 
-    /** The identity key of a device changed and is not trusted until accepted. */
-    data class IdentityChanged(val userId: String, val deviceNumber: Int) : SystemEvent
+    /** The identity key (or owner) of a device changed and is not trusted until accepted. */
+    data class IdentityChanged(val userId: String, val deviceId: String) : SystemEvent
+
+    /** [userId] appeared in the member list of a group. */
+    data class MemberAdded(val userId: String) : SystemEvent
+
+    /** [userId] disappeared from the member list of a group (left or was removed). */
+    data class MemberRemoved(val userId: String) : SystemEvent
 }
 
 /**
@@ -221,7 +238,10 @@ interface LocalStore {
     suspend fun getUser(id: String): User?
     suspend fun getUsers(): List<User>
 
-    /** Replaces the device list of [userId] (devices not listed are gone). */
+    /**
+     * Replaces the device list of [userId] (devices not listed are gone). Only `DeviceDirectory.refreshDevices` calls
+     * this: it is the one place that pins identities and posts "new device" notices.
+     */
     suspend fun replaceDevices(userId: String, devices: List<Device>)
     suspend fun getDevices(userId: String): List<Device>
 

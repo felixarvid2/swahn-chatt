@@ -115,19 +115,22 @@ interface ProtocolDao {
     /** Returns the new row id, or -1 if exactly this triple was recorded before. */
     @Insert(onConflict = OnConflictStrategy.IGNORE) fun insertLastResortUse(e: SignalLastResortUsedEntity): Long
 
-    @Query("SELECT record FROM signal_sessions WHERE name = :name AND deviceNumber = :deviceNumber")
-    fun session(name: String, deviceNumber: Int): ByteArray?
+    @Query("SELECT record FROM signal_sessions WHERE name = :name")
+    fun session(name: String): ByteArray?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE) fun putSession(e: SignalSessionEntity)
-    @Query("DELETE FROM signal_sessions WHERE name = :name AND deviceNumber = :deviceNumber")
-    fun deleteSession(name: String, deviceNumber: Int)
+    @Query("DELETE FROM signal_sessions WHERE name = :name")
+    fun deleteSession(name: String)
 
-    @Query("DELETE FROM signal_sessions WHERE name = :name") fun deleteSessions(name: String)
-    @Query("SELECT deviceNumber FROM signal_sessions WHERE name = :name ORDER BY deviceNumber")
-    fun sessionDeviceNumbers(name: String): List<Int>
+    /** Exact prefix match (no LIKE wildcards: the prefix contains server-provided ids). */
+    @Query("DELETE FROM signal_sessions WHERE substr(name, 1, length(:prefix)) = :prefix")
+    fun deleteSessionsWithPrefix(prefix: String)
 
-    @Query("SELECT * FROM signal_identities WHERE name = :name AND deviceNumber = :deviceNumber")
-    fun remoteIdentity(name: String, deviceNumber: Int): SignalRemoteIdentityEntity?
+    @Query("SELECT * FROM signal_identities WHERE deviceId = :deviceId")
+    fun remoteIdentity(deviceId: String): SignalRemoteIdentityEntity?
+
+    @Query("SELECT * FROM signal_identities WHERE userId = :userId")
+    fun remoteIdentitiesOf(userId: String): List<SignalRemoteIdentityEntity>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE) fun putRemoteIdentity(e: SignalRemoteIdentityEntity)
 
