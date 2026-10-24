@@ -45,6 +45,7 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Photo
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.VerifiedUser
 import androidx.compose.material.icons.filled.Warning
@@ -152,10 +153,17 @@ class ConversationNav(
     val onOpenMedia: (messageId: String, attachmentId: String) -> Unit,
     val onOpenGroupInfo: (conversationId: String) -> Unit,
     val onOpenContact: (userId: String) -> Unit,
+    val onSearch: (conversationId: String) -> Unit = {},
 )
 
 @Composable
-fun ConversationScreen(nav: ConversationNav, vm: ConversationViewModel = hiltViewModel()) {
+fun ConversationScreen(
+    nav: ConversationNav,
+    /** A message to show on opening (from the search); [onJumpHandled] is called when the list has been asked for it. */
+    jumpTo: String? = null,
+    onJumpHandled: () -> Unit = {},
+    vm: ConversationViewModel = hiltViewModel(),
+) {
     val state by vm.state.collectAsStateWithLifecycle()
     val playback by vm.playback.collectAsStateWithLifecycle()
     val items = vm.rows.collectAsLazyPagingItems()
@@ -181,20 +189,29 @@ fun ConversationScreen(nav: ConversationNav, vm: ConversationViewModel = hiltVie
 
     val errorText = errorTexts()
     LaunchedEffect(vm) {
+        suspend fun scrollTo(messageId: String) {
+            val index = items.indexOfKey(messageId)
+            if (index >= 0) {
+                listState.animateScrollToItem(index)
+            } else {
+                pendingScroll = messageId
+                vm.loadAround(messageId)
+            }
+        }
         vm.effects.collect { effect ->
             when (effect) {
                 is ConversationEffect.Error -> snackbar.showSnackbar(errorText(effect.error))
                 is ConversationEffect.OpenFile -> openFile(context, effect.path, effect.mime, effect.name)
-                is ConversationEffect.ScrollTo -> {
-                    val index = items.indexOfKey(effect.messageId)
-                    if (index >= 0) {
-                        listState.animateScrollToItem(index)
-                    } else {
-                        pendingScroll = effect.messageId
-                        vm.loadAround(effect.messageId)
-                    }
-                }
+                is ConversationEffect.ScrollTo -> scrollTo(effect.messageId)
             }
+        }
+    }
+    // from the search: restart the list around the message (it is rarely among the newest), then the effect below scrolls
+    LaunchedEffect(jumpTo) {
+        if (jumpTo != null) {
+            pendingScroll = jumpTo
+            vm.loadAround(jumpTo)
+            onJumpHandled()
         }
     }
     LaunchedEffect(pendingScroll, items.itemCount) {
@@ -253,6 +270,7 @@ fun ConversationScreen(nav: ConversationNav, vm: ConversationViewModel = hiltVie
                 }
             },
             onOpenGroupInfo = { nav.onOpenGroupInfo(vm.conversationId) },
+            onSearch = { nav.onSearch(vm.conversationId) },
             onDraft = vm::onDraft,
             onSend = vm::send,
             onCancelReply = vm::cancelReply,
@@ -417,6 +435,7 @@ class ConversationCallbacks(
     val onHeaderClick: () -> Unit = {},
     val onOpenSafety: () -> Unit = {},
     val onOpenGroupInfo: () -> Unit = {},
+    val onSearch: () -> Unit = {},
     val onDraft: (String) -> Unit = {},
     val onSend: () -> Unit = {},
     val onCancelReply: () -> Unit = {},
@@ -483,6 +502,9 @@ fun ConversationContent(
                 },
                 actions = {
                     SafetyBadge(state.safety, callbacks.onOpenSafety)
+                    IconButton(onClick = callbacks.onSearch, modifier = Modifier.size(48.dp)) {
+                        Icon(Icons.Filled.Search, contentDescription = stringResource(R.string.search_in_conversation))
+                    }
                     Box {
                         IconButton(onClick = { menuOpen = true }, modifier = Modifier.size(48.dp)) {
                             Icon(Icons.Filled.MoreVert, contentDescription = stringResource(R.string.action_more))

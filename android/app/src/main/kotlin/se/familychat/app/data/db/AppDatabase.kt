@@ -43,8 +43,25 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * 2 -> 3: the search index and the local conversation settings. No existing row is changed. The index is filled from
+         * the messages that are already there (`rebuild`), the sync triggers (the very ones Room creates on a new database,
+         * copied from the exported `3.json`) keep it current from then on.
+         */
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS `conversation_settings` (`conversationId` TEXT NOT NULL, `pinnedAt` INTEGER, `mutedUntil` INTEGER NOT NULL, `archived` INTEGER NOT NULL, PRIMARY KEY(`conversationId`))")
+                db.execSQL("CREATE VIRTUAL TABLE IF NOT EXISTS `message_fts` USING FTS4(`text` TEXT, tokenize=unicode61 `remove_diacritics=0`, content=`messages`)")
+                db.execSQL("CREATE TRIGGER IF NOT EXISTS room_fts_content_sync_message_fts_BEFORE_UPDATE BEFORE UPDATE ON `messages` BEGIN DELETE FROM `message_fts` WHERE `docid`=OLD.`rowid`; END")
+                db.execSQL("CREATE TRIGGER IF NOT EXISTS room_fts_content_sync_message_fts_BEFORE_DELETE BEFORE DELETE ON `messages` BEGIN DELETE FROM `message_fts` WHERE `docid`=OLD.`rowid`; END")
+                db.execSQL("CREATE TRIGGER IF NOT EXISTS room_fts_content_sync_message_fts_AFTER_UPDATE AFTER UPDATE ON `messages` BEGIN INSERT INTO `message_fts`(`docid`, `text`) VALUES (NEW.`rowid`, NEW.`text`); END")
+                db.execSQL("CREATE TRIGGER IF NOT EXISTS room_fts_content_sync_message_fts_AFTER_INSERT AFTER INSERT ON `messages` BEGIN INSERT INTO `message_fts`(`docid`, `text`) VALUES (NEW.`rowid`, NEW.`text`); END")
+                db.execSQL("INSERT INTO `message_fts`(`message_fts`) VALUES ('rebuild')")
+            }
+        }
+
         /** Migrations from older versions; every shipped version needs one (see `MigrationTest`). */
-        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2)
+        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3)
 
         /** Durable ratchet writes: a lost libsignal step cannot be recovered, so never trade `synchronous` for speed. */
         private val durability = object : Callback() {

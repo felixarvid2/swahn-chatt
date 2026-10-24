@@ -62,6 +62,10 @@ interface RealtimeConnection {
  * connection delivered a frame). Close code 4401 (or HTTP 401 on the upgrade) triggers a token refresh and an immediate
  * reconnect; if the refresh says the session ended, the client enters [RealtimeState.LOGGED_OUT] and stays down.
  *
+ * Every other close is a normal reconnect, notably 1001 (going away) and 1012 (service restart), which the server sends
+ * when it restarts, and 1013 (try again later): none of them ends the session or refreshes the token; the client just
+ * waits for its backoff and connects again.
+ *
  * Every (re)connect is followed by a `hello` frame on [frames], so a collector that syncs on `Hello` also catches up
  * after a reconnect.
  */
@@ -164,7 +168,7 @@ class RealtimeClient internal constructor(
             }
 
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
-                webSocket.close(code.takeIf { it in 1000..4999 && it != 1005 } ?: 1000, null)
+                webSocket.close(replyCode(code), null)
                 finish(cont, Outcome(code, false, gotFrame))
             }
 
@@ -187,5 +191,18 @@ class RealtimeClient internal constructor(
     companion object {
         /** Server close code for an invalid or expired token. */
         const val CLOSE_UNAUTHORIZED = 4401
+
+        /** The server is going away / restarting (RFC 6455 and the IANA registry): reconnect as usual. */
+        const val CLOSE_GOING_AWAY = 1001
+        const val CLOSE_SERVICE_RESTART = 1012
+        const val CLOSE_TRY_AGAIN_LATER = 1013
+
+        /**
+         * The code to answer a close frame with. OkHttp refuses to send reserved codes (1004-1006 and 1015-2999) with an
+         * `IllegalArgumentException`, which would kill the reader thread instead of ending the connection; those are answered
+         * with a normal close (1000).
+         */
+        internal fun replyCode(received: Int): Int =
+            if (received in 1000..4999 && received !in 1004..1006 && received !in 1015..2999) received else 1000
     }
 }

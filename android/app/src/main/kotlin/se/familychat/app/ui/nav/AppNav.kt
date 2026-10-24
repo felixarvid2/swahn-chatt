@@ -53,13 +53,17 @@ import se.familychat.app.ui.screens.LoginScreen
 import se.familychat.app.ui.screens.MediaViewerScreen
 import se.familychat.app.ui.screens.NewConversationScreen
 import se.familychat.app.ui.screens.ServerSettingsScreen
+import se.familychat.app.ui.screens.SearchScreen
 import se.familychat.app.ui.screens.SettingsScreen
+
+private const val JUMP_KEY = "jump_to_message"
 
 object Routes {
     const val SERVER = "server"
     const val LOGIN = "login"
     const val CONVERSATIONS = "conversations"
-    const val CONVERSATION = "conversation/{id}"
+    const val CONVERSATION = "conversation/{id}?jump={jump}"
+    const val SEARCH = "search?conversation={conversation}"
     const val NEW = "new"
     const val NEW_GROUP = "new-group"
     const val GROUP_INFO = "group/{id}"
@@ -67,7 +71,9 @@ object Routes {
     const val CONTACT = "contact/{userId}"
     const val MEDIA = "media/{messageId}/{attachmentId}"
 
-    fun conversation(id: String) = "conversation/$id"
+    /** [jump]: a message to scroll to on opening (from the search). */
+    fun conversation(id: String, jump: String? = null) = if (jump == null) "conversation/$id" else "conversation/$id?jump=$jump"
+    fun search(conversationId: String? = null) = if (conversationId == null) "search" else "search?conversation=$conversationId"
     fun groupInfo(id: String) = "group/$id"
     fun contact(userId: String) = "contact/$userId"
     fun media(messageId: String, attachmentId: String) = "media/$messageId/$attachmentId"
@@ -138,15 +144,44 @@ private fun AppNavHost(nav: androidx.navigation.NavHostController, signedIn: Boo
                 onOpen = { nav.navigate(Routes.conversation(it)) },
                 onNew = { nav.navigate(Routes.NEW) },
                 onSettings = { nav.navigate(Routes.SETTINGS) },
+                onSearch = { nav.navigate(Routes.search()) },
+            )
+        }
+        composable(
+            Routes.SEARCH,
+            arguments = listOf(navArgument("conversation") { type = NavType.StringType; nullable = true; defaultValue = null }),
+        ) { entry ->
+            val inConversation = entry.arguments?.getString("conversation") != null
+            SearchScreen(
+                onBack = { nav.popBackStack() },
+                onOpenHit = { conversationId, messageId ->
+                    if (inConversation) {
+                        // back to the open conversation, which scrolls to the message
+                        nav.previousBackStackEntry?.savedStateHandle?.set(JUMP_KEY, messageId)
+                        nav.popBackStack()
+                    } else {
+                        nav.navigate(Routes.conversation(conversationId, messageId))
+                    }
+                },
             )
         }
         composable(
             Routes.CONVERSATION,
-            arguments = listOf(navArgument("id") { type = NavType.StringType }),
+            arguments = listOf(
+                navArgument("id") { type = NavType.StringType },
+                navArgument("jump") { type = NavType.StringType; nullable = true; defaultValue = null },
+            ),
             deepLinks = listOf(navDeepLink { uriPattern = "familychat://conversation/{id}" }),
-        ) {
+        ) { entry ->
+            // a message to show: from the global search (route argument) or from the search inside this conversation (result of that screen)
+            val fromArgument = remember(entry) { entry.arguments?.getString("jump") }
+            val handled = remember(entry) { mutableStateOf(false) }
+            val fromSearch by entry.savedStateHandle.getStateFlow<String?>(JUMP_KEY, null).collectAsStateWithLifecycle()
             ConversationScreen(
-                ConversationNav(
+                jumpTo = fromSearch ?: fromArgument.takeIf { !handled.value },
+                onJumpHandled = { handled.value = true; entry.savedStateHandle[JUMP_KEY] = null },
+                nav = ConversationNav(
+                    onSearch = { nav.navigate(Routes.search(it)) },
                     onBack = { nav.popBackStack() },
                     onOpenMedia = { m, a -> nav.navigate(Routes.media(m, a)) },
                     onOpenGroupInfo = { nav.navigate(Routes.groupInfo(it)) },
