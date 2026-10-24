@@ -21,6 +21,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
+import se.familychat.app.ui.screens.LockScreen
 import androidx.activity.ComponentActivity
 import android.content.Intent
 import androidx.activity.compose.LocalActivity
@@ -85,27 +89,38 @@ fun AppFrame(insecure: Boolean, content: @Composable () -> Unit) {
 fun AppRoot(vm: AppViewModel = hiltViewModel()) {
     val session by vm.session.collectAsStateWithLifecycle()
     val insecure by vm.insecure.collectAsStateWithLifecycle()
+    val locked by vm.locked.collectAsStateWithLifecycle()
+    // kept above the NavHost so that the back stack survives the lock screen replacing the app
+    val nav = rememberNavController()
+    // singleTop: a tap on a notification while the app is open arrives as a new intent; the NavHost does not look at those.
+    // While the app is locked the link waits until the app is shown again.
+    var pendingLink by remember { mutableStateOf<Intent?>(null) }
+    val lockedNow by rememberUpdatedState(locked)
+    val activity = LocalActivity.current as? ComponentActivity
+    DisposableEffect(activity, nav) {
+        val listener = Consumer<Intent> { intent -> if (lockedNow) pendingLink = intent else nav.handleDeepLink(intent) }
+        activity?.addOnNewIntentListener(listener)
+        onDispose { activity?.removeOnNewIntentListener(listener) }
+    }
     AppFrame(insecure) {
-        when (session) {
-            SessionState.Loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
-            SessionState.StorageUnavailable -> StorageUnavailableScreen(onRetry = vm::retryStorage)
-            else -> AppNavHost(signedIn = session is SessionState.SignedIn)
+        when {
+            session == SessionState.Loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+            session == SessionState.StorageUnavailable -> StorageUnavailableScreen(onRetry = vm::retryStorage)
+            locked -> LockScreen(onUnlocked = vm::unlock)
+            else -> {
+                AppNavHost(nav, signedIn = session is SessionState.SignedIn)
+                LaunchedEffect(pendingLink) {
+                    pendingLink?.let { nav.handleDeepLink(it); pendingLink = null }
+                }
+            }
         }
     }
 }
 
 @Composable
-private fun AppNavHost(signedIn: Boolean) {
-    val nav = rememberNavController()
+private fun AppNavHost(nav: androidx.navigation.NavHostController, signedIn: Boolean) {
     // fixed at first composition; later sign-ins and sign-outs navigate (below) instead of rebuilding the graph
     val start = remember { if (signedIn) Routes.CONVERSATIONS else Routes.LOGIN }
-    // singleTop: a tap on a notification while the app is open arrives as a new intent; the NavHost does not look at those.
-    val activity = LocalActivity.current as? ComponentActivity
-    DisposableEffect(activity, nav) {
-        val listener = Consumer<Intent> { intent -> nav.handleDeepLink(intent) }
-        activity?.addOnNewIntentListener(listener)
-        onDispose { activity?.removeOnNewIntentListener(listener) }
-    }
     // Follow the session: a revoked device or a logout leads to the login screen, a sign-in to the conversations.
     LaunchedEffect(signedIn) {
         val route = nav.currentDestination?.route

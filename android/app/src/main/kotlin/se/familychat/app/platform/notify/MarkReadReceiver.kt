@@ -11,7 +11,7 @@ import se.familychat.app.di.ApplicationScope
 import se.familychat.core.client.FamilyChatEngine
 import javax.inject.Inject
 
-/** The "mark as read" action of a message notification (no reply field, by design). */
+/** The "mark as read" action of a message notification (the reply field is [ReplyReceiver]). */
 @AndroidEntryPoint
 class MarkReadReceiver : BroadcastReceiver() {
     @Inject lateinit var engine: FamilyChatEngine

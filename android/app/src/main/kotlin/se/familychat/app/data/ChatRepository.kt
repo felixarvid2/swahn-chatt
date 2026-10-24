@@ -45,6 +45,7 @@ class ChatRepository @Inject constructor(
             combine(ui.observeOverview(), ui.observeMembers(), ui.observeUsers(), ::Triple),
             engine.account, engine.typing, ui.observeDrafts(),
         ) { (overview, members, users), account, typing, drafts ->
+            val now = System.currentTimeMillis()
             val draftBy = drafts.associate { it.conversationId to it.text }
             val userById = users.associateBy { it.id }
             val membersBy = members.groupBy { it.conversationId }
@@ -64,6 +65,7 @@ class ChatRepository @Inject constructor(
                         lastActivity = last?.let { it.serverTs ?: it.clientTs } ?: row.lastMessageAt ?: row.updatedAt,
                         unread = row.unread, typing = typing[row.id]?.isNotEmpty() == true,
                         draft = draftBy[row.id]?.takeIf { it.isNotBlank() },
+                        pinned = row.pinnedAt != null, muted = isMuted(row.mutedUntil, now), archived = row.archived,
                     )
                 }
             }

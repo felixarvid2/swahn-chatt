@@ -14,6 +14,9 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import se.familychat.app.BuildConfig
 import se.familychat.app.data.AppPrefs
+import se.familychat.app.data.LockTimeout
+import se.familychat.app.data.NotificationPrivacy
+import se.familychat.app.platform.security.AppLock
 import se.familychat.app.data.ChatRepository
 import se.familychat.app.data.SessionManager
 import se.familychat.app.data.ThemeMode
@@ -51,6 +54,10 @@ data class SettingsUiState(
     val distributors: List<Distributor> = emptyList(),
     val selectedDistributor: String? = null,
     val theme: ThemeMode = ThemeMode.SYSTEM,
+    val notificationPrivacy: NotificationPrivacy = NotificationPrivacy.FULL,
+    val blockScreenshots: Boolean = false,
+    val appLockEnabled: Boolean = false,
+    val lockTimeout: LockTimeout = LockTimeout.IMMEDIATELY,
     val versionName: String = "",
     val busy: Boolean = false,
     val error: UiError? = null,
@@ -66,6 +73,7 @@ class SettingsViewModel @Inject constructor(
     private val push: PushManager,
     private val prefs: AppPrefs,
     private val preparer: AttachmentPreparer,
+    private val lock: AppLock,
 ) : ViewModel() {
     private val devices = MutableStateFlow<DevicesUi>(DevicesUi.Loading)
     private val busy = MutableStateFlow(false)
@@ -77,7 +85,13 @@ class SettingsViewModel @Inject constructor(
     private val account = combine(engine.account, repo.userMap()) { a, users -> a to a?.let { users[it.userId] } }
     private val transient = combine(busy, error, passwordChanged, invitation) { b, e, p, i -> arrayOf<Any?>(b, e, p, i) }
 
-    val state: StateFlow<SettingsUiState> = combine(account, devices, push.status, prefs.theme, transient) { (a, user), d, ps, theme, t ->
+    private class Choices(
+        val theme: ThemeMode, val privacy: NotificationPrivacy, val blockScreenshots: Boolean, val lockEnabled: Boolean, val lockTimeout: LockTimeout,
+    )
+
+    private val choices = combine(prefs.theme, prefs.notificationPrivacy, prefs.blockScreenshots, prefs.appLockEnabled, prefs.lockTimeout, ::Choices)
+
+    val state: StateFlow<SettingsUiState> = combine(account, devices, push.status, choices, transient) { (a, user), d, ps, c, t ->
         // distributorsTick makes the list re-read when the screen is shown again (a distributor may have been installed)
         distributorsTick.value
         SettingsUiState(
@@ -87,7 +101,8 @@ class SettingsViewModel @Inject constructor(
             avatar = AvatarUi(user?.displayName ?: a?.displayName.orEmpty(), user?.avatarAttachmentId),
             isAdmin = a?.isAdmin == true, serverUrl = a?.serverUrl.orEmpty(), deviceName = a?.deviceName.orEmpty(),
             devices = d, pushStatus = ps, distributors = push.distributors(), selectedDistributor = push.selectedDistributor(),
-            theme = theme, versionName = BuildConfig.VERSION_NAME,
+            theme = c.theme, notificationPrivacy = c.privacy, blockScreenshots = c.blockScreenshots,
+            appLockEnabled = c.lockEnabled, lockTimeout = c.lockTimeout, versionName = BuildConfig.VERSION_NAME,
             busy = t[0] as Boolean, error = t[1] as UiError?, passwordChanged = t[2] as Boolean, invitation = t[3] as CreatedInvitation?,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsUiState())
@@ -144,6 +159,12 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun setTheme(mode: ThemeMode) = prefs.setTheme(mode)
+    fun setNotificationPrivacy(value: NotificationPrivacy) = prefs.setNotificationPrivacy(value)
+    fun setBlockScreenshots(value: Boolean) = prefs.setBlockScreenshots(value)
+    fun setLockTimeout(value: LockTimeout) = prefs.setLockTimeout(value)
+
+    /** Called after the user authenticated (the screen asks first). */
+    fun setAppLock(enabled: Boolean) = if (enabled) lock.enable() else lock.disable()
 
     fun createInvitation(note: String, hours: Int, admin: Boolean) = run {
         invitation.value = engine.createInvitation(note.trim().ifEmpty { null }, hours, admin)

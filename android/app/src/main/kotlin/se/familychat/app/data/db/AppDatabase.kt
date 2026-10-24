@@ -9,7 +9,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import androidx.sqlite.db.SupportSQLiteOpenHelper
 
 /**
- * The one database of the app. Version 2 (1: first release; 2: `drafts`).
+ * The one database of the app. Version 3 (1: first release; 2: `drafts`; 3: `message_fts` search index, `conversation_settings`).
  *
  * Schema changes: bump [version], add a `Migration` to [MIGRATIONS], and extend `MigrationTest` (the exported schema JSON
  * files in `app/schemas/` are the test fixtures: commit the new one).
@@ -20,7 +20,7 @@ import androidx.sqlite.db.SupportSQLiteOpenHelper
     entities = [
         AccountEntity::class, MetaEntity::class, TokenEntity::class, SyncStateEntity::class,
         UserEntity::class, DeviceEntity::class, ConversationEntity::class, MemberEntity::class,
-        MessageEntity::class, OutboxEntity::class, DraftEntity::class,
+        MessageEntity::class, OutboxEntity::class, DraftEntity::class, MessageFtsEntity::class, ConversationSettingsEntity::class,
         SignalIdentityEntity::class, SignalPreKeyEntity::class, SignalSignedPreKeyEntity::class,
         SignalKyberPreKeyEntity::class, SignalLastResortUsedEntity::class, SignalSessionEntity::class,
         SignalRemoteIdentityEntity::class, SignalCounterEntity::class,
@@ -33,7 +33,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun uiDao(): UiDao
 
     companion object {
-        const val VERSION = 2
+        const val VERSION = 3
         const val FILE_NAME = "familychat.db"
 
         /** 1 -> 2: the unsent composer text per conversation. Nothing else changes, so no existing row is touched. */

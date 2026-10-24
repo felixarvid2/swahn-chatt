@@ -519,8 +519,7 @@ class EngineTest {
         server.injectMessage(bob.deviceIdOnServer(), forgedMessage(id, convId, alice.userId(), aliceDevice, env))
 
         val events = mutableListOf<EngineEvent>()
-        val job = scope.launch { bob.engine.events.collect { events += it } }
-        kotlinx.coroutines.delay(50)
+        val job = scope.launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) { bob.engine.events.collect { events += it } }
         bob.engine.sync()
         val m = bob.store.getMessage(id)!!
         assertEquals(DecryptError.UNTRUSTED_IDENTITY, m.decryptError)

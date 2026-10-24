@@ -28,7 +28,25 @@ data class ConversationItemUi(
     val typing: Boolean = false,
     /** Unsent composer text; when set the list shows "Utkast: ..." instead of the last message. */
     val draft: String? = null,
+    /** Pinned conversations stay on top of the list (local setting). */
+    val pinned: Boolean = false,
+    /** Muted: no notification; the unread count is still shown. */
+    val muted: Boolean = false,
+    /** Archived conversations are shown in their own section at the end of the list. */
+    val archived: Boolean = false,
 )
+
+/** The conversation list in two parts: the main list (pinned first) and the archived ones. */
+@Immutable
+data class ConversationSections(val main: List<ConversationItemUi>, val archived: List<ConversationItemUi>) {
+    val archivedUnread: Int get() = archived.sumOf { it.unread }
+}
+
+/** Splits [items] (newest activity first): pinned conversations first, each group keeps its order; archived ones apart. */
+fun arrangeConversations(items: List<ConversationItemUi>): ConversationSections {
+    val (archived, active) = items.partition { it.archived }
+    return ConversationSections(active.sortedByDescending { it.pinned }, archived)
+}
 
 enum class AttachmentKindUi { IMAGE, VIDEO, VOICE, FILE }
 
@@ -176,3 +194,24 @@ data class SafetyUi(val state: SafetyState = SafetyState.NONE, val reviewUserId:
 
 /** What the connection banner says; [HIDDEN] while everything works. */
 enum class ConnectionUi { HIDDEN, CONNECTING, OFFLINE }
+
+/** A search result for display. [senderName] null: own message ("Du" is added by the screen). */
+@Immutable
+data class SearchHitUi(
+    val messageId: String,
+    val conversationId: String,
+    val time: Long,
+    val senderName: String?,
+    val snippet: se.familychat.app.data.Snippet,
+)
+
+/** The results of one conversation (global search groups by conversation, newest hit first). */
+@Immutable
+data class SearchGroupUi(val conversationId: String, val title: String, val avatar: AvatarUi, val hits: List<SearchHitUi>)
+
+/** Groups [hits] (newest first) by conversation; groups are ordered by their newest hit. */
+fun groupSearchHits(hits: List<SearchHitUi>, conversations: Map<String, ConversationItemUi>, unknownTitle: String): List<SearchGroupUi> =
+    hits.groupBy { it.conversationId }.map { (id, list) ->
+        val c = conversations[id]
+        SearchGroupUi(id, c?.title ?: unknownTitle, c?.avatar ?: AvatarUi(unknownTitle), list)
+    }

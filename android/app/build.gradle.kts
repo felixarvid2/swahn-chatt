@@ -16,8 +16,8 @@ android {
         applicationId = "se.familychat.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
         // libsignal ships arm64 for phones and x86_64 for emulators (see SECURITY.md)
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -142,6 +142,7 @@ dependencies {
     implementation(libs.androidx.compose.material.icons.extended)
     implementation(libs.coil.compose)
     implementation(libs.androidx.exifinterface)
+    implementation(libs.androidx.biometric)
     implementation(libs.media3.exoplayer)
     implementation(libs.media3.ui)
 
