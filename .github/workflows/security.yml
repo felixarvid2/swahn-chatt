@@ -1,0 +1,80 @@
+name: FamilyChat security
+
+# Known-vulnerability scan (osv.dev) of the dependencies the repository declares. Runs on changes to them and
+# once a week, because new advisories appear without any commit.
+on:
+  push:
+    paths:
+      - "familychat/backend/requirements*.txt"
+      - "familychat/android/**/*.gradle.kts"
+      - "familychat/android/gradle/**"
+      - "familychat/android/**/gradle.lockfile"
+      - ".github/workflows/familychat-security.yml"
+  pull_request:
+    paths:
+      - "familychat/backend/requirements*.txt"
+      - "familychat/android/**/*.gradle.kts"
+      - "familychat/android/gradle/**"
+      - "familychat/android/**/gradle.lockfile"
+      - ".github/workflows/familychat-security.yml"
+  schedule:
+    - cron: "17 5 * * 1" # Mondays 05:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: familychat-security-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  osv-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write # upload the SARIF report (Code scanning)
+      actions: read # needed by upload-sarif on private repositories
+    steps:
+      - uses: actions/checkout@v4
+
+      # Python: requirements.txt and requirements-dev.txt are scanned as they are (pinned versions).
+      # Gradle: osv-scanner reads only gradle.lockfile / buildscript-gradle.lockfile, and this project does not use
+      # Gradle dependency locking yet, so the Android dependencies (gradle/libs.versions.toml) are NOT covered.
+      # Turning on locking (`dependencyLocking { lockAllConfigurations() }`, then
+      # `./gradlew dependencies --write-locks`) is a follow-up; any lockfile that exists is picked up here.
+      - name: Collect scan targets
+        id: targets
+        run: |
+          {
+            echo "args<<EOF"
+            echo "--format=sarif"
+            echo "--output=osv-results.sarif"
+            for f in familychat/backend/requirements*.txt; do
+              echo "--lockfile=requirements.txt:$f"
+            done
+            find familychat/android -name 'gradle.lockfile' -o -name 'buildscript-gradle.lockfile' | sort | while read -r f; do
+              echo "--lockfile=$f"
+            done
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          if [ -z "$(find familychat/android -name '*gradle.lockfile' -print -quit)" ]; then
+            echo "::notice::No Gradle lockfiles: Android dependencies are not scanned (dependency locking is a follow-up)."
+          fi
+
+      # Fails (exit 1) when a vulnerability is found; the SARIF file is written either way.
+      - name: osv-scanner
+        uses: google/osv-scanner-action/osv-scanner-action@b1d267aea5211fa648d9d442fa64b90dbdcbdd36 # v2.7.0
+        with:
+          scan-args: ${{ steps.targets.outputs.args }}
+
+      # Needs Code scanning on the repository; fork pull requests have a read-only token. The scan result above
+      # is what counts, so a refused upload only loses the Security tab entry.
+      - name: Upload SARIF
+        if: ${{ !cancelled() && hashFiles('osv-results.sarif') != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: osv-results.sarif
+          category: osv-scanner

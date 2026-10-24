@@ -296,7 +296,7 @@ Restore, for example onto a new Pi after step 4:
 It stops the backend, verifies every checksum in the manifest (a damaged or modified archive is rejected and
 nothing is changed), moves any existing data to `/data/pre-restore-<time>` inside the volume, restores, and
 starts the backend again. Delete the `pre-restore-*` folder when you are happy:
-`docker compose exec backend rm -rf /data/pre-restore-*`. The CLI equivalent is
+`docker compose exec backend sh -c 'rm -rf /data/pre-restore-*'`. The CLI equivalent is
 `python -m app.cli restore <archive> [--force]`; without `--force` it refuses to touch existing data.
 
 `./backup.sh` and `restore.sh` verify archives themselves; to check one you already have, anywhere, without
@@ -311,6 +311,20 @@ validates the attachment paths stored in the database; exit status 0 means the a
 1 means it is not (the reason is printed). Run it on the copy you keep off the Pi.
 
 Test your restore once, before you need it.
+
+**Monthly automatic check.** `./backup.sh --verify-latest [dir]` runs that same verification on the newest archive in
+the backup directory (it streams the file from the host into the container, so no path juggling) and exits non-zero
+if the archive is damaged, missing, or older than `FAMILYCHAT_BACKUP_MAX_AGE_DAYS` (default 3: the nightly backup has
+stopped). A systemd timer runs it on the first of every month; a failure shows in `systemctl --failed`:
+
+```bash
+sudo cp deployment/systemd/familychat-verify-backup.{service,timer} /etc/systemd/system/   # edit User= and paths first
+sudo systemctl daemon-reload && sudo systemctl enable --now familychat-verify-backup.timer
+sudo systemctl start familychat-verify-backup.service && journalctl -u familychat-verify-backup -n 20
+```
+
+To be told about a failure, see `deployment/systemd/familychat-notify-failure@.service` (optional `OnFailure=` hook
+that posts to a private ntfy topic). Day-to-day operation in Swedish: [DRIFTHANDBOK.md](DRIFTHANDBOK.md).
 
 ## 10. Logs, health and reboots
 

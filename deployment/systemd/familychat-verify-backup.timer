@@ -1,0 +1,11 @@
+[Unit]
+Description=Verify the newest FamilyChat backup every month
+
+[Timer]
+# After the nightly backup (03:15) of the first of the month.
+OnCalendar=*-*-01 05:00:00
+RandomizedDelaySec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

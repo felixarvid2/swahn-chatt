@@ -12,7 +12,7 @@ familychat/
 ├── android/      Kotlin app: :app (Compose UI) + :core:{model,network,crypto,client}
 ├── backend/      FastAPI server, Alembic migrations, pytest suite, Dockerfile
 ├── deployment/   docker-compose.yml (+ Caddy and ntfy profiles), .env.example, backup/restore scripts
-└── docs/         ARCHITECTURE, API, SECURITY, ANDROID_SETUP, RASPBERRY_PI_SETUP
+└── docs/         ARCHITECTURE, API, SECURITY, ANDROID_SETUP, RASPBERRY_PI_SETUP, ANVANDARGUIDE, DRIFTHANDBOK (Swedish)
 ```
 
 ## How it fits together

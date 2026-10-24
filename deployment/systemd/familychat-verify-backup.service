@@ -1,0 +1,21 @@
+# Monthly proof that the newest backup can really be restored: checksums, SQLite integrity_check and attachment
+# paths, without touching any data (`backup.sh --verify-latest`). The archive is streamed from the host into the
+# running backend container, checked there and removed again. Fails (exit != 0) when the archive is damaged, missing
+# or older than FAMILYCHAT_BACKUP_MAX_AGE_DAYS (default 3, i.e. the nightly backup has stopped), so it shows in
+# `systemctl --failed` and can trigger OnFailure=.
+# Install:  sudo cp familychat-verify-backup.{service,timer} /etc/systemd/system/
+#           (edit User=, WorkingDirectory= and the paths first; use the same backup directory as familychat-backup.service)
+#           sudo systemctl daemon-reload && sudo systemctl enable --now familychat-verify-backup.timer
+#           sudo systemctl start familychat-verify-backup.service   # try it once; journalctl -u familychat-verify-backup
+[Unit]
+Description=FamilyChat backup verification
+Requires=docker.service
+After=docker.service
+# Optional: send a message when it fails (see familychat-notify-failure@.service).
+#OnFailure=familychat-notify-failure@%n.service
+
+[Service]
+Type=oneshot
+User=pi
+WorkingDirectory=/home/pi/familychat/deployment
+ExecStart=/home/pi/familychat/deployment/backup.sh --verify-latest /home/pi/familychat-backups
