@@ -248,8 +248,10 @@ Risks of libsignal that we accept and mitigate:
   audited); a stolen unlocked phone with a valid session therefore cannot erase the account without the password.
   The effect is that of an administrator's removal, plus the avatar being unlinked and the account's
   unreferenced attachments being garbage-collected at the next hourly run.
+- **Re-authentication and lockout:** the password prompts of `DELETE /users/me` and `PUT /users/me/password` count wrong passwords toward the same persistent per-username lockout as `/auth/login` (`429` while locked, surviving restarts); `PUT /users/me/password` audits `password_change_failed` (no passwords are stored).
+- **Admin races:** every mutating `/admin` route re-reads the caller inside its write transaction (writers are serialised by the database) and refuses with `403`/`401` when the caller was suspended, removed or demoted since the token was checked; suspending or demoting the last active administrator is `409 last_admin`. Two administrators suspending each other can never both succeed.
 - **Metrics:** `GET /metrics` exposes counts and histograms by route template and status, gauges for sockets,
-  queues, database size and free disk, and nothing per user (no ids, names or addresses in labels). It answers
+  queues, database size and free disk, and nothing per user (no ids, names or addresses in labels). The `method` label is one of GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS or `OTHER`, and a request that matches no route has the route `unmatched`, so an unauthenticated client cannot create unbounded series. It answers
   only a request that comes from this machine without being forwarded by a proxy (so Caddy or `tailscale serve`,
   which forward remote clients from `127.0.0.1` with `X-Forwarded-For`, do not open it) or an administrator's
   bearer token; everybody else gets `404`, as if it did not exist.
@@ -262,7 +264,7 @@ Risks of libsignal that we accept and mitigate:
   `action`, target user, target id, `ip`, small `details`). Actions: `invitation_created`, `invitation_revoked`,
   `invitation_redeemed` (once per use of a multi-use code, with the new user as target and `details.use`/`max_uses`),
   `admin_granted` (`via` = `invitation` or `admin`) and `admin_revoked` (role changes through `PATCH /admin/users/{id}`),
-  `user_suspended`, `user_unsuspended`, `login_blocked` (right password, suspended account), `self_delete_failed`,
+  `user_suspended`, `user_unsuspended`, `login_blocked` (right password, suspended account), `self_delete_failed`, `password_change_failed`,
   `presence_setting_changed` (`share_presence` true/false), `login_success`, `login_failure`, `password_changed`, `refresh_token_reuse`,
   `device_revoked` (`details.by`: `self`, `admin` or `logout`), `user_removed` (API or CLI; `details.via` = `self` for self-deletion), `password_reset_issued`
   (`details.via`: `admin` or `cli`) and `password_reset_used` (`details.revoked_devices`). It is written in the

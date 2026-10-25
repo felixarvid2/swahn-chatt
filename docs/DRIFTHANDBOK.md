@@ -430,7 +430,7 @@ korta texter utan användarnamn, adresser, meddelanden eller hemligheter:
 |---|---|---|
 | Low disk space | Disken har mindre än `FAMILYCHAT_MIN_FREE_DISK_MB` ledigt (`/readyz` eller timjobbet) | var 6:e timme |
 | Server maintenance failed | Timjobbet eller veckans databasunderhåll misslyckades (se loggen) | var 6:e timme |
-| A login lockout was triggered | Ett användarnamn har blivit utelåst efter för många felaktiga lösenord (säger inte vilket) | var 30:e minut |
+| A login lockout was triggered | Ett användarnamn har blivit utelåst efter för många felaktiga lösenord, även vid byte av lösenord eller radering av konto i appen (säger inte vilket) | var 30:e minut |
 | A refresh token was reused | En gammal inloggningsnyckel kom tillbaka: sessionen återkallades. Kontrollera säkerhetsloggen (avsnitt 13) | var 10:e minut |
 | A new administrator was granted | Någon blev administratör (inbjudan eller befordran) | varje minut |
 
