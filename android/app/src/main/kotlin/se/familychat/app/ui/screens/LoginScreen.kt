@@ -14,9 +14,13 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -30,9 +34,14 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
@@ -42,6 +51,10 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import se.familychat.app.R
+import se.familychat.app.qr.InviteLink
+import se.familychat.app.qr.InviteQr
+import se.familychat.app.qr.InviteRejection
+import se.familychat.app.ui.components.QrScannerDialog
 
 @Composable
 fun LoginScreen(onServerSettings: () -> Unit, vm: LoginViewModel = hiltViewModel()) {
@@ -52,6 +65,7 @@ fun LoginScreen(onServerSettings: () -> Unit, vm: LoginViewModel = hiltViewModel
             onMode = vm::setMode, onServer = vm::setServerUrl, onUsername = vm::setUsername, onPassword = vm::setPassword,
             onConfirm = vm::setConfirm, onDisplayName = vm::setDisplayName, onCode = vm::setCode, onDeviceName = vm::setDeviceName,
             onTogglePassword = vm::togglePasswordVisible, onSubmit = vm::submit, onServerSettings = onServerSettings,
+            onInviteScanned = vm::onInviteScanned, onDismissScanRejection = vm::dismissScanRejection,
         ),
     )
 }
@@ -68,11 +82,15 @@ class LoginCallbacks(
     val onTogglePassword: () -> Unit = {},
     val onSubmit: () -> Unit = {},
     val onServerSettings: () -> Unit = {},
+    /** The text of a scanned QR code (untrusted; the view model checks it and only pre-fills the invitation form). */
+    val onInviteScanned: (String) -> Unit = {},
+    val onDismissScanRejection: () -> Unit = {},
 )
 
 @Composable
 fun LoginContent(state: LoginUiState, callbacks: LoginCallbacks, modifier: Modifier = Modifier) {
     val errorText = errorTexts()
+    var scanning by remember { mutableStateOf(false) }
     Scaffold(modifier = modifier) { padding ->
         Column(
             Modifier.padding(padding).imePadding().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 24.dp),
@@ -102,13 +120,29 @@ fun LoginContent(state: LoginUiState, callbacks: LoginCallbacks, modifier: Modif
                 ) { Text(stringResource(R.string.login_tab_invite)) }
             }
 
+            if (state.mode == AuthMode.REDEEM) {
+                OutlinedButton(
+                    onClick = { callbacks.onDismissScanRejection(); scanning = true },
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                ) {
+                    Icon(Icons.Filled.QrCodeScanner, contentDescription = null, modifier = Modifier.size(20.dp))
+                    Text(stringResource(R.string.scan_invitation), modifier = Modifier.padding(start = 8.dp))
+                }
+                state.scanRejection?.let {
+                    Text(stringResource(inviteRejectionText(it)), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
+                }
+                state.invite?.let { InviteHostCard(it, state.effectiveServer) }
+            }
+
             Field(
-                state.serverUrl, callbacks.onServer, R.string.server_address, KeyboardType.Uri,
+                state.effectiveServer, callbacks.onServer, R.string.server_address, KeyboardType.Uri,
                 error = FieldError.URL in state.fieldErrors, errorRes = R.string.field_error_required,
                 supporting = R.string.server_address_hint, capitalization = KeyboardCapitalization.None,
             )
-            TextButton(onClick = callbacks.onServerSettings, modifier = Modifier.heightIn(min = 48.dp)) {
-                Text(stringResource(R.string.connection_settings))
+            if (state.invite == null || state.mode != AuthMode.REDEEM) {
+                TextButton(onClick = callbacks.onServerSettings, modifier = Modifier.heightIn(min = 48.dp)) {
+                    Text(stringResource(R.string.connection_settings))
+                }
             }
 
             if (state.mode == AuthMode.REDEEM) {
@@ -159,6 +193,47 @@ fun LoginContent(state: LoginUiState, callbacks: LoginCallbacks, modifier: Modif
             }
         }
     }
+    if (scanning) {
+        QrScannerDialog(
+            title = stringResource(R.string.scan_invitation),
+            hint = stringResource(R.string.scan_invitation_hint),
+            onResult = { text -> scanning = false; callbacks.onInviteScanned(text) },
+            onDismiss = { scanning = false },
+        )
+    }
+}
+
+/** The server a scanned invitation points to, large: whoever made the code decides where the account is created. */
+@Composable
+private fun InviteHostCard(invite: InviteLink, server: String) {
+    val host = InviteQr.hostOf(server) ?: server
+    val warn = invite.suspiciousHost || InviteQr.isSuspiciousServer(server)
+    Card(
+        colors = CardDefaults.cardColors(containerColor = if (warn) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.secondaryContainer),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(stringResource(R.string.invite_scanned_from), style = MaterialTheme.typography.labelLarge)
+            Text(host, style = MaterialTheme.typography.titleLarge, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
+            Text(stringResource(R.string.invite_scanned_check), style = MaterialTheme.typography.bodySmall)
+            if (warn) {
+                Text(
+                    stringResource(R.string.invite_scanned_suspicious), style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold,
+                )
+            }
+        }
+    }
+}
+
+internal fun inviteRejectionText(reason: InviteRejection): Int = when (reason) {
+    InviteRejection.NOT_AN_INVITE -> R.string.invite_error_not_invite
+    InviteRejection.UNSUPPORTED_VERSION -> R.string.invite_error_version
+    InviteRejection.TOO_LONG -> R.string.invite_error_too_long
+    InviteRejection.MALFORMED -> R.string.invite_error_malformed
+    InviteRejection.INVALID_SERVER -> R.string.invite_error_server
+    InviteRejection.INSECURE_SERVER -> R.string.invite_error_insecure
+    InviteRejection.INVALID_CODE -> R.string.invite_error_code
 }
 
 @Composable

@@ -33,6 +33,8 @@ androidxTestExt = "1.2.1"
 androidxTestRunner = "1.6.2"
 androidxTestRules = "1.6.1"
 detekt = "1.23.8"
+zxing = "3.5.3"
+zxingEmbedded = "4.3.0"
 
 [libraries]
 # Signal protocol: JVM build (tests, compileOnly in :core:crypto) and Android build (app)
@@ -96,6 +98,9 @@ androidx-biometric = { module = "androidx.biometric:biometric", version.ref = "b
 androidx-test-runner = { module = "androidx.test:runner", version.ref = "androidxTestRunner" }
 androidx-test-rules = { module = "androidx.test:rules", version.ref = "androidxTestRules" }
 detekt-formatting = { module = "io.gitlab.arturbosch.detekt:detekt-formatting", version.ref = "detekt" }
+# QR codes: zxing core (pure Java) generates and decodes; zxing-android-embedded is only the camera view for scanning (no Google Play services)
+zxing-core = { module = "com.google.zxing:core", version.ref = "zxing" }
+zxing-android-embedded = { module = "com.journeyapps:zxing-android-embedded", version.ref = "zxingEmbedded" }
 robolectric = { module = "org.robolectric:robolectric", version.ref = "robolectric" }
 
 junit = { module = "junit:junit", version.ref = "junit" }

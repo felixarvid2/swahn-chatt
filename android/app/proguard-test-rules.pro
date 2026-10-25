@@ -23,9 +23,14 @@
 -keep,allowobfuscation class se.familychat.app.data.db.AppDatabase$Companion { *; }
 -keep,allowobfuscation class se.familychat.app.data.db.MessageEntity { *; }
 -keep,allowobfuscation class se.familychat.app.data.db.DraftEntity { *; }
+-keep,allowobfuscation class se.familychat.app.data.db.MessageReceiptEntity { *; }
+-keep,allowobfuscation class se.familychat.app.data.db.LocalDeletionEntity { *; }
 -keep,allowobfuscation class se.familychat.app.data.db.StoreDao { *; }
 -keep,allowobfuscation class se.familychat.app.data.SearchRepository { *; }
 -keep,allowobfuscation class se.familychat.app.data.SearchHit { *; }
+
+# QR helpers: the test decodes the bitmaps it generates (the app only generates them and reads the camera)
+-keep,allowobfuscation class se.familychat.app.qr.** { *; }
 
 # Libraries the test APK shares with the app. AGP leaves a library out of the test APK when the app has it, so the tests call the
 # app's (shrunk) copy: without these rules a test fails with NoSuchMethodError on e.g. listOf() or runBlocking().

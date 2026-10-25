@@ -17,6 +17,16 @@ class ConnectivityMonitor @Inject constructor(@ApplicationContext private val co
     private val _online = MutableStateFlow(true)
     val online: StateFlow<Boolean> = _online.asStateFlow()
 
+    /**
+     * True if the active network is metered (mobile data, or a Wi-Fi marked as metered), or if that cannot be told: automatic
+     * downloads that are limited to unmetered networks then wait. Read fresh each time (cheap), the answer changes with the network.
+     */
+    fun isMetered(): Boolean = try {
+        context.getSystemService(ConnectivityManager::class.java)?.isActiveNetworkMetered ?: true
+    } catch (e: SecurityException) {
+        true // no ACCESS_NETWORK_STATE
+    }
+
     /** [onAvailable] runs (on a binder thread) each time a usable network appears. */
     fun start(onAvailable: () -> Unit) {
         val cm = context.getSystemService(ConnectivityManager::class.java) ?: return

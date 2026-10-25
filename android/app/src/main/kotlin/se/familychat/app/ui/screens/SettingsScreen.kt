@@ -29,6 +29,8 @@ import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.CloudDownload
+import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Language
@@ -88,6 +90,7 @@ import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.PhoneAndroid
 import se.familychat.app.platform.push.PushStatus
 import se.familychat.app.ui.components.Avatar
+import se.familychat.app.ui.components.QrImage
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -118,12 +121,20 @@ class SettingsCallbacks(
     val onOpenLanguageSettings: (() -> Unit)? = null,
     /** Opens the safety screen of the own account (verify own devices). */
     val onOpenOwnSafety: () -> Unit = {},
+    val onOpenStorage: () -> Unit = {},
+    val onOpenAutoDownload: () -> Unit = {},
     val onCopy: (String) -> Unit = {},
     val onShare: (String) -> Unit = {},
 )
 
 @Composable
-fun SettingsScreen(onBack: () -> Unit, onOpenSafety: (userId: String) -> Unit = {}, vm: SettingsViewModel = hiltViewModel()) {
+fun SettingsScreen(
+    onBack: () -> Unit,
+    onOpenSafety: (userId: String) -> Unit = {},
+    onOpenStorage: () -> Unit = {},
+    onOpenAutoDownload: () -> Unit = {},
+    vm: SettingsViewModel = hiltViewModel(),
+) {
     val state by vm.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri -> uri?.let(vm::setAvatar) }
@@ -150,6 +161,7 @@ fun SettingsScreen(onBack: () -> Unit, onOpenSafety: (userId: String) -> Unit = 
                 { context.startActivity(Intent(Settings.ACTION_APP_LOCALE_SETTINGS, Uri.fromParts("package", context.packageName, null))) }
             } else null,
             onOpenOwnSafety = { onOpenSafety(state.userId) },
+            onOpenStorage = onOpenStorage, onOpenAutoDownload = onOpenAutoDownload,
             onCopy = { copyInvitation(context, it) },
             onShare = { code ->
                 val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, context.getString(R.string.invitation_share_text, code))
@@ -254,6 +266,14 @@ fun SettingsContent(state: SettingsUiState, cb: SettingsCallbacks, modifier: Mod
                 )
             }
 
+            // --- data and storage ---
+            Section(R.string.settings_data)
+            SettingRow(
+                Icons.Filled.CloudDownload, stringResource(R.string.auto_download), stringResource(R.string.auto_download_hint),
+                onClick = cb.onOpenAutoDownload,
+            )
+            SettingRow(Icons.Filled.Storage, stringResource(R.string.storage), stringResource(R.string.storage_hint), onClick = cb.onOpenStorage)
+
             // --- appearance ---
             Section(R.string.settings_appearance)
             SettingRow(Icons.Filled.Palette, stringResource(R.string.theme), stringResource(themeLabel(state.theme)), onClick = { pickTheme = true })
@@ -346,25 +366,7 @@ fun SettingsContent(state: SettingsUiState, cb: SettingsCallbacks, modifier: Mod
         AlertDialog(
             onDismissRequest = cb.onDismissInvitation,
             title = { Text(stringResource(R.string.invitation_created)) },
-            text = {
-                Column {
-                    Text(stringResource(R.string.invitation_created_text), style = MaterialTheme.typography.bodyMedium)
-                    Text(
-                        inv.code, style = MaterialTheme.typography.headlineSmall, fontFamily = FontFamily.Monospace,
-                        modifier = Modifier.padding(vertical = 16.dp),
-                    )
-                    Row {
-                        TextButton(onClick = { cb.onCopy(inv.code) }, modifier = Modifier.heightIn(min = 48.dp)) {
-                            Icon(Icons.Filled.ContentCopy, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Text(stringResource(R.string.action_copy), modifier = Modifier.padding(start = 8.dp))
-                        }
-                        TextButton(onClick = { cb.onShare(inv.code) }, modifier = Modifier.heightIn(min = 48.dp)) {
-                            Icon(Icons.Filled.Share, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Text(stringResource(R.string.action_share), modifier = Modifier.padding(start = 8.dp))
-                        }
-                    }
-                }
-            },
+            text = { InvitationCreated(inv.code, state.invitationQr, cb.onCopy, cb.onShare) },
             confirmButton = { TextButton(onClick = cb.onDismissInvitation) { Text(stringResource(R.string.action_close)) } },
         )
     }
@@ -385,6 +387,46 @@ fun SettingsContent(state: SettingsUiState, cb: SettingsCallbacks, modifier: Mod
             confirmButton = { TextButton(onClick = { cb.onRevokeDevice(device.id); revoke = null }) { Text(stringResource(R.string.action_revoke)) } },
             dismissButton = { TextButton(onClick = { revoke = null }) { Text(stringResource(R.string.action_cancel)) } },
         )
+    }
+}
+
+/** The created invitation: the code (shown once), the same invitation as a QR code to scan, and copy / share. */
+@Composable
+internal fun InvitationCreated(code: String, qr: String?, onCopy: (String) -> Unit, onShare: (String) -> Unit) {
+    Column(Modifier.verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(stringResource(R.string.invitation_created_text), style = MaterialTheme.typography.bodyMedium)
+        Text(
+            code, style = MaterialTheme.typography.headlineSmall, fontFamily = FontFamily.Monospace,
+            modifier = Modifier.padding(vertical = 16.dp),
+        )
+        qr?.let {
+            QrImage(it, stringResource(R.string.invitation_qr_description), Modifier.size(208.dp))
+            Text(
+                stringResource(R.string.invitation_qr_hint), style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp),
+            )
+        }
+        Row {
+            TextButton(onClick = { onCopy(code) }, modifier = Modifier.heightIn(min = 48.dp)) {
+                Icon(Icons.Filled.ContentCopy, contentDescription = null, modifier = Modifier.size(18.dp))
+                Text(stringResource(R.string.action_copy), modifier = Modifier.padding(start = 8.dp))
+            }
+            TextButton(onClick = { onShare(code) }, modifier = Modifier.heightIn(min = 48.dp)) {
+                Icon(Icons.Filled.Share, contentDescription = null, modifier = Modifier.size(18.dp))
+                Text(stringResource(R.string.action_share), modifier = Modifier.padding(start = 8.dp))
+            }
+        }
+    }
+}
+
+/** The created-invitation dialog as a plain card (the screenshot test cannot capture a dialog window). */
+@Composable
+internal fun InvitationCreatedPreview(code: String, qr: String?) {
+    androidx.compose.material3.Surface(Modifier.padding(24.dp), shape = androidx.compose.foundation.shape.RoundedCornerShape(28.dp), tonalElevation = 6.dp) {
+        Column(Modifier.padding(24.dp)) {
+            Text(stringResource(R.string.invitation_created), style = MaterialTheme.typography.headlineSmall, modifier = Modifier.padding(bottom = 16.dp))
+            InvitationCreated(code, qr, {}, {})
+        }
     }
 }
 

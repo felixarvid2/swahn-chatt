@@ -453,6 +453,42 @@ class FamilyChatEngine(
         requestOutbox()
     }
 
+    /**
+     * "Delete for me": removes the message from this device only. Nothing is sent, the other members keep it, and it is
+     * remembered as deleted here so that a later sync, edit or receipt cannot bring it back. Downloaded attachment files go
+     * too. Returns the removed message (the app may remove files of its own that it handed to the engine), or null if it was
+     * already gone. System notices and messages that are still waiting to be sent cannot be removed this way.
+     */
+    suspend fun deleteMessageForMe(messageId: String): StoredMessage? {
+        val m = ctx.store.getMessage(messageId) ?: return null
+        require(!m.isSystem) { "A notice cannot be deleted" }
+        require(!(m.outgoing && m.status == MessageStatus.PENDING)) { "The message has not been sent yet" }
+        val removed = ctx.store.transaction { ctx.store.deleteMessageLocally(messageId, m.conversationId, ctx.now()) } ?: return null
+        removed.attachments.forEach { ctx.deleteDownloadedFile(it.localPath) }
+        ctx.emit(EngineEvent.MessageChanged(m.conversationId, messageId))
+        return removed
+    }
+
+    /**
+     * Deletes the decrypted copies of received attachments (of one conversation, or of all) and marks them as not downloaded,
+     * so the messages stay and the files can be fetched again while the server still has them. Returns the bytes freed.
+     * Files of messages you sent (the engine never owns those) and downloads in progress are left alone.
+     */
+    suspend fun clearDownloadedMedia(conversationId: String? = null): Long {
+        var freed = 0L
+        for (m in ctx.store.messagesWithAttachments(conversationId)) {
+            val owned = m.attachments.filter { it.downloadState == DownloadState.DONE && ctx.ownsFile(it.localPath) }
+            if (owned.isEmpty()) continue
+            for (a in owned) freed += ctx.deleteDownloadedFile(a.localPath)
+            val ids = owned.mapTo(HashSet()) { it.id }
+            ctx.store.updateMessage(m.id) { cur ->
+                cur.copy(attachments = cur.attachments.map { if (it.id in ids) it.copy(downloadState = DownloadState.NONE, localPath = null) else it })
+            }
+            ctx.emit(EngineEvent.MessageChanged(m.conversationId, m.id))
+        }
+        return freed
+    }
+
     /** Re-queues a message that ended in FAILED. */
     suspend fun retryMessage(messageId: String) {
         sender.retry(messageId)

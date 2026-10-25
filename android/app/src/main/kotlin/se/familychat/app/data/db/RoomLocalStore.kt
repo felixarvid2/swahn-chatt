@@ -7,6 +7,7 @@ import kotlinx.coroutines.withContext
 import se.familychat.core.client.Account
 import se.familychat.core.client.LocalStore
 import se.familychat.core.client.OutboxEntry
+import se.familychat.core.client.ReceiptTimes
 import se.familychat.core.client.StoredMessage
 import se.familychat.core.model.Conversation
 import se.familychat.core.model.Device
@@ -104,6 +105,8 @@ class RoomLocalStore(
 
     override suspend fun removeConversation(id: String) = atomic {
         dao.deleteMessagesOf(id)
+        dao.deleteReceiptsOf(id)
+        dao.deleteLocalDeletionsOf(id)
         dao.deleteOutboxOf(id)
         dao.deleteDraft(id)
         dao.deleteSettings(id)
@@ -136,6 +139,28 @@ class RoomLocalStore(
 
     override suspend fun undecryptedFrom(userId: String, deviceId: String): List<StoredMessage> =
         io { dao.undecryptedFrom(userId, deviceId).map { it.toModel() } }
+
+    override suspend fun messagesWithAttachments(conversationId: String?): List<StoredMessage> =
+        io { dao.messagesWithAttachments(conversationId).map { it.toModel() } }
+
+    // --- receipt times and local deletions --------------------------------------------------------------------------
+    override suspend fun recordReceipt(conversationId: String, messageId: String, userId: String, deliveredAt: Long?, readAt: Long?) = atomic {
+        val cur = dao.receipt(messageId, userId)
+        dao.putReceipt(MessageReceiptEntity(messageId, userId, conversationId, cur?.deliveredAt ?: deliveredAt, cur?.readAt ?: readAt))
+    }
+
+    override suspend fun getReceipts(messageId: String): List<ReceiptTimes> =
+        io { dao.receipts(messageId).map { ReceiptTimes(it.messageId, it.userId, it.deliveredAt, it.readAt) } }
+
+    override suspend fun deleteMessageLocally(id: String, conversationId: String, at: Long): StoredMessage? = atomic {
+        val existing = dao.message(id)?.toModel()
+        dao.putLocalDeletion(LocalDeletionEntity(id, conversationId, at))
+        dao.deleteReceipts(id)
+        dao.deleteMessage(id)
+        existing
+    }
+
+    override suspend fun isLocallyDeleted(id: String): Boolean = io { dao.localDeletionCount(id) > 0 }
 
     // --- outbox ---------------------------------------------------------------------------------------------------
     override suspend fun putOutbox(entry: OutboxEntry) = io { dao.putOutbox(entry.toEntity()) }

@@ -13,6 +13,26 @@ import java.util.Base64
 /** The downloaded ciphertext did not match the checksum/size announced inside the encrypted message. */
 class AttachmentIntegrityException(message: String, cause: Throwable? = null) : IOException(message, cause)
 
+/** The message was deleted on this device while its attachment was being downloaded; the downloaded file was removed again. */
+class MessageGoneException : IllegalStateException("The message no longer exists")
+
+/**
+ * Deletes [path] if it is a file the engine itself decrypted into its attachment directory (never an app-provided source
+ * file, never anything outside). Returns the number of bytes freed.
+ */
+internal fun EngineContext.deleteDownloadedFile(path: String?): Long {
+    val f = File(path ?: return 0)
+    if (!ownsFile(path)) return 0
+    val size = f.length()
+    return if (f.delete()) size else 0
+}
+
+/** True if [path] is a file inside the engine's attachment directory (a decrypted download). */
+internal fun EngineContext.ownsFile(path: String?): Boolean {
+    val f = File(path ?: return false)
+    return f.isFile && f.canonicalPath.startsWith(config.attachmentDir.canonicalPath + File.separator)
+}
+
 /** Downloads, verifies and decrypts attachments of received messages. */
 internal class AttachmentService(private val ctx: EngineContext) {
     private val locks = HashMap<String, Mutex>()
@@ -82,7 +102,13 @@ internal class AttachmentService(private val ctx: EngineContext) {
                 setStateQuietly(messageId, attachmentId, DownloadState.FAILED, null)
                 throw e
             }
-            ctx.store.getMessage(messageId)?.let { setState(it, attachmentId, DownloadState.DONE, plain.absolutePath) }
+            val current = ctx.store.getMessage(messageId)
+            if (current == null || current.attachments.none { it.id == attachmentId }) {
+                // The message was deleted ("delete for me", or for everyone) while the download ran: do not leave the file behind.
+                plain.delete()
+                throw MessageGoneException()
+            }
+            setState(current, attachmentId, DownloadState.DONE, plain.absolutePath)
             plain
         }
 

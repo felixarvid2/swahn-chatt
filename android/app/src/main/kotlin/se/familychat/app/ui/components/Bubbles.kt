@@ -28,6 +28,8 @@ import androidx.compose.material.icons.automirrored.filled.Reply
 import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DeleteForever
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Done
 import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.Download
@@ -100,7 +102,12 @@ data class PlaybackUi(
 class BubbleActions(
     val onReply: (String) -> Unit = {},
     val onEdit: (String) -> Unit = {},
+    /** "Delete for everyone" (the screen asks first). */
     val onDelete: (String) -> Unit = {},
+    /** "Delete for me": removes the message from this phone only (the screen asks first). */
+    val onDeleteForMe: (String) -> Unit = {},
+    /** Opens the message info (delivered and read, per member). */
+    val onInfo: (String) -> Unit = {},
     val onCopy: (String) -> Unit = {},
     val onRetry: (String) -> Unit = {},
     val onOpenAttachment: (messageId: String, attachment: AttachmentUi) -> Unit = { _, _ -> },
@@ -150,101 +157,120 @@ fun MessageBubble(
     val links = remember(m.text, m.deleted) { if (m.deleted || m.text.isNullOrBlank()) emptyList() else findLinks(m.text) }
     val openLinkLabels = links.map { l -> stringResource(R.string.link_open_action, describeLink(l.url)?.target ?: l.url) }
 
-    Row(
-        modifier = modifier.fillMaxWidth().padding(start = 8.dp, end = 8.dp, top = topPadding),
-        horizontalArrangement = if (m.outgoing) Arrangement.End else Arrangement.Start,
-        verticalAlignment = Alignment.Bottom,
-    ) {
-        if (!m.outgoing && m.senderAvatar != null) {
-            Box(Modifier.width(32.dp).padding(end = 4.dp), contentAlignment = Alignment.BottomCenter) {
-                if (row.firstOfRun) Avatar(m.senderAvatar, size = 28.dp)
+    val canReply = !m.deleted && m.undecryptable == null
+    val replyLabel = stringResource(R.string.action_reply)
+    val infoLabel = stringResource(R.string.action_message_info)
+    SwipeToReply(enabled = canReply, onReply = { actions.onReply(m.id) }, modifier = modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(start = 8.dp, end = 8.dp, top = topPadding),
+            horizontalArrangement = if (m.outgoing) Arrangement.End else Arrangement.Start,
+            verticalAlignment = Alignment.Bottom,
+        ) {
+            if (!m.outgoing && m.senderAvatar != null) {
+                Box(Modifier.width(32.dp).padding(end = 4.dp), contentAlignment = Alignment.BottomCenter) {
+                    if (row.firstOfRun) Avatar(m.senderAvatar, size = 28.dp)
+                }
             }
-        }
-        Box(Modifier.widthIn(max = 320.dp)) {
-            Surface(
-                shape = shape,
-                color = container,
-                contentColor = content,
-                modifier = Modifier
-                    .clip(shape)
-                    .combinedClickable(
-                        onClick = { if (m.failed) actions.onRetry(m.id) },
-                        onLongClick = { menuOpen = true },
-                        onLongClickLabel = stringResource(R.string.message_actions),
-                    )
-                    // One spoken line per bubble (who, what, when, status); the pieces it names are hidden below.
-                    // Attachments, the quoted reply and buttons keep their own nodes. Links of the (hidden) text
-                    // are offered as actions instead.
-                    .semantics(mergeDescendants = true) {
-                        contentDescription = description
-                        if (links.isNotEmpty()) {
-                            customActions = links.mapIndexed { i, l ->
-                                CustomAccessibilityAction(openLinkLabels[i]) { actions.onOpenLink(l.url); true }
-                            }
-                        }
-                    },
-            ) {
-                Column(Modifier.padding(horizontal = 10.dp, vertical = 6.dp).width(IntrinsicSize.Max).widthIn(min = 72.dp)) {
-                    if (m.senderName != null && row.firstOfRun) {
-                        Text(
-                            m.senderName, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold,
-                            color = scheme.primary, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.clearAndSetSemantics {},
+            Box(Modifier.widthIn(max = 320.dp)) {
+                Surface(
+                    shape = shape,
+                    color = container,
+                    contentColor = content,
+                    modifier = Modifier
+                        .clip(shape)
+                        .combinedClickable(
+                            onClick = { if (m.failed) actions.onRetry(m.id) },
+                            onLongClick = { menuOpen = true },
+                            onLongClickLabel = stringResource(R.string.message_actions),
                         )
-                    }
-                    when {
-                        m.deleted -> DeletedPlaceholder(content)
-                        m.undecryptable != null -> UndecryptablePlaceholder(m.undecryptable, actions.onReviewIdentity)
-                        else -> BubbleBody(m, actions, playback, content)
-                    }
-                    BubbleFooter(m, time, content)
-                    if (m.failed) {
-                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp).clearAndSetSemantics {}) {
-                            Icon(Icons.Filled.Refresh, contentDescription = null, tint = LocalStatusColors.current.failed, modifier = Modifier.size(16.dp))
+                        // One spoken line per bubble (who, what, when, status); the pieces it names are hidden below.
+                        // Attachments, the quoted reply and buttons keep their own nodes. Links of the (hidden) text
+                        // are offered as actions instead.
+                        .semantics(mergeDescendants = true) {
+                            contentDescription = description
+                            // the swipe has no gesture for TalkBack: the same actions are offered here (and in the long-press menu)
+                            customActions = buildList {
+                                if (canReply) add(CustomAccessibilityAction(replyLabel) { actions.onReply(m.id); true })
+                                if (m.canShowInfo) add(CustomAccessibilityAction(infoLabel) { actions.onInfo(m.id); true })
+                                links.forEachIndexed { i, l -> add(CustomAccessibilityAction(openLinkLabels[i]) { actions.onOpenLink(l.url); true }) }
+                            }
+                        },
+                ) {
+                    Column(Modifier.padding(horizontal = 10.dp, vertical = 6.dp).width(IntrinsicSize.Max).widthIn(min = 72.dp)) {
+                        if (m.senderName != null && row.firstOfRun) {
                             Text(
-                                stringResource(R.string.message_failed_retry), style = MaterialTheme.typography.labelMedium,
-                                color = LocalStatusColors.current.failed, modifier = Modifier.padding(start = 4.dp),
+                                m.senderName, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold,
+                                color = scheme.primary, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.clearAndSetSemantics {},
                             )
                         }
+                        when {
+                            m.deleted -> DeletedPlaceholder(content)
+                            m.undecryptable != null -> UndecryptablePlaceholder(m.undecryptable, actions.onReviewIdentity)
+                            else -> BubbleBody(m, actions, playback, content)
+                        }
+                        BubbleFooter(m, time, content)
+                        if (m.failed) {
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp).clearAndSetSemantics {}) {
+                                Icon(Icons.Filled.Refresh, contentDescription = null, tint = LocalStatusColors.current.failed, modifier = Modifier.size(16.dp))
+                                Text(
+                                    stringResource(R.string.message_failed_retry), style = MaterialTheme.typography.labelMedium,
+                                    color = LocalStatusColors.current.failed, modifier = Modifier.padding(start = 4.dp),
+                                )
+                            }
+                        }
                     }
                 }
-            }
-            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                val canReply = !m.deleted && m.undecryptable == null
-                if (canReply) {
-                    DropdownMenuItem(
-                        text = { Text(stringResource(R.string.action_reply)) },
-                        leadingIcon = { Icon(Icons.AutoMirrored.Filled.Reply, null) },
-                        onClick = { menuOpen = false; actions.onReply(m.id) },
-                    )
-                }
-                if (m.canEdit) {
-                    DropdownMenuItem(
-                        text = { Text(stringResource(R.string.action_edit)) },
-                        leadingIcon = { Icon(Icons.Filled.Edit, null) },
-                        onClick = { menuOpen = false; actions.onEdit(m.id) },
-                    )
-                }
-                if (!m.text.isNullOrBlank() && !m.deleted) {
-                    DropdownMenuItem(
-                        text = { Text(stringResource(R.string.action_copy)) },
-                        leadingIcon = { Icon(Icons.Filled.ContentCopy, null) },
-                        onClick = { menuOpen = false; actions.onCopy(m.text) },
-                    )
-                }
-                if (m.failed) {
-                    DropdownMenuItem(
-                        text = { Text(stringResource(R.string.action_retry)) },
-                        leadingIcon = { Icon(Icons.Filled.Refresh, null) },
-                        onClick = { menuOpen = false; actions.onRetry(m.id) },
-                    )
-                }
-                if (m.canDelete) {
-                    DropdownMenuItem(
-                        text = { Text(stringResource(R.string.action_delete)) },
-                        leadingIcon = { Icon(Icons.Filled.Delete, null) },
-                        onClick = { menuOpen = false; actions.onDelete(m.id) },
-                    )
+                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    if (canReply) {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.action_reply)) },
+                            leadingIcon = { Icon(Icons.AutoMirrored.Filled.Reply, null) },
+                            onClick = { menuOpen = false; actions.onReply(m.id) },
+                        )
+                    }
+                    if (m.canEdit) {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.action_edit)) },
+                            leadingIcon = { Icon(Icons.Filled.Edit, null) },
+                            onClick = { menuOpen = false; actions.onEdit(m.id) },
+                        )
+                    }
+                    if (!m.text.isNullOrBlank() && !m.deleted) {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.action_copy)) },
+                            leadingIcon = { Icon(Icons.Filled.ContentCopy, null) },
+                            onClick = { menuOpen = false; actions.onCopy(m.text) },
+                        )
+                    }
+                    if (m.failed) {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.action_retry)) },
+                            leadingIcon = { Icon(Icons.Filled.Refresh, null) },
+                            onClick = { menuOpen = false; actions.onRetry(m.id) },
+                        )
+                    }
+                    if (m.canShowInfo) {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.action_message_info)) },
+                            leadingIcon = { Icon(Icons.Filled.Info, null) },
+                            onClick = { menuOpen = false; actions.onInfo(m.id) },
+                        )
+                    }
+                    if (m.canDeleteForMe) {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.action_delete_for_me)) },
+                            leadingIcon = { Icon(Icons.Filled.Delete, null) },
+                            onClick = { menuOpen = false; actions.onDeleteForMe(m.id) },
+                        )
+                    }
+                    if (m.canDelete) {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.action_delete_for_everyone)) },
+                            leadingIcon = { Icon(Icons.Filled.DeleteForever, null) },
+                            onClick = { menuOpen = false; actions.onDelete(m.id) },
+                        )
+                    }
                 }
             }
         }

@@ -16,6 +16,9 @@ class InMemoryLocalStore : LocalStore {
     private val messages = LinkedHashMap<String, StoredMessage>()
     private val outbox = LinkedHashMap<String, OutboxEntry>()
     private var cursor = 0L
+    private val receipts = HashMap<Pair<String, String>, ReceiptTimes>()
+    private val receiptConversation = HashMap<String, String>() // message id -> conversation id
+    private val tombstones = HashMap<String, String>() // message id -> conversation id
 
     private inline fun <T> sync(block: () -> T): T = synchronized(lock, block)
 
@@ -24,7 +27,7 @@ class InMemoryLocalStore : LocalStore {
 
     override suspend fun clearAll() = sync {
         account = null; meta.clear(); users.clear(); devices.clear(); conversations.clear(); readSeq.clear()
-        messages.clear(); outbox.clear(); cursor = 0
+        messages.clear(); outbox.clear(); cursor = 0; receipts.clear(); receiptConversation.clear(); tombstones.clear()
     }
 
     override suspend fun getMeta(key: String) = sync { meta[key] }
@@ -65,6 +68,10 @@ class InMemoryLocalStore : LocalStore {
         conversations.remove(id); readSeq.remove(id)
         messages.values.removeAll { it.conversationId == id }
         outbox.values.removeAll { it.conversationId == id }
+        val gone = receiptConversation.filterValues { it == id }.keys
+        receipts.keys.removeAll { it.first in gone }
+        receiptConversation.keys.removeAll(gone)
+        tombstones.values.removeAll { it == id }
         Unit
     }
 
@@ -104,6 +111,30 @@ class InMemoryLocalStore : LocalStore {
         messages.values.filter { it.pendingEnvelopeBody != null && it.senderUserId == userId && it.senderDeviceId == deviceId }
             .sortedWith(order)
     }
+
+    override suspend fun messagesWithAttachments(conversationId: String?) = sync {
+        messages.values.filter { it.attachments.isNotEmpty() && (conversationId == null || it.conversationId == conversationId) }
+            .sortedWith(order)
+    }
+
+    override suspend fun recordReceipt(conversationId: String, messageId: String, userId: String, deliveredAt: Long?, readAt: Long?) = sync {
+        val key = messageId to userId
+        val cur = receipts[key]
+        receipts[key] = ReceiptTimes(messageId, userId, cur?.deliveredAt ?: deliveredAt, cur?.readAt ?: readAt)
+        receiptConversation[messageId] = conversationId
+        Unit
+    }
+
+    override suspend fun getReceipts(messageId: String) = sync { receipts.values.filter { it.messageId == messageId }.sortedBy { it.userId } }
+
+    override suspend fun deleteMessageLocally(id: String, conversationId: String, at: Long) = sync {
+        tombstones[id] = conversationId
+        receipts.keys.removeAll { it.first == id }
+        receiptConversation.remove(id)
+        messages.remove(id)
+    }
+
+    override suspend fun isLocallyDeleted(id: String) = sync { id in tombstones }
 
     override suspend fun putOutbox(entry: OutboxEntry) = sync { outbox[entry.messageId] = entry; Unit }
     override suspend fun getOutbox() = sync { outbox.values.sortedWith(compareBy({ it.createdAt }, { it.messageId })) }

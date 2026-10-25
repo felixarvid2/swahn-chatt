@@ -17,7 +17,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
- * The migration chain 1 -> 2 -> 3 on a device, on real SQLCipher files: phones in the field are on version 1 or 2 and their
+ * The migration chain 1 -> 2 -> 3 -> 4 on a device, on real SQLCipher files: phones in the field are on version 1 or 2 and their
  * data must survive, including the full text index. The schemas come from the exported `app/schemas/ JSON files` (test APK assets).
  */
 @Suppress("MaxLineLength") // SQL fixtures
@@ -38,7 +38,7 @@ class MigrationInstrumentedTest {
     }
 
     @Before fun cleanUp() {
-        listOf("mig-v1-v3", "mig-v2-v3", "mig-app-v1").forEach { appContext.deleteDatabase(it) }
+        listOf("mig-v1-v3", "mig-v2-v3", "mig-v3-v4", "mig-app-v1", "mig-app-v3").forEach { appContext.deleteDatabase(it) }
     }
 
     private val messageColumns = "id, conversationId, senderUserId, senderDeviceId, outgoing, status, seq, clientTs, serverTs, text, replyTo, " +
@@ -78,6 +78,8 @@ class MigrationInstrumentedTest {
             assertEquals(1L, db.count("signal_identities"))
             assertEquals(0L, db.count("drafts"))
             assertEquals(0L, db.count("conversation_settings"))
+            assertEquals(0L, db.count("message_receipts"))
+            assertEquals(0L, db.count("local_deletions"))
             db.query("SELECT cursor FROM sync_state WHERE id = 1").use { c -> assertTrue(c.moveToFirst()); assertEquals(77L, c.getLong(0)) }
             // FTS4 with the unicode61 tokenizer works in SQLCipher: backfill, diacritics kept apart, prefix search
             assertEquals(listOf("m1", "m2"), db.matches("hej"))
@@ -103,6 +105,56 @@ class MigrationInstrumentedTest {
             assertEquals(1L, db.count("drafts"))
             assertEquals(4L, db.count("messages"))
             assertEquals(listOf("m1", "m2"), db.matches("hej"))
+        }
+    }
+
+    /** Version 3 as an updated phone holds it: version 1 data, a draft, a pin and an own message with receipts in the old columns. */
+    private fun fillVersion3(db: SupportSQLiteDatabase) {
+        fillVersion1(db)
+        db.execSQL("INSERT INTO drafts (conversationId, text, updatedAt) VALUES ('c1', 'Utkast', 5)")
+        db.execSQL("INSERT INTO conversation_settings (conversationId, pinnedAt, mutedUntil, archived) VALUES ('c1', 9, 0, 0)")
+        db.execSQL("INSERT INTO messages ($messageColumns) VALUES ('o1', 'c1', 'me', 'dev', 1, 'READ', 5, 5, 5, 'skickat', NULL, '[]', 0, NULL, 0, NULL, NULL, 'bob', 'bob', NULL, NULL, NULL, NULL, NULL, NULL)")
+    }
+
+    @Test fun version3To4KeepsDataAndAddsReceiptAndTombstoneTables() {
+        helper.createDatabase("mig-v3-v4", 3).use { fillVersion3(it) }
+        helper.runMigrationsAndValidate("mig-v3-v4", 4, true, AppDatabase.MIGRATION_3_4).use { db ->
+            assertEquals(5L, db.count("messages"))
+            assertEquals(1L, db.count("drafts"))
+            assertEquals(1L, db.count("conversation_settings"))
+            assertEquals(1L, db.count("signal_identities"))
+            assertEquals(0L, db.count("message_receipts"))
+            assertEquals(0L, db.count("local_deletions"))
+            db.query("SELECT status, deliveredTo, readBy FROM messages WHERE id = 'o1'").use { c ->
+                assertTrue(c.moveToFirst())
+                assertEquals("READ", c.getString(0)); assertEquals("bob", c.getString(1)); assertEquals("bob", c.getString(2))
+            }
+            assertEquals(listOf("m1", "m2"), db.matches("hej"))
+            db.execSQL("INSERT INTO message_receipts (messageId, userId, conversationId, deliveredAt, readAt) VALUES ('o1', 'bob', 'c1', 5, 8)")
+            db.execSQL("INSERT INTO local_deletions (messageId, conversationId, deletedAt) VALUES ('m1', 'c1', 6)")
+            assertEquals(1L, db.count("message_receipts"))
+            assertEquals(1L, db.count("local_deletions"))
+        }
+    }
+
+    @Test fun theAppsOwnBuilderOpensAVersion3FileOnSqlcipherAndTheNewTablesWork() {
+        helper.createDatabase("mig-app-v3", 3).use { fillVersion3(it) }
+        val db = AppDatabase.build(appContext, cipherFactory, "mig-app-v3")
+        try {
+            runBlocking {
+                val dao = db.storeDao()
+                assertEquals("skickat", dao.message("o1")?.text)
+                dao.putReceipt(se.familychat.app.data.db.MessageReceiptEntity("o1", "bob", "c1", 5, null))
+                assertEquals(5L, dao.receipts("o1").single().deliveredAt)
+                dao.putLocalDeletion(se.familychat.app.data.db.LocalDeletionEntity("m1", "c1", 6))
+                dao.deleteMessage("m1")
+                assertEquals(1, dao.localDeletionCount("m1"))
+                assertEquals(null, dao.message("m1"))
+                assertEquals(listOf("m2"), SearchRepository(db).search("hej").map { it.messageId })
+            }
+        } finally {
+            db.close()
+            appContext.deleteDatabase("mig-app-v3")
         }
     }
 

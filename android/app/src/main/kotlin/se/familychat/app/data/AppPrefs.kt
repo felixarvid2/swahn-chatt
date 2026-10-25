@@ -119,6 +119,28 @@ class AppPrefs @Inject constructor(@ApplicationContext context: Context) {
         prefs.edit().putString(KEY_LOCK_TIMEOUT, value.name).apply()
     }
 
+    private val _autoDownload = MutableStateFlow(
+        AutoDownloadSettings(
+            images = enumPref(KEY_AUTO_IMAGES, AutoDownloadMode.ALWAYS), voice = enumPref(KEY_AUTO_VOICE, AutoDownloadMode.ALWAYS),
+            video = enumPref(KEY_AUTO_VIDEO, AutoDownloadMode.WIFI_ONLY), files = enumPref(KEY_AUTO_FILES, AutoDownloadMode.WIFI_ONLY),
+        ),
+    )
+
+    /** Which attachments are fetched without a tap, per kind (images, voice, video, files). */
+    val autoDownload: StateFlow<AutoDownloadSettings> = _autoDownload.asStateFlow()
+
+    /** [kind] is an attachment kind (`image`, `voice`, `video`, anything else counts as `file`). */
+    fun setAutoDownload(kind: String, mode: AutoDownloadMode) {
+        val key = when (kind) {
+            "image" -> KEY_AUTO_IMAGES
+            "voice" -> KEY_AUTO_VOICE
+            "video" -> KEY_AUTO_VIDEO
+            else -> KEY_AUTO_FILES
+        }
+        _autoDownload.value = _autoDownload.value.with(kind, mode)
+        prefs.edit().putString(key, mode.name).apply()
+    }
+
     /** The endpoint the distributor gave us. */
     var pushEndpoint: String?
         get() = prefs.getString(KEY_PUSH_ENDPOINT, null)
@@ -155,5 +177,9 @@ class AppPrefs @Inject constructor(@ApplicationContext context: Context) {
         const val KEY_LOCK_ENABLED = "app_lock_enabled"
         const val KEY_LOCK_TIMEOUT = "app_lock_timeout"
         const val KEY_NOTIF_ASKED = "notif_permission_asked"
+        const val KEY_AUTO_IMAGES = "auto_download_images"
+        const val KEY_AUTO_VOICE = "auto_download_voice"
+        const val KEY_AUTO_VIDEO = "auto_download_video"
+        const val KEY_AUTO_FILES = "auto_download_files"
     }
 }

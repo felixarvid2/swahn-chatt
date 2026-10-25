@@ -26,6 +26,7 @@ import se.familychat.app.media.AttachmentPreparer
 import se.familychat.app.platform.push.Distributor
 import se.familychat.app.platform.push.PushManager
 import se.familychat.app.platform.push.PushStatus
+import se.familychat.app.qr.InviteQr
 import se.familychat.app.ui.model.AvatarUi
 import se.familychat.core.client.FamilyChatEngine
 import se.familychat.core.model.CreatedInvitation
@@ -63,6 +64,8 @@ data class SettingsUiState(
     val error: UiError? = null,
     val passwordChanged: Boolean = false,
     val invitation: CreatedInvitation? = null,
+    /** The text of the invitation's QR code (`familychat://invite?...`), for the new person to scan; null without an invitation. */
+    val invitationQr: String? = null,
 )
 
 @HiltViewModel
@@ -104,6 +107,7 @@ class SettingsViewModel @Inject constructor(
             theme = c.theme, notificationPrivacy = c.privacy, blockScreenshots = c.blockScreenshots,
             appLockEnabled = c.lockEnabled, lockTimeout = c.lockTimeout, versionName = BuildConfig.VERSION_NAME,
             busy = t[0] as Boolean, error = t[1] as UiError?, passwordChanged = t[2] as Boolean, invitation = t[3] as CreatedInvitation?,
+            invitationQr = (t[3] as CreatedInvitation?)?.let { inv -> a?.serverUrl?.let { server -> InviteQr.payload(server, inv.code) } },
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsUiState())
 

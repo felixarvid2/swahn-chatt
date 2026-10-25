@@ -132,10 +132,78 @@ class MigrationTest {
     }
 
     @Test fun `all the way from version 1 to the current one`() {
-        helper.createDatabase("migration-v1-v3", 1).use { fillVersion1(it) }
-        helper.runMigrationsAndValidate("migration-v1-v3", 3, true, *AppDatabase.MIGRATIONS).use { db ->
+        helper.createDatabase("migration-v1-vN", 1).use { fillVersion1(it) }
+        helper.runMigrationsAndValidate("migration-v1-vN", AppDatabase.VERSION, true, *AppDatabase.MIGRATIONS).use { db ->
             assertEquals(listOf("m1", "m2"), matches(db, "hej"))
             db.query("SELECT COUNT(*) FROM messages").use { it.moveToFirst(); assertEquals(2L, it.getLong(0)) }
+            // the tables of versions 2, 3 and 4 are all there, empty, and usable
+            for (t in listOf("drafts", "conversation_settings", "message_receipts", "local_deletions")) {
+                db.query("SELECT COUNT(*) FROM $t").use { it.moveToFirst(); assertEquals(0L, it.getLong(0), t) }
+            }
+            db.execSQL("INSERT INTO message_receipts (messageId, userId, conversationId, deliveredAt, readAt) VALUES ('m1', 'bob', 'c1', 5, NULL)")
+            db.execSQL("INSERT INTO local_deletions (messageId, conversationId, deletedAt) VALUES ('m2', 'c1', 6)")
+            db.query("SELECT COUNT(*) FROM local_deletions").use { it.moveToFirst(); assertEquals(1L, it.getLong(0)) }
+        }
+    }
+
+    /** Version 3 as an updated phone holds it: version 1 data plus a draft, a pin, and an own message with receipts in the old columns. */
+    @Suppress("MaxLineLength") // SQL fixtures
+    private fun fillVersion3(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+        fillVersion1(db)
+        db.execSQL("INSERT INTO drafts (conversationId, text, updatedAt) VALUES ('c1', 'Utkast', 5)")
+        db.execSQL("INSERT INTO conversation_settings (conversationId, pinnedAt, mutedUntil, archived) VALUES ('c1', 9, 0, 0)")
+        db.execSQL(
+            "INSERT INTO messages (id, conversationId, senderUserId, senderDeviceId, outgoing, status, seq, clientTs, serverTs, text, replyTo, attachments, edited, editedAt, deleted, decryptError, failureReason, deliveredTo, readBy, systemType, systemUserId, systemDeviceId, systemDeviceName, pendingEnvelopeType, pendingEnvelopeBody) " +
+                "VALUES ('o1', 'c1', 'me', 'dev', 1, 'READ', 3, 3, 3, 'skickat', NULL, '[]', 0, NULL, 0, NULL, NULL, 'bob', 'bob', NULL, NULL, NULL, NULL, NULL, NULL)",
+        )
+    }
+
+    @Test fun `version 3 to 4 keeps every row, messages keep their old receipt status and the new tables start empty`() {
+        helper.createDatabase("migration-v3-v4", 3).use { fillVersion3(it) }
+        // validated against 4.json: columns, primary keys and indices of message_receipts and local_deletions are what Room expects
+        helper.runMigrationsAndValidate("migration-v3-v4", 4, true, AppDatabase.MIGRATION_3_4).use { db ->
+            fun count(table: String) = db.query("SELECT COUNT(*) FROM $table").use { it.moveToFirst(); it.getLong(0) }
+            assertEquals(1L, count("account"))
+            assertEquals(1L, count("conversations"))
+            assertEquals(3L, count("messages"))
+            assertEquals(1L, count("drafts"))
+            assertEquals(1L, count("conversation_settings"))
+            assertEquals(1L, count("signal_identities"))
+            assertEquals(0L, count("message_receipts"), "times are only known from receipts received after the update")
+            assertEquals(0L, count("local_deletions"))
+            db.query("SELECT status, deliveredTo, readBy FROM messages WHERE id = 'o1'").use { c ->
+                assertTrue(c.moveToFirst())
+                assertEquals("READ", c.getString(0)); assertEquals("bob", c.getString(1)); assertEquals("bob", c.getString(2))
+            }
+            db.query("SELECT cursor FROM sync_state WHERE id = 1").use { c -> assertTrue(c.moveToFirst()); assertEquals(77L, c.getLong(0)) }
+            assertEquals(listOf("m1", "m2"), matches(db, "hej")) // the search index survived
+            db.execSQL("INSERT INTO message_receipts (messageId, userId, conversationId, deliveredAt, readAt) VALUES ('o1', 'bob', 'c1', 5, 8)")
+            db.execSQL("INSERT INTO local_deletions (messageId, conversationId, deletedAt) VALUES ('m1', 'c1', 6)")
+            assertEquals(1L, count("message_receipts"))
+            assertEquals(1L, count("local_deletions"))
+        }
+    }
+
+    @Test fun `the app opens a version 3 file through the real builder and uses receipts and local deletions`() {
+        val context = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
+        helper.createDatabase("familychat-upgrade3.db", 3).use { fillVersion3(it) }
+        val db = AppDatabase.build(context, factory = null, name = "familychat-upgrade3.db") { it.allowMainThreadQueries() }
+        try {
+            kotlinx.coroutines.runBlocking {
+                val store = se.familychat.app.data.db.RoomLocalStore(db)
+                assertEquals(setOf("bob"), store.getMessage("o1")!!.readBy)
+                assertTrue(store.getReceipts("o1").isEmpty())
+                store.recordReceipt("c1", "o1", "bob", deliveredAt = 5, readAt = null)
+                store.recordReceipt("c1", "o1", "bob", deliveredAt = 99, readAt = 8)
+                assertEquals(listOf(se.familychat.core.client.ReceiptTimes("o1", "bob", 5, 8)), store.getReceipts("o1"))
+                assertTrue(store.deleteMessageLocally("m1", "c1", 10) != null)
+                assertEquals(null, store.getMessage("m1"))
+                assertTrue(store.isLocallyDeleted("m1"))
+                assertEquals(listOf("m2"), SearchRepository(db).search("hej").map { it.messageId })
+            }
+        } finally {
+            db.close()
+            context.deleteDatabase("familychat-upgrade3.db")
         }
     }
 

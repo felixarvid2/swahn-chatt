@@ -134,6 +134,19 @@ Risks of libsignal that we accept and mitigate:
 - **App lock and screenshot blocking** (`FLAG_SECURE`) are UI gates only. The database key does not depend on the
   lock, so they protect against someone holding the unlocked phone, not against a forensic attacker.
 
+## QR codes, local deletion and unknown content
+
+- **QR codes are untrusted input.** An invitation QR (`familychat://invite?v=1&server=…&code=…`) is parsed
+  strictly. It may only pre-fill the invitation form and shows the server host prominently, with a warning for
+  punycode hosts. It never submits, never touches the login form or the saved server address, and accepts https
+  only in release builds. No system intent filter is registered, so no other app or web page can open FamilyChat
+  with an invitation. Safety-number QR codes carry the libsignal scannable fingerprint and are compared with
+  `matchesScanned`.
+- **"Radera för mig"** deletes the message, its receipts and its downloaded files on this phone only, and writes a
+  local tombstone so a later sync, edit or receipt cannot bring it back. Nothing is sent. "Radera för alla" is the
+  authenticated, encrypted delete described above.
+- **Unknown content:** clients ignore unknown JSON fields. Content with an unknown type or version is not applied.
+
 ## Keys on the phone
 
 - The local Room database (messages, contacts and the libsignal session/identity/prekey stores) is encrypted
@@ -334,7 +347,7 @@ metadata and password hashes.
 
 - Metadata (who, when, group names and members, receipts, sizes) is visible to the server.
 - No sealed sender, no encrypted group metadata, no reproducible builds.
-- Safety-number verification is manual (no QR scanning yet).
+- Safety-number verification is manual: compare the 60 digits or scan the other phone's QR code in person.
 - The first device list fetched for a user, and the first view of a conversation's members, are accepted as the
   baseline without a notice. A server that is already malicious at that moment is not detected unless you
   compare safety numbers.
