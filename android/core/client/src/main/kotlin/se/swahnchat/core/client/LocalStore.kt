@@ -2,6 +2,8 @@ package se.swahnchat.core.client
 
 import se.swahnchat.core.model.Conversation
 import se.swahnchat.core.model.Device
+import se.swahnchat.core.model.PollOption
+import se.swahnchat.core.model.PollSpec
 import se.swahnchat.core.model.User
 
 /** The signed-in account of this installation. Tokens are NOT here; they live behind `TokenProvider`. */
@@ -161,6 +163,31 @@ data class Reaction(
 )
 
 /**
+ * The poll a message is: the question is the message's text. [closed] is set when the creator closed it (the closing counts
+ * only from the creator, see `SyncProcessor`).
+ */
+data class PollInfo(val options: List<PollOption>, val multiple: Boolean, val closed: Boolean = false) {
+    fun toSpec() = PollSpec(options, multiple)
+
+    companion object {
+        fun of(spec: PollSpec) = PollInfo(spec.options, spec.multiple)
+    }
+}
+
+/**
+ * One member's vote on one poll: the chosen option ids (empty: withdrawn). Like a [Reaction] a member has at most one per
+ * poll, the highest [seq] wins, and [seq] is null while our own vote waits in the outbox (it then wins over everything stored).
+ */
+data class PollVote(
+    val messageId: String,
+    val conversationId: String,
+    val userId: String,
+    val optionIds: List<Int>,
+    val seq: Long?,
+    val at: Long,
+)
+
+/**
  * The disappearing-messages timer of a conversation as this phone knows it: [seconds] (0: off), set by [setBy] with the
  * encrypted `timer` message numbered [seq] (null while ours is not sent yet). Never derived from the server's field.
  */
@@ -211,6 +238,12 @@ data class StoredMessage(
     val expiresIn: Long? = null,
     /** When it is removed from this phone (epoch ms): set when first displayed here, `displayed + expiresIn`. Null until then. */
     val expireAt: Long? = null,
+    /** Members named with `@` in a group message (user ids; only members as of receiving it). Part of the encrypted content. */
+    val mentions: List<String> = emptyList(),
+    /** Set when the message is a poll (the question is [text]). */
+    val poll: PollInfo? = null,
+    /** An outgoing message waiting for its time (epoch ms): it is in the outbox, not sent, until then. Local only. */
+    val scheduledAt: Long? = null,
 ) {
     val isSystem: Boolean get() = systemEvent != null
 }
@@ -268,12 +301,25 @@ data class OutboxEntry(
     val expiresIn: Long? = null,
     /** Reaction ([text] is the emoji): true when it is taken back. */
     val remove: Boolean = false,
+    /** Content `mentions` of a group message. */
+    val mentions: List<String> = emptyList(),
+    /** A `message` entry that is a poll ([text] is the question). */
+    val poll: PollSpec? = null,
+    /** [OutboxKind.POLL_VOTE]: the chosen option ids (empty: withdrawn). */
+    val optionIds: List<Int>? = null,
+    /** [OutboxKind.POLL_VOTE]: the creator closes the poll. */
+    val close: Boolean = false,
+    /** Scheduled message: nothing is sent before this time (epoch ms). Local only; cleared when the entry is released. */
+    val sendAt: Long? = null,
 )
 
 /** Outbox kinds that are not a server message kind. */
 object OutboxKind {
     /** A change of the disappearing-messages timer: encrypted `timer` content in a `message`. */
     const val TIMER = "timer"
+
+    /** A vote on a poll, or its closing: encrypted `poll_vote` content in a message of kind `reaction`. */
+    const val POLL_VOTE = "poll_vote"
 }
 
 /**
@@ -382,6 +428,34 @@ interface LocalStore {
 
     /** The reactions that stand (not taken back) on [messageId]. */
     suspend fun getReactions(messageId: String): List<Reaction>
+
+    // --- poll votes, stars and mentions ---------------------------------------------------------------------------------
+    suspend fun getPollVote(messageId: String, userId: String): PollVote?
+
+    /** Insert or replace the member's vote row (the caller decided it is the newest). */
+    suspend fun putPollVote(vote: PollVote)
+
+    /** Forgets the member's vote row for [messageId] (an unsent vote that failed for good). */
+    suspend fun removePollVote(messageId: String, userId: String)
+
+    /** Forgets every vote on [messageId] (the poll was deleted). */
+    suspend fun removePollVotes(messageId: String)
+
+    /** The votes that stand on [messageId]; a withdrawn vote (no options) is not among them. */
+    suspend fun getPollVotes(messageId: String): List<PollVote>
+
+    /**
+     * Stars (local only, never sent): marks [messageId] as starred, or removes the mark. A star goes with the message
+     * ([deleteMessageLocally], deletion for everyone, expiry) and with the conversation.
+     */
+    suspend fun setStarred(messageId: String, conversationId: String, starred: Boolean, at: Long)
+    suspend fun isStarred(messageId: String): Boolean
+
+    /** The starred messages, newest star first (of [conversationId], or of all conversations when null). */
+    suspend fun starredMessages(conversationId: String? = null): List<StoredMessage>
+
+    /** Incoming, unread, non-deleted messages of the conversation that mention [userId]. */
+    suspend fun unreadMentionCount(conversationId: String, userId: String): Int
     suspend fun getTimer(conversationId: String): ConversationTimer?
     suspend fun putTimer(timer: ConversationTimer)
 

@@ -40,6 +40,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -48,7 +49,9 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
@@ -170,6 +173,7 @@ fun ConversationsScreen(
     onNew: () -> Unit,
     onSettings: () -> Unit,
     onSearch: () -> Unit,
+    onStarred: () -> Unit = {},
     vm: ConversationsViewModel = hiltViewModel(),
 ) {
     val items by vm.items.collectAsStateWithLifecycle()
@@ -188,7 +192,7 @@ fun ConversationsScreen(
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(vm) { vm.messages.collect { snackbar.showSnackbar(context.getString(it, MAX_PINNED)) } }
     ConversationsContent(
-        items, refreshing, vm::refresh, onOpen, onNew, onSettings, connection = connection, onSearch = onSearch,
+        items, refreshing, vm::refresh, onOpen, onNew, onSettings, connection = connection, onSearch = onSearch, onStarred = onStarred,
         actions = ConversationActions(vm::pin, vm::unpin, vm::mute, vm::unmute, vm::archive, vm::unarchive),
         snackbarHost = { SnackbarHost(snackbar) },
     )
@@ -216,6 +220,7 @@ fun ConversationsContent(
     modifier: Modifier = Modifier,
     connection: ConnectionUi = ConnectionUi.HIDDEN,
     onSearch: () -> Unit = {},
+    onStarred: () -> Unit = {},
     actions: ConversationActions = ConversationActions(),
     snackbarHost: @Composable () -> Unit = {},
     archivedExpanded: Boolean = false,
@@ -224,6 +229,7 @@ fun ConversationsContent(
     var showArchived by rememberSaveable { mutableStateOf(archivedExpanded) }
     var menuFor by remember { mutableStateOf<String?>(null) }
     var muteFor by remember { mutableStateOf<String?>(null) }
+    var overflow by remember { mutableStateOf(false) }
     Scaffold(
         modifier = modifier,
         snackbarHost = snackbarHost,
@@ -236,6 +242,18 @@ fun ConversationsContent(
                     }
                     IconButton(onClick = onSettings, modifier = Modifier.size(48.dp)) {
                         Icon(Icons.Filled.Settings, contentDescription = stringResource(R.string.settings))
+                    }
+                    Box {
+                        IconButton(onClick = { overflow = true }, modifier = Modifier.size(48.dp)) {
+                            Icon(Icons.Filled.MoreVert, contentDescription = stringResource(R.string.action_more))
+                        }
+                        DropdownMenu(expanded = overflow, onDismissRequest = { overflow = false }) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.menu_starred)) },
+                                leadingIcon = { Icon(Icons.Filled.Star, null) },
+                                onClick = { overflow = false; onStarred() },
+                            )
+                        }
                     }
                 },
             )
@@ -411,6 +429,17 @@ fun ConversationRow(item: ConversationItemUi, onClick: () -> Unit, modifier: Mod
                     modifier = Modifier.padding(start = 4.dp).size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
               }
+            if (item.mentioned) {
+                // an unread message names you: the "@" stays even when the conversation is muted
+                val mentionDescription = stringResource(R.string.mention_marker_description)
+                Box(
+                    Modifier.padding(start = 6.dp).heightIn(min = 22.dp).defaultMinSize(minWidth = 22.dp).clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.tertiary).semantics { contentDescription = mentionDescription },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text("@", color = MaterialTheme.colorScheme.onTertiary, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                }
+            }
             if (item.unread > 0) {
                 Box(
                     Modifier.padding(start = 6.dp).heightIn(min = 22.dp).clip(CircleShape)

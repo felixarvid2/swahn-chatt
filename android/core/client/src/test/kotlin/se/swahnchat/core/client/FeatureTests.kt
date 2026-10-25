@@ -87,7 +87,7 @@ class ForwardCompatibilityTest : FeatureTestBase() {
         return id
     }
 
-    private fun unknown(conv: String, id: String = UUID.randomUUID().toString(), type: String = "poll", target: String? = null) =
+    private fun unknown(conv: String, id: String = UUID.randomUUID().toString(), type: String = "hologram", target: String? = null) =
         Content(type = type, text = "ignored", conversationId = conv, messageId = id, targetMessageId = target)
 
     @Test
@@ -173,7 +173,7 @@ class ForwardCompatibilityTest : FeatureTestBase() {
         val t = trio()
         val rogue = rogueOf(t.bob, t.alice)
         val id = UUID.randomUUID().toString()
-        rogue.deliver(t.alice, t.bob, t.ab, Content(v = 3, type = "poll", conversationId = t.ab, messageId = id))
+        rogue.deliver(t.alice, t.bob, t.ab, Content(v = 3, type = "hologram", conversationId = t.ab, messageId = id))
         t.alice.engine.sync()
         assertEquals(DecryptError.CORRUPT, t.alice.store.getMessage(id)!!.decryptError)
     }
@@ -182,8 +182,8 @@ class ForwardCompatibilityTest : FeatureTestBase() {
     fun `a message kind from a newer server is consumed, shows nothing and notes the update once`() = runBlocking<Unit> {
         val t = trio()
         val rogue = rogueOf(t.bob, t.alice)
-        val first = rogue.deliver(t.alice, t.bob, t.ab, unknown(t.ab, type = "poll"), kind = "poll")
-        val second = rogue.deliver(t.alice, t.bob, t.ab, unknown(t.ab, type = "poll"), kind = "poll")
+        val first = rogue.deliver(t.alice, t.bob, t.ab, unknown(t.ab, type = "hologram"), kind = "hologram")
+        val second = rogue.deliver(t.alice, t.bob, t.ab, unknown(t.ab, type = "hologram"), kind = "hologram")
         val textId = UUID.randomUUID().toString()
         rogue.deliver(t.alice, t.bob, t.ab, Content(text = "after", conversationId = t.ab, messageId = textId))
         t.alice.engine.sync()
@@ -197,7 +197,7 @@ class ForwardCompatibilityTest : FeatureTestBase() {
     fun `an unknown kind without ciphertext is skipped`() = runBlocking<Unit> {
         val t = trio()
         val rogue = rogueOf(t.bob, t.alice)
-        val id = rogue.deliver(t.alice, t.bob, t.ab, unknown(t.ab), kind = "poll", withEnvelope = false)
+        val id = rogue.deliver(t.alice, t.bob, t.ab, unknown(t.ab), kind = "hologram", withEnvelope = false)
         t.alice.engine.sync()
         assertNull(t.alice.store.getMessage(id))
         assertTrue(t.alice.notices(t.ab).none { it == SystemEvent.UpdateRequired })
@@ -208,7 +208,7 @@ class ForwardCompatibilityTest : FeatureTestBase() {
         // The very first envelope from a new device is a prekey message; if it were dropped unread, the next one would fail.
         val t = trio()
         val rogue = rogueOf(t.bob, t.alice)
-        rogue.deliver(t.alice, t.bob, t.ab, unknown(t.ab), kind = "poll")
+        rogue.deliver(t.alice, t.bob, t.ab, unknown(t.ab), kind = "hologram")
         val textId = UUID.randomUUID().toString()
         rogue.deliver(t.alice, t.bob, t.ab, Content(text = "second", conversationId = t.ab, messageId = textId))
         t.alice.engine.sync()

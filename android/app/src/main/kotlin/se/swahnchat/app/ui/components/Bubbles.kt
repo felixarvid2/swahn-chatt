@@ -43,6 +43,10 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.StarBorder
+import androidx.compose.material.icons.filled.EditCalendar
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.BrokenImage
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material3.CircularProgressIndicator
@@ -61,11 +65,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.Role
@@ -129,6 +135,18 @@ class BubbleActions(
     val onReact: (messageId: String, emoji: String) -> Unit = { _, _ -> },
     /** Opens the conversation picker to forward the message. */
     val onForward: (String) -> Unit = {},
+    /** Stars the message ([starred] true) or takes the star away; local only. */
+    val onStar: (messageId: String, starred: Boolean) -> Unit = { _, _ -> },
+    /** Votes on a poll: the new choice (empty: the vote is withdrawn). */
+    val onVote: (messageId: String, optionIds: List<Int>) -> Unit = { _, _ -> },
+    /** The creator ends a poll (the screen asks first). */
+    val onClosePoll: (String) -> Unit = {},
+    /** A person named with `@` was tapped. */
+    val onOpenMention: (userId: String) -> Unit = {},
+    /** Scheduled messages: change the time (the screen shows the picker), send now, throw away (the screen asks first). */
+    val onReschedule: (String) -> Unit = {},
+    val onSendScheduledNow: (String) -> Unit = {},
+    val onCancelScheduled: (String) -> Unit = {},
 )
 
 /** Decodes a thumbnail from the message. It is untrusted input: refuse anything that is not a small image. */
@@ -164,10 +182,11 @@ fun MessageBubble(
     val topPadding = if (row.firstOfRun) 8.dp else 2.dp
     val time = clock(m.time)
     val description = bubbleDescription(m, time)
-    val links = remember(m.text, m.deleted) { if (m.deleted || m.text.isNullOrBlank()) emptyList() else findLinks(m.text) }
+    val links = remember(m.text, m.deleted) { if (m.deleted || m.text.isNullOrBlank()) emptyList() else findLinks(plainFormatted(m.text)) }
     val openLinkLabels = links.map { l -> stringResource(R.string.link_open_action, describeLink(l.url)?.target ?: l.url) }
 
-    val canReply = !m.deleted && m.undecryptable == null
+    val scheduled = m.scheduledAt != null
+    val canReply = !m.deleted && m.undecryptable == null && !scheduled
     val replyLabel = stringResource(R.string.action_reply)
     val infoLabel = stringResource(R.string.action_message_info)
     SwipeToReply(enabled = canReply, onReply = { actions.onReply(m.id) }, modifier = modifier.fillMaxWidth()) {
@@ -188,6 +207,7 @@ fun MessageBubble(
                         color = container,
                         contentColor = content,
                         modifier = Modifier
+                            .then(if (scheduled) Modifier.alpha(SCHEDULED_ALPHA) else Modifier)
                             .clip(shape)
                             .combinedClickable(
                                 onClick = { if (m.failed) actions.onRetry(m.id) },
@@ -218,7 +238,7 @@ fun MessageBubble(
                             when {
                                 m.deleted -> DeletedPlaceholder(content)
                                 m.undecryptable != null -> UndecryptablePlaceholder(m.undecryptable, actions.onReviewIdentity)
-                                else -> BubbleBody(m, actions, playback, content)
+                                else -> BubbleBody(m, actions, playback, content, onLongPress = { menuOpen = true })
                             }
                             BubbleFooter(m, time, content)
                             if (m.failed) {
@@ -236,69 +256,10 @@ fun MessageBubble(
                         }
                     }
                     DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                        if (m.canReact) {
-                            QuickReactionRow(
-                                selected = m.myReaction,
-                                onPick = { menuOpen = false; actions.onReact(m.id, it) },
-                                onMore = { menuOpen = false; pickerOpen = true },
-                            )
-                            HorizontalDivider(Modifier.padding(vertical = 4.dp))
-                        }
-                        if (canReply) {
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.action_reply)) },
-                                leadingIcon = { Icon(Icons.AutoMirrored.Filled.Reply, null) },
-                                onClick = { menuOpen = false; actions.onReply(m.id) },
-                            )
-                        }
-                        if (m.canForward) {
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.action_forward)) },
-                                leadingIcon = { Icon(Icons.AutoMirrored.Filled.Forward, null) },
-                                onClick = { menuOpen = false; actions.onForward(m.id) },
-                            )
-                        }
-                        if (m.canEdit) {
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.action_edit)) },
-                                leadingIcon = { Icon(Icons.Filled.Edit, null) },
-                                onClick = { menuOpen = false; actions.onEdit(m.id) },
-                            )
-                        }
-                        if (!m.text.isNullOrBlank() && !m.deleted) {
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.action_copy)) },
-                                leadingIcon = { Icon(Icons.Filled.ContentCopy, null) },
-                                onClick = { menuOpen = false; actions.onCopy(m.text) },
-                            )
-                        }
-                        if (m.failed) {
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.action_retry)) },
-                                leadingIcon = { Icon(Icons.Filled.Refresh, null) },
-                                onClick = { menuOpen = false; actions.onRetry(m.id) },
-                            )
-                        }
-                        if (m.canShowInfo) {
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.action_message_info)) },
-                                leadingIcon = { Icon(Icons.Filled.Info, null) },
-                                onClick = { menuOpen = false; actions.onInfo(m.id) },
-                            )
-                        }
-                        if (m.canDeleteForMe) {
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.action_delete_for_me)) },
-                                leadingIcon = { Icon(Icons.Filled.Delete, null) },
-                                onClick = { menuOpen = false; actions.onDeleteForMe(m.id) },
-                            )
-                        }
-                        if (m.canDelete) {
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.action_delete_for_everyone)) },
-                                leadingIcon = { Icon(Icons.Filled.DeleteForever, null) },
-                                onClick = { menuOpen = false; actions.onDelete(m.id) },
-                            )
+                        if (scheduled) {
+                            ScheduledMenuItems(m, actions, onDone = { menuOpen = false })
+                        } else {
+                            MessageMenuItems(m, actions, canReply, closeMenu = { menuOpen = false }, openPicker = { pickerOpen = true })
                         }
                     }
                 }
@@ -316,7 +277,7 @@ fun MessageBubble(
 }
 
 @Composable
-private fun BubbleBody(m: MessageUi, actions: BubbleActions, playback: PlaybackUi, content: Color) {
+private fun BubbleBody(m: MessageUi, actions: BubbleActions, playback: PlaybackUi, content: Color, onLongPress: () -> Unit) {
     if (m.forwarded || m.imported) {
         // "Importerad" is always shown, also on a forwarded message: a file can set `forwarded` and must not hide where a message came from
         val label = listOfNotNull(
@@ -347,14 +308,140 @@ private fun BubbleBody(m: MessageUi, actions: BubbleActions, playback: PlaybackU
         AttachmentView(m.id, a, actions, playback)
         Spacer(Modifier.height(4.dp))
     }
-    if (!m.text.isNullOrBlank()) {
-        val linkColor = if (m.outgoing) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.primary
-        val text = remember(m.text, linkColor, actions) {
-            linkify(m.text, SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline), actions.onOpenLink)
+    val poll = m.poll
+    if (poll != null) {
+        PollView(m, poll, content, onVote = { actions.onVote(m.id, it) }, onLongPress = onLongPress)
+    } else if (!m.text.isNullOrBlank()) {
+        val scheme = MaterialTheme.colorScheme
+        val linkColor = if (m.outgoing) scheme.onPrimaryContainer else scheme.primary
+        val style = remember(linkColor, scheme) {
+            MessageTextStyle(
+                linkStyle = SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline),
+                codeBackground = content.copy(alpha = 0.12f),
+                mentionStyle = SpanStyle(color = scheme.primary, fontWeight = FontWeight.SemiBold, background = scheme.primary.copy(alpha = 0.12f)),
+                myMentionStyle = SpanStyle(color = scheme.onPrimary, fontWeight = FontWeight.Bold, background = scheme.primary),
+            )
+        }
+        val names = remember(m.mentions) { m.mentions.map { MentionName(it.userId, it.name, it.isMe) } }
+        val text = remember(m.text, style, names, actions) {
+            formatMessage(m.text, style, names, onLink = actions.onOpenLink, onMention = actions.onOpenMention)
         }
         // read as part of the bubble's description; the bubble offers the links as accessibility actions
         Text(text, style = MaterialTheme.typography.bodyLarge, color = content, modifier = Modifier.padding(top = 2.dp).clearAndSetSemantics {})
     }
+}
+
+/** The long-press menu of a message that has been sent (or is received). */
+@Composable
+private fun MessageMenuItems(m: MessageUi, actions: BubbleActions, canReply: Boolean, closeMenu: () -> Unit, openPicker: () -> Unit) {
+    if (m.canReact) {
+        QuickReactionRow(
+            selected = m.myReaction,
+            onPick = { closeMenu(); actions.onReact(m.id, it) },
+            onMore = { closeMenu(); openPicker() },
+        )
+        HorizontalDivider(Modifier.padding(vertical = 4.dp))
+    }
+    if (canReply) {
+        DropdownMenuItem(
+            text = { Text(stringResource(R.string.action_reply)) },
+            leadingIcon = { Icon(Icons.AutoMirrored.Filled.Reply, null) },
+            onClick = { closeMenu(); actions.onReply(m.id) },
+        )
+    }
+    if (m.canStar) {
+        DropdownMenuItem(
+            text = { Text(stringResource(if (m.starred) R.string.action_unstar else R.string.action_star)) },
+            leadingIcon = { Icon(if (m.starred) Icons.Filled.StarBorder else Icons.Filled.Star, null) },
+            onClick = { closeMenu(); actions.onStar(m.id, !m.starred) },
+        )
+    }
+    if (m.poll?.canClose == true) {
+        DropdownMenuItem(
+            text = { Text(stringResource(R.string.poll_close_action)) },
+            leadingIcon = { Icon(Icons.Filled.Lock, null) },
+            onClick = { closeMenu(); actions.onClosePoll(m.id) },
+        )
+    }
+    if (m.canForward) {
+        DropdownMenuItem(
+            text = { Text(stringResource(R.string.action_forward)) },
+            leadingIcon = { Icon(Icons.AutoMirrored.Filled.Forward, null) },
+            onClick = { closeMenu(); actions.onForward(m.id) },
+        )
+    }
+    if (m.canEdit) {
+        DropdownMenuItem(
+            text = { Text(stringResource(R.string.action_edit)) },
+            leadingIcon = { Icon(Icons.Filled.Edit, null) },
+            onClick = { closeMenu(); actions.onEdit(m.id) },
+        )
+    }
+    if (!m.text.isNullOrBlank() && !m.deleted) {
+        DropdownMenuItem(
+            text = { Text(stringResource(R.string.action_copy)) },
+            leadingIcon = { Icon(Icons.Filled.ContentCopy, null) },
+            onClick = { closeMenu(); actions.onCopy(m.text) },
+        )
+    }
+    if (m.failed) {
+        DropdownMenuItem(
+            text = { Text(stringResource(R.string.action_retry)) },
+            leadingIcon = { Icon(Icons.Filled.Refresh, null) },
+            onClick = { closeMenu(); actions.onRetry(m.id) },
+        )
+    }
+    if (m.canShowInfo) {
+        DropdownMenuItem(
+            text = { Text(stringResource(R.string.action_message_info)) },
+            leadingIcon = { Icon(Icons.Filled.Info, null) },
+            onClick = { closeMenu(); actions.onInfo(m.id) },
+        )
+    }
+    if (m.canDeleteForMe) {
+        DropdownMenuItem(
+            text = { Text(stringResource(R.string.action_delete_for_me)) },
+            leadingIcon = { Icon(Icons.Filled.Delete, null) },
+            onClick = { closeMenu(); actions.onDeleteForMe(m.id) },
+        )
+    }
+    if (m.canDelete) {
+        DropdownMenuItem(
+            text = { Text(stringResource(R.string.action_delete_for_everyone)) },
+            leadingIcon = { Icon(Icons.Filled.DeleteForever, null) },
+            onClick = { closeMenu(); actions.onDelete(m.id) },
+        )
+    }
+}
+
+/** Alpha of a message that waits for its time. */
+private const val SCHEDULED_ALPHA = 0.62f
+
+/** What can be done with a message that is scheduled: edit the text, change the time, send it now, throw it away. */
+@Composable
+private fun ScheduledMenuItems(m: MessageUi, actions: BubbleActions, onDone: () -> Unit) {
+    if (m.canEdit) {
+        DropdownMenuItem(
+            text = { Text(stringResource(R.string.action_edit)) },
+            leadingIcon = { Icon(Icons.Filled.Edit, null) },
+            onClick = { onDone(); actions.onEdit(m.id) },
+        )
+    }
+    DropdownMenuItem(
+        text = { Text(stringResource(R.string.scheduled_change_time)) },
+        leadingIcon = { Icon(Icons.Filled.EditCalendar, null) },
+        onClick = { onDone(); actions.onReschedule(m.id) },
+    )
+    DropdownMenuItem(
+        text = { Text(stringResource(R.string.scheduled_send_now)) },
+        leadingIcon = { Icon(Icons.AutoMirrored.Filled.Send, null) },
+        onClick = { onDone(); actions.onSendScheduledNow(m.id) },
+    )
+    DropdownMenuItem(
+        text = { Text(stringResource(R.string.scheduled_delete)) },
+        leadingIcon = { Icon(Icons.Filled.Delete, null) },
+        onClick = { onDone(); actions.onCancelScheduled(m.id) },
+    )
 }
 
 @Composable
@@ -404,11 +491,20 @@ private fun BubbleFooter(m: MessageUi, time: String, content: Color) {
             Icon(Icons.Filled.Timer, contentDescription = null, tint = content.copy(alpha = 0.7f), modifier = Modifier.size(12.dp))
             Spacer(Modifier.width(4.dp))
         }
+        if (m.starred && !m.deleted) {
+            Icon(Icons.Filled.Star, contentDescription = null, tint = content.copy(alpha = 0.8f), modifier = Modifier.size(12.dp))
+            Spacer(Modifier.width(4.dp))
+        }
         if (m.edited && !m.deleted) {
             Text(stringResource(R.string.message_edited), style = MaterialTheme.typography.labelSmall, color = content.copy(alpha = 0.7f))
             Spacer(Modifier.width(6.dp))
         }
-        Text(time, style = MaterialTheme.typography.labelSmall, color = content.copy(alpha = 0.7f))
+        if (m.scheduledAt != null) {
+            Text(
+                stringResource(R.string.scheduled_at, rememberScheduleFormatter()(m.scheduledAt)),
+                style = MaterialTheme.typography.labelSmall, color = content.copy(alpha = 0.85f),
+            )
+        } else Text(time, style = MaterialTheme.typography.labelSmall, color = content.copy(alpha = 0.7f))
         if (m.outgoing) {
             Spacer(Modifier.width(4.dp))
             DeliveryIcon(m.delivery, content, describe = false)
@@ -465,7 +561,14 @@ fun bubbleDescription(m: MessageUi, time: String): String {
                     else -> kind
                 }
             }
-            if (!m.text.isNullOrBlank()) parts += m.text
+            if (!m.text.isNullOrBlank()) parts += plainFormatted(m.text)
+            m.poll?.let { p ->
+                val counts = p.options.map { o -> "${o.text}: ${pluralStringResource(R.plurals.poll_votes, o.count, o.count)}" }
+                parts += counts.joinToString("; ")
+                if (p.closed) parts += stringResource(R.string.poll_closed)
+            }
+            if (m.starred) parts += stringResource(R.string.starred_icon_description)
+            m.scheduledAt?.let { parts += stringResource(R.string.scheduled_bubble_description, rememberScheduleFormatter()(it)) }
             if (m.edited) parts += stringResource(R.string.message_edited)
             if (m.reactions.isNotEmpty()) parts += m.reactions.joinToString(" ") { "${it.emoji} ${it.count}" }
         }

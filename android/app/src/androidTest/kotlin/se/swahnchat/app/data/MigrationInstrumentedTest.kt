@@ -17,7 +17,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
- * The migration chain 1 -> 2 -> 3 -> 4 -> 5 on a device, on real SQLCipher files: phones in the field are on version 1 or 2 and their
+ * The migration chain 1 -> 2 -> 3 -> 4 -> 5 -> 6 on a device, on real SQLCipher files: phones in the field are on version 1 or 2 and their
  * data must survive, including the full text index. The schemas come from the exported `app/schemas/ JSON files` (test APK assets).
  */
 @Suppress("MaxLineLength") // SQL fixtures
@@ -38,7 +38,7 @@ class MigrationInstrumentedTest {
     }
 
     @Before fun cleanUp() {
-        listOf("mig-v1-v3", "mig-v2-v3", "mig-v3-v4", "mig-v4-v5", "mig-app-v1", "mig-app-v3", "mig-app-v4").forEach { appContext.deleteDatabase(it) }
+        listOf("mig-v1-v3", "mig-v2-v3", "mig-v3-v4", "mig-v4-v5", "mig-v5-v6", "mig-app-v5", "mig-app-v1", "mig-app-v3", "mig-app-v4").forEach { appContext.deleteDatabase(it) }
     }
 
     private val messageColumns = "id, conversationId, senderUserId, senderDeviceId, outgoing, status, seq, clientTs, serverTs, text, replyTo, " +
@@ -174,6 +174,58 @@ class MigrationInstrumentedTest {
             db.execSQL("INSERT INTO conversation_timers (conversationId, seconds, setBy, seq, at) VALUES ('c1', 3600, 'bob', 3, 4)")
             assertEquals(1L, db.count("reactions"))
             assertEquals(1L, db.count("conversation_timers"))
+        }
+    }
+
+    /** Version 5 as an updated phone holds it: version 4 data, an unsent message with the columns of version 5. */
+    private fun fillVersion5(db: SupportSQLiteDatabase) {
+        fillVersion4(db)
+        db.execSQL("INSERT INTO outbox (messageId, conversationId, kind, targetMessageId, text, replyTo, attachments, clientTs, envelopes, attempts, lastError, createdAt, forwarded, expiresIn, `remove`) VALUES ('p2', 'c1', 'message', NULL, 'även väntar', NULL, '[]', 13, NULL, 0, NULL, 14, 0, 3600, 0)")
+    }
+
+    @Test fun version5To6KeepsDataAndAddsPollVotesStarsAndTheNewColumns() {
+        helper.createDatabase("mig-v5-v6", 5).use { fillVersion5(it) }
+        helper.runMigrationsAndValidate("mig-v5-v6", 6, true, *AppDatabase.MIGRATIONS).use { db ->
+            assertEquals(5L, db.count("messages"))
+            assertEquals(2L, db.count("outbox"))
+            assertEquals(0L, db.count("poll_votes"))
+            assertEquals(0L, db.count("starred_messages"))
+            db.query("SELECT mentions, poll, scheduledAt FROM messages WHERE id = 'm1'").use { c ->
+                assertTrue(c.moveToFirst()); assertEquals("", c.getString(0)); assertTrue(c.isNull(1) && c.isNull(2))
+            }
+            db.query("SELECT mentions, poll, optionIds, `close`, sendAt, expiresIn, text FROM outbox WHERE messageId = 'p2'").use { c ->
+                assertTrue(c.moveToFirst())
+                assertEquals("", c.getString(0)); assertTrue(c.isNull(1) && c.isNull(2)); assertEquals(0, c.getInt(3)); assertTrue(c.isNull(4))
+                assertEquals(3600L, c.getLong(5)); assertEquals("även väntar", c.getString(6))
+            }
+            assertEquals(listOf("m1", "m2"), db.matches("hej"))
+            db.execSQL("INSERT INTO poll_votes (messageId, userId, conversationId, optionIds, seq, at) VALUES ('m1', 'bob', 'c1', '0,2', 5, 6)")
+            db.execSQL("INSERT INTO starred_messages (messageId, conversationId, starredAt) VALUES ('m1', 'c1', 7)")
+            assertEquals(1L, db.count("poll_votes"))
+            assertEquals(1L, db.count("starred_messages"))
+        }
+    }
+
+    @Test fun theAppsOwnBuilderOpensAVersion5FileOnSqlcipherAndMentionsPollsStarsAndSchedulesWork() {
+        helper.createDatabase("mig-app-v5", 5).use { fillVersion5(it) }
+        val db = AppDatabase.build(appContext, cipherFactory, "mig-app-v5")
+        try {
+            runBlocking {
+                val store = se.swahnchat.app.data.db.RoomLocalStore(db)
+                assertEquals(emptyList(), store.getMessage("m1")!!.mentions)
+                assertEquals(null, store.getOutboxEntry("p2")!!.sendAt)
+                store.putOutbox(store.getOutboxEntry("p2")!!.copy(sendAt = 9_000, mentions = listOf("bob")))
+                assertEquals(9_000L, store.getOutboxEntry("p2")!!.sendAt)
+                store.putPollVote(se.swahnchat.core.client.PollVote("m1", "c1", "bob", listOf(1), 5, 6))
+                assertEquals(listOf(1), store.getPollVote("m1", "bob")!!.optionIds)
+                store.setStarred("m2", "c1", true, 3)
+                assertEquals(listOf("m2"), store.starredMessages().map { it.id })
+                store.deleteMessageLocally("m2", "c1", 4)
+                assertEquals(emptyList(), store.starredMessages().map { it.id })
+            }
+        } finally {
+            db.close()
+            appContext.deleteDatabase("mig-app-v5")
         }
     }
 

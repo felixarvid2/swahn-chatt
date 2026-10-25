@@ -21,6 +21,8 @@ class InMemoryLocalStore : LocalStore {
     private val tombstones = HashMap<String, String>() // message id -> conversation id
     private val reactions = HashMap<Pair<String, String>, Reaction>() // (message id, user id)
     private val timers = HashMap<String, ConversationTimer>()
+    private val pollVotes = HashMap<Pair<String, String>, PollVote>() // (message id, user id)
+    private val stars = LinkedHashMap<String, Pair<String, Long>>() // message id -> (conversation id, starred at)
 
     private inline fun <T> sync(block: () -> T): T = synchronized(lock, block)
 
@@ -30,7 +32,7 @@ class InMemoryLocalStore : LocalStore {
     override suspend fun clearAll() = sync {
         account = null; meta.clear(); users.clear(); devices.clear(); conversations.clear(); readSeq.clear()
         messages.clear(); outbox.clear(); cursor = 0; receipts.clear(); receiptConversation.clear(); tombstones.clear()
-        reactions.clear(); timers.clear()
+        reactions.clear(); timers.clear(); pollVotes.clear(); stars.clear()
     }
 
     override suspend fun getMeta(key: String) = sync { meta[key] }
@@ -77,6 +79,8 @@ class InMemoryLocalStore : LocalStore {
         tombstones.values.removeAll { it == id }
         reactions.values.removeAll { it.conversationId == id }
         timers.remove(id)
+        pollVotes.values.removeAll { it.conversationId == id }
+        stars.values.removeAll { it.first == id }
         Unit
     }
 
@@ -137,6 +141,8 @@ class InMemoryLocalStore : LocalStore {
         receipts.keys.removeAll { it.first == id }
         receiptConversation.remove(id)
         reactions.keys.removeAll { it.first == id }
+        pollVotes.keys.removeAll { it.first == id }
+        stars.remove(id)
         messages.remove(id)
     }
 
@@ -146,6 +152,33 @@ class InMemoryLocalStore : LocalStore {
     override suspend fun removeReactions(messageId: String) = sync { reactions.keys.removeAll { it.first == messageId }; Unit }
     override suspend fun getReactions(messageId: String) =
         sync { reactions.values.filter { it.messageId == messageId && it.emoji != null }.sortedWith(compareBy({ it.at }, { it.userId })) }
+
+    override suspend fun getPollVote(messageId: String, userId: String) = sync { pollVotes[messageId to userId] }
+    override suspend fun putPollVote(vote: PollVote) = sync { pollVotes[vote.messageId to vote.userId] = vote; Unit }
+    override suspend fun removePollVote(messageId: String, userId: String) = sync { pollVotes.remove(messageId to userId); Unit }
+    override suspend fun removePollVotes(messageId: String) = sync { pollVotes.keys.removeAll { it.first == messageId }; Unit }
+    override suspend fun getPollVotes(messageId: String) =
+        sync { pollVotes.values.filter { it.messageId == messageId && it.optionIds.isNotEmpty() }.sortedWith(compareBy({ it.at }, { it.userId })) }
+
+    override suspend fun setStarred(messageId: String, conversationId: String, starred: Boolean, at: Long) = sync {
+        if (starred) stars[messageId] = conversationId to at else stars.remove(messageId)
+        Unit
+    }
+
+    override suspend fun isStarred(messageId: String) = sync { messageId in stars }
+
+    override suspend fun starredMessages(conversationId: String?) = sync {
+        stars.entries.filter { conversationId == null || it.value.first == conversationId }
+            .sortedByDescending { it.value.second }.mapNotNull { messages[it.key] }
+    }
+
+    override suspend fun unreadMentionCount(conversationId: String, userId: String) = sync {
+        val mine = readSeq[conversationId] ?: 0L
+        messages.values.count {
+            it.conversationId == conversationId && !it.outgoing && !it.deleted && !it.isSystem && !it.imported &&
+                (it.seq ?: 0) > mine && userId in it.mentions
+        }
+    }
 
     override suspend fun getTimer(conversationId: String) = sync { timers[conversationId] }
     override suspend fun putTimer(timer: ConversationTimer) = sync { timers[timer.conversationId] = timer; Unit }

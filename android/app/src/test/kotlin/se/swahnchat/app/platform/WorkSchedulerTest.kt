@@ -85,4 +85,22 @@ class WorkSchedulerTest {
         scheduler.cancelAll()
         assertTrue(infos(WorkScheduler.EXPIRY).all { it.state == androidx.work.WorkInfo.State.CANCELLED })
     }
+
+    @Test fun `the scheduled-send job waits for the due time, needs a network, is replaced by a later schedule and cancelled when none is left`() {
+        val now = 5_000_000L
+        scheduler.scheduleSend(now + 600_000, now)
+        val first = infos(WorkScheduler.SCHEDULED_SEND).single()
+        assertEquals(NetworkType.CONNECTED, first.constraints.requiredNetworkType)
+        assertTrue(first.tags.any { it.endsWith("ScheduledSendWorker") })
+        assertEquals(600_000L, first.initialDelayMillis)
+        scheduler.scheduleSend(now + 120_000, now) // an earlier one was scheduled: it replaces the job
+        val enqueued = infos(WorkScheduler.SCHEDULED_SEND).filter { it.state == androidx.work.WorkInfo.State.ENQUEUED }
+        assertEquals(1, enqueued.size)
+        assertEquals(120_000L, enqueued.single().initialDelayMillis)
+        scheduler.scheduleSend(null, now) // the last one was sent or thrown away
+        assertTrue(infos(WorkScheduler.SCHEDULED_SEND).all { it.state == androidx.work.WorkInfo.State.CANCELLED })
+        scheduler.scheduleSend(now + 60_000, now)
+        scheduler.cancelAll()
+        assertTrue(infos(WorkScheduler.SCHEDULED_SEND).all { it.state == androidx.work.WorkInfo.State.CANCELLED })
+    }
 }

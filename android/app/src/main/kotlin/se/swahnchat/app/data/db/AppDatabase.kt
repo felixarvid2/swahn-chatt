@@ -9,7 +9,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import androidx.sqlite.db.SupportSQLiteOpenHelper
 
 /**
- * The one database of the app. Version 5 (1: first release; 2: `drafts`; 3: `message_fts` search index, `conversation_settings`;
+ * The one database of the app. Version 6 (1: first release; 2: `drafts`; 3: `message_fts` search index, `conversation_settings`;
  * 4: `message_receipts`, `local_deletions`; 5: `reactions`, `conversation_timers`, columns for forwarded / imported /
  * disappearing messages and timer notices).
  *
@@ -24,6 +24,7 @@ import androidx.sqlite.db.SupportSQLiteOpenHelper
         UserEntity::class, DeviceEntity::class, ConversationEntity::class, MemberEntity::class,
         MessageEntity::class, OutboxEntity::class, DraftEntity::class, MessageFtsEntity::class, ConversationSettingsEntity::class,
         MessageReceiptEntity::class, LocalDeletionEntity::class, ReactionEntity::class, ConversationTimerEntity::class,
+        PollVoteEntity::class, StarredMessageEntity::class,
         SignalIdentityEntity::class, SignalPreKeyEntity::class, SignalSignedPreKeyEntity::class,
         SignalKyberPreKeyEntity::class, SignalLastResortUsedEntity::class, SignalSessionEntity::class,
         SignalRemoteIdentityEntity::class, SignalCounterEntity::class,
@@ -36,7 +37,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun uiDao(): UiDao
 
     companion object {
-        const val VERSION = 5
+        const val VERSION = 6
         const val FILE_NAME = "swahnchat.db"
 
         /** 1 -> 2: the unsent composer text per conversation. Nothing else changes, so no existing row is touched. */
@@ -100,8 +101,32 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * 5 -> 6: poll votes, starred messages (local only), and the columns for @-mentions, polls and scheduled messages.
+         * Additive only: two new tables and `ALTER TABLE ... ADD COLUMN` on `messages` and `outbox` with defaults that mean "as
+         * before" (no mentions, not a poll, not scheduled). No existing row is rewritten; the search index and its triggers do
+         * not involve the new columns.
+         */
+        @Suppress("MaxLineLength") // SQL, copied from the exported 6.json
+        val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS `poll_votes` (`messageId` TEXT NOT NULL, `userId` TEXT NOT NULL, `conversationId` TEXT NOT NULL, `optionIds` TEXT NOT NULL, `seq` INTEGER, `at` INTEGER NOT NULL, PRIMARY KEY(`messageId`, `userId`))")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_poll_votes_conversationId` ON `poll_votes` (`conversationId`)")
+                db.execSQL("CREATE TABLE IF NOT EXISTS `starred_messages` (`messageId` TEXT NOT NULL, `conversationId` TEXT NOT NULL, `starredAt` INTEGER NOT NULL, PRIMARY KEY(`messageId`))")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_starred_messages_conversationId` ON `starred_messages` (`conversationId`)")
+                db.execSQL("ALTER TABLE `messages` ADD COLUMN `mentions` TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE `messages` ADD COLUMN `poll` TEXT")
+                db.execSQL("ALTER TABLE `messages` ADD COLUMN `scheduledAt` INTEGER")
+                db.execSQL("ALTER TABLE `outbox` ADD COLUMN `mentions` TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE `outbox` ADD COLUMN `poll` TEXT")
+                db.execSQL("ALTER TABLE `outbox` ADD COLUMN `optionIds` TEXT")
+                db.execSQL("ALTER TABLE `outbox` ADD COLUMN `close` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE `outbox` ADD COLUMN `sendAt` INTEGER")
+            }
+        }
+
         /** Migrations from older versions; every shipped version needs one (see `MigrationTest`). */
-        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
 
         /** Durable ratchet writes: a lost libsignal step cannot be recovered, so never trade `synchronous` for speed. Also `secure_delete`. */
         private val durability = object : Callback() {

@@ -156,6 +156,17 @@ Risks of libsignal that we accept and mitigate:
   a client never deletes local history because the server says so. Expiry starts when the message is first shown
   on the device and removes the text, files and search index rows. The search index is then merged and the
   database overwrites deleted pages (`secure_delete`), so purged words do not linger.
+- **Mentions, polls, stars, scheduled messages, formatting.** Mention lists (user ids), poll questions and options, and votes
+  are inside the encrypted content, bound to the event like every other content. Votes are sent as message kind `reaction`
+  so the server sees that someone reacted to a message, as with any reaction, but not that it is a vote, for which option,
+  or that the target is a poll; the server cannot tell a vote from an emoji. Members' votes are as visible to the other
+  members as a reaction is (who voted is shown to everybody in the conversation). Receivers ignore mentioned ids that are not
+  members, votes from non-members, votes on non-polls or closed or deleted polls, and a close from anybody but the poll's
+  author. Stars are local only and never sent; they go with the message. A scheduled message is stored only on this phone
+  (in the encrypted database, like the outbox) and is encrypted when it is sent, so it uses the sessions and devices of that
+  moment; nothing reaches the server before then. Formatting markers are only interpreted for display; the text on the wire
+  and in the search index is the text as typed. A mention notification names the sender and the text only as far as the
+  notification privacy setting allows and bypasses the mute of a conversation, not the system's do-not-disturb.
 - **Share target:** Swahn Chat accepts `ACTION_SEND`/`ACTION_SEND_MULTIPLE` from other apps. Shared items are
   untrusted: only `content://` URIs are read (never `file://` or the app's own provider, also with a `0@` user prefix), copies are size-limited
   and never read past the limit, names are sanitised, and the app lock must be unlocked before conversations are

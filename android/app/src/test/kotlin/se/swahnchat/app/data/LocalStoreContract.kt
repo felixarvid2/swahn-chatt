@@ -12,6 +12,8 @@ import se.swahnchat.core.client.LocalStore
 import se.swahnchat.core.client.MessageStatus
 import se.swahnchat.core.client.OutboxAttachment
 import se.swahnchat.core.client.OutboxEntry
+import se.swahnchat.core.client.PollInfo
+import se.swahnchat.core.client.PollVote
 import se.swahnchat.core.client.ReceiptTimes
 import se.swahnchat.core.client.StoredMessage
 import se.swahnchat.core.client.CallOutcome
@@ -20,6 +22,8 @@ import se.swahnchat.core.model.Conversation
 import se.swahnchat.core.model.ConversationMember
 import se.swahnchat.core.model.Device
 import se.swahnchat.core.model.Envelope
+import se.swahnchat.core.model.PollOption
+import se.swahnchat.core.model.PollSpec
 import se.swahnchat.core.model.User
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -410,5 +414,92 @@ abstract class LocalStoreContract {
         assertEquals(listOf("p1"), store.messagesWithAttachments("c1").map { it.id })
         assertEquals(setOf("p1", "p2"), store.messagesWithAttachments().map { it.id }.toSet())
         assertEquals(listOf("a2", "a3"), store.messagesWithAttachments("c2").single().attachments.map { it.id })
+    }
+
+    // --- mentions, polls, stars and scheduled messages (batch 5) -----------------------------------------------------------
+
+    @Test fun `mentions poll and schedule round trip on messages and outbox entries`() = runBlocking {
+        store.upsertConversation(conv("g1", members = listOf("u1", "u2", "u3")))
+        val poll = PollInfo(listOf(PollOption(0, "Ja"), PollOption(1, "Nej")), multiple = true, closed = true)
+        store.upsertMessage(msg("m1", "g1", seq = 1, text = "hej").copy(mentions = listOf("u1", "u3"), poll = poll, scheduledAt = 5_000))
+        val back = store.getMessage("m1")!!
+        assertEquals(listOf("u1", "u3"), back.mentions)
+        assertEquals(poll, back.poll)
+        assertEquals(5_000L, back.scheduledAt)
+        store.upsertMessage(msg("m2", "g1", seq = 2))
+        assertEquals(emptyList(), store.getMessage("m2")!!.mentions)
+        assertNull(store.getMessage("m2")!!.poll); assertNull(store.getMessage("m2")!!.scheduledAt)
+
+        val entry = OutboxEntry("o1", "g1", "message", null, "hej", null, emptyList(), 1, createdAt = 1, mentions = listOf("u2"),
+            poll = PollSpec(listOf(PollOption(0, "A"), PollOption(1, "B")), true), sendAt = 9_000)
+        val vote = OutboxEntry("o2", "g1", "poll_vote", "m1", null, null, emptyList(), 2, createdAt = 2, optionIds = listOf(1, 0), close = false)
+        val closing = OutboxEntry("o3", "g1", "poll_vote", "m1", null, null, emptyList(), 3, createdAt = 3, optionIds = null, close = true)
+        val withdrawn = OutboxEntry("o4", "g1", "poll_vote", "m1", null, null, emptyList(), 4, createdAt = 4, optionIds = emptyList())
+        listOf(entry, vote, closing, withdrawn).forEach { store.putOutbox(it) }
+        assertEquals(entry, store.getOutboxEntry("o1"))
+        assertEquals(listOf(1, 0), store.getOutboxEntry("o2")!!.optionIds)
+        assertTrue(store.getOutboxEntry("o3")!!.close && store.getOutboxEntry("o3")!!.optionIds == null)
+        assertEquals(emptyList(), store.getOutboxEntry("o4")!!.optionIds)
+        assertNull(store.getOutboxEntry("o2")!!.sendAt)
+    }
+
+    @Test fun `unread mentions count only unread incoming messages that name the user`() = runBlocking {
+        store.upsertConversation(conv("g1", members = listOf("u1", "u2", "u3"), myRead = 1))
+        store.upsertMessage(msg("old", "g1", seq = 1).copy(mentions = listOf("u1"))) // read already
+        store.upsertMessage(msg("a", "g1", seq = 2).copy(mentions = listOf("u1", "u3")))
+        store.upsertMessage(msg("b", "g1", seq = 3).copy(mentions = listOf("u3")))
+        store.upsertMessage(msg("mine", "g1", seq = 4, outgoing = true).copy(mentions = listOf("u1")))
+        store.upsertMessage(msg("gone", "g1", seq = 5).copy(mentions = listOf("u1"), deleted = true, text = null))
+        assertEquals(1, store.unreadMentionCount("g1", "u1"))
+        assertEquals(2, store.unreadMentionCount("g1", "u3"))
+        assertEquals(0, store.unreadMentionCount("g1", "u2"))
+        store.setMyReadSeq("g1", 3)
+        assertEquals(0, store.unreadMentionCount("g1", "u1"))
+    }
+
+    @Test fun `poll votes keep one row per member, hide withdrawn ones and go with the message and the conversation`() = runBlocking {
+        store.upsertConversation(conv("c1"))
+        store.upsertMessage(msg("p", "c1", seq = 1))
+        assertNull(store.getPollVote("p", "u2"))
+        store.putPollVote(PollVote("p", "c1", "u2", listOf(0), 2, 20))
+        store.putPollVote(PollVote("p", "c1", "u1", listOf(1, 2), null, 10))
+        store.putPollVote(PollVote("p", "c1", "u2", listOf(1), 3, 30)) // replaces
+        assertEquals(listOf(1), store.getPollVote("p", "u2")!!.optionIds)
+        assertEquals(listOf("u1", "u2"), store.getPollVotes("p").map { it.userId })
+        store.putPollVote(PollVote("p", "c1", "u1", emptyList(), 4, 40)) // withdrawn: the row stays, but is not listed
+        assertEquals(listOf("u2"), store.getPollVotes("p").map { it.userId })
+        assertNotNull(store.getPollVote("p", "u1"))
+        store.removePollVote("p", "u2")
+        assertNull(store.getPollVote("p", "u2"))
+        store.putPollVote(PollVote("p", "c1", "u2", listOf(0), 5, 50))
+        store.deleteMessageLocally("p", "c1", 99)
+        assertEquals(emptyList(), store.getPollVotes("p"))
+        assertNull(store.getPollVote("p", "u1"))
+        store.upsertMessage(msg("p2", "c1", seq = 2))
+        store.putPollVote(PollVote("p2", "c1", "u2", listOf(0), 6, 60))
+        store.removeConversation("c1")
+        assertEquals(emptyList(), store.getPollVotes("p2"))
+    }
+
+    @Test fun `stars are listed newest first per conversation, and go with the message and the conversation`() = runBlocking {
+        store.upsertConversation(conv("c1")); store.upsertConversation(conv("c2"))
+        store.upsertMessage(msg("a", "c1", seq = 1)); store.upsertMessage(msg("b", "c2", seq = 1)); store.upsertMessage(msg("c", "c1", seq = 2))
+        assertTrue(!store.isStarred("a"))
+        store.setStarred("a", "c1", true, 10); store.setStarred("b", "c2", true, 30); store.setStarred("c", "c1", true, 20)
+        assertTrue(store.isStarred("a"))
+        assertEquals(listOf("b", "c", "a"), store.starredMessages().map { it.id })
+        assertEquals(listOf("c", "a"), store.starredMessages("c1").map { it.id })
+        store.setStarred("a", "c1", false, 40)
+        assertEquals(listOf("c"), store.starredMessages("c1").map { it.id })
+        store.setStarred("c", "c1", true, 50) // starring again moves it up, once
+        assertEquals(listOf("c"), store.starredMessages("c1").map { it.id })
+        store.deleteMessageLocally("c", "c1", 60)
+        assertEquals(listOf("b"), store.starredMessages().map { it.id })
+        store.removeConversation("c2")
+        assertEquals(emptyList(), store.starredMessages().map { it.id })
+        assertTrue(!store.isStarred("b"))
+        store.setStarred("b", "c2", true, 1)
+        store.clearAll()
+        assertEquals(emptyList(), store.starredMessages().map { it.id })
     }
 }

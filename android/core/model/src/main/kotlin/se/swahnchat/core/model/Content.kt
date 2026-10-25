@@ -17,8 +17,17 @@ object ContentType {
     /** One step of a 1:1 call's signalling (sent as message kind `call`, never stored; see [CallSignal]). */
     const val CALL = "call"
 
+    /** A poll: the question is [Content.text], the options and the "several choices" flag are in [Content.poll] (sent as an ordinary `message`). */
+    const val POLL = "poll"
+
+    /**
+     * A member's vote on a poll, or the creator's closing of it (sent as message kind `reaction` targeting the poll message, so
+     * the server sees a reaction and nothing that tells it this is a vote; see [Content.optionIds], [Content.close]).
+     */
+    const val POLL_VOTE = "poll_vote"
+
     /** The types this app version understands; anything else is well-formed content from a newer app (see [ContentCodec]). */
-    val KNOWN: Set<String> = setOf(TEXT, EDIT, DELETE, REACTION, TIMER, CALL)
+    val KNOWN: Set<String> = setOf(TEXT, EDIT, DELETE, REACTION, TIMER, CALL, POLL, POLL_VOTE)
 }
 
 object AttachmentKind {
@@ -53,6 +62,14 @@ data class AttachmentRef(
     val thumbnail: String? = null,
 )
 
+/** One answer of a poll; [id] is what a vote names (unique within the poll, 0..9). */
+@Serializable
+data class PollOption(val id: Int, val text: String)
+
+/** The part of a poll besides its question (which is the message text): the options and whether several may be chosen. */
+@Serializable
+data class PollSpec(val options: List<PollOption> = emptyList(), val multiple: Boolean = false)
+
 /**
  * The plaintext of a message (before libsignal encryption): versioned JSON, padded to a multiple of
  * [Padding.BLOCK_SIZE] bytes by [ContentCodec].
@@ -64,10 +81,13 @@ data class AttachmentRef(
  * `type = "edit"`: [text] is the new text. `type = "delete"`: only the binding fields are set. [replyTo] is the id of
  * the message this one replies to. `type = "reaction"`: [targetMessageId] is the message reacted to, [emoji] the reaction,
  * [remove] true when the reaction is taken back. `type = "timer"`: [seconds] is the new disappearing-messages timer (0: off).
- * `type = "call"`: [call] is the signalling step.
+ * `type = "call"`: [call] is the signalling step. `type = "poll"`: [text] is the question and [poll] the options.
+ * `type = "poll_vote"`: [targetMessageId] is the poll, [optionIds] the chosen options (empty: the vote is withdrawn), or
+ * [close] true when the poll's creator ends it.
  *
  * Every field added after version 2 shipped is optional and omitted when null, so older apps ignore it: [expiresIn]
- * (seconds a text message lives on the receiver's phone once displayed), [forwarded].
+ * (seconds a text message lives on the receiver's phone once displayed), [forwarded], [mentions] (user ids named with `@`
+ * in the text of a group message).
  */
 @Serializable
 data class Content(
@@ -85,6 +105,10 @@ data class Content(
     @SerialName("expires_in") val expiresIn: Long? = null,
     val forwarded: Boolean? = null,
     @SerialName("call") val call: CallSignal? = null,
+    val mentions: List<String>? = null,
+    val poll: PollSpec? = null,
+    @SerialName("option_ids") val optionIds: List<Int>? = null,
+    val close: Boolean? = null,
 ) {
     /** True for a type this app version knows how to apply. */
     val isKnownType: Boolean get() = type in ContentType.KNOWN
@@ -100,6 +124,13 @@ data class Content(
         const val MAX_SDP_BYTES = 32 * 1024
         const val MAX_CANDIDATE_BYTES = 1024
         const val MAX_CANDIDATES = 50
+
+        /** Limits of the features of batch 5: mentions per message, poll question and option lengths (characters), option count. */
+        const val MAX_MENTIONS = 50
+        const val MAX_POLL_QUESTION = 200
+        const val MAX_POLL_OPTION = 100
+        const val MIN_POLL_OPTIONS = 2
+        const val MAX_POLL_OPTIONS = 10
 
         /** 0 is "off". */
         fun isValidTimer(seconds: Long?): Boolean = seconds != null && (seconds == 0L || seconds in MIN_TIMER_SECONDS..MAX_TIMER_SECONDS)
@@ -128,7 +159,12 @@ object ContentCodec {
         require(!content.conversationId.isNullOrEmpty()) { "content has no conversation_id" }
         require(!content.messageId.isNullOrEmpty()) { "content has no message_id" }
         when (content.type) {
-            ContentType.TEXT -> require(content.targetMessageId == null) { "a message has no target" }
+            ContentType.TEXT -> {
+                require(content.targetMessageId == null) { "a message has no target" }
+                content.mentions?.let { m ->
+                    require(m.size <= Content.MAX_MENTIONS && m.none { it.isEmpty() }) { "too many or empty mentions" }
+                }
+            }
             ContentType.EDIT -> require(!content.targetMessageId.isNullOrEmpty()) { "edit without target_message_id" }
             ContentType.DELETE -> {
                 require(!content.targetMessageId.isNullOrEmpty()) { "delete without target_message_id" }
@@ -144,9 +180,41 @@ object ContentCodec {
                 require(content.targetMessageId == null) { "a timer has no target" }
             }
             ContentType.CALL -> requireValidCall(content)
+            ContentType.POLL -> requireValidPoll(content)
+            ContentType.POLL_VOTE -> requireValidPollVote(content)
             else -> Unit // a newer app's type: well-formed and bound, nothing more is known about it
         }
         return content
+    }
+}
+
+/** The rules for a `poll`: a question of up to 200 characters, 2 to 10 distinct options of up to 100, nothing else. */
+private fun requireValidPoll(content: Content) {
+    require(content.targetMessageId == null) { "a poll has no target" }
+    require(content.attachments.isEmpty()) { "a poll carries no attachments" }
+    val question = content.text
+    require(!question.isNullOrBlank() && question.length <= Content.MAX_POLL_QUESTION) {
+        "poll without a question of 1..${Content.MAX_POLL_QUESTION} characters"
+    }
+    val poll = requireNotNull(content.poll) { "poll content without poll" }
+    require(poll.options.size in Content.MIN_POLL_OPTIONS..Content.MAX_POLL_OPTIONS) { "a poll has 2..10 options" }
+    require(poll.options.map { it.id }.distinct().size == poll.options.size && poll.options.all { it.id in 0 until Content.MAX_POLL_OPTIONS }) {
+        "poll option ids must be distinct numbers 0..9"
+    }
+    require(poll.options.all { it.text.isNotBlank() && it.text.length <= Content.MAX_POLL_OPTION }) { "poll option without text, or too long" }
+}
+
+/** The rules for a `poll_vote`: aimed at a poll message; either a list of chosen option ids (maybe empty) or `close`. */
+private fun requireValidPollVote(content: Content) {
+    require(!content.targetMessageId.isNullOrEmpty()) { "poll vote without target_message_id" }
+    require(content.text == null && content.attachments.isEmpty() && content.poll == null) { "a poll vote carries no content" }
+    if (content.close == true) {
+        require(content.optionIds.isNullOrEmpty()) { "closing a poll names no options" }
+    } else {
+        val ids = requireNotNull(content.optionIds) { "poll vote without option_ids" }
+        require(ids.size <= Content.MAX_POLL_OPTIONS && ids.distinct().size == ids.size && ids.all { it in 0 until Content.MAX_POLL_OPTIONS }) {
+            "poll vote with bad option ids"
+        }
     }
 }
 

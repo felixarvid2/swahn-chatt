@@ -126,7 +126,7 @@ class ContentForwardCompatibilityTest {
 
     @Test
     fun `well-formed bound content of an unknown type is accepted and marked unknown`() {
-        for (type in listOf("poll", "pin", "location", "sticker")) {
+        for (type in listOf("hologram", "pin", "location", "sticker")) {
             val c = decodeJson("""{"v":2,"type":"$type","text":"x","conversation_id":"c","message_id":"m","target_message_id":"t","poll":{"q":"?"}}""")
             assertEquals(type, c.type)
             assertTrue(!c.isKnownType, type)
@@ -137,12 +137,12 @@ class ContentForwardCompatibilityTest {
 
     @Test
     fun `unknown types are still refused when unbound or malformed`() {
-        assertFailsWith<IllegalArgumentException> { decodeJson("""{"v":2,"type":"poll","message_id":"m"}""") }
-        assertFailsWith<IllegalArgumentException> { decodeJson("""{"v":2,"type":"poll","conversation_id":"c"}""") }
-        assertFailsWith<IllegalArgumentException> { decodeJson("""{"v":2,"type":"poll","conversation_id":"","message_id":"m"}""") }
+        assertFailsWith<IllegalArgumentException> { decodeJson("""{"v":2,"type":"pin","message_id":"m"}""") }
+        assertFailsWith<IllegalArgumentException> { decodeJson("""{"v":2,"type":"pin","conversation_id":"c"}""") }
+        assertFailsWith<IllegalArgumentException> { decodeJson("""{"v":2,"type":"pin","conversation_id":"","message_id":"m"}""") }
         assertFailsWith<IllegalArgumentException> { decodeJson("""{"v":2,"type":"","conversation_id":"c","message_id":"m"}""") }
-        assertFailsWith<IllegalArgumentException> { decodeJson("""{"v":3,"type":"poll","conversation_id":"c","message_id":"m"}""") }
-        assertFailsWith<Exception> { decodeJson("""{"v":2,"type":"poll","conversation_id":"c","message_id":"m""") }
+        assertFailsWith<IllegalArgumentException> { decodeJson("""{"v":3,"type":"pin","conversation_id":"c","message_id":"m"}""") }
+        assertFailsWith<Exception> { decodeJson("""{"v":2,"type":"pin","conversation_id":"c","message_id":"m""") }
         assertFailsWith<Exception> { decodeJson("""{"v":2,"type":7,"conversation_id":"c","message_id":"m"}""") }
         assertFailsWith<InvalidPaddingException> { ContentCodec.decode(ByteArray(7)) }
     }
@@ -393,3 +393,82 @@ private const val CALL_ID = "3f2b8c1e-5d4a-4e6f-9a7b-1c2d3e4f5a6b"
 private const val SDP = "v=0\r\na=fingerprint:sha-256 AA:BB\r\na=setup:actpass\r\n"
 
 private fun callContent(signal: CallSignal) = Content(type = ContentType.CALL, conversationId = "c", messageId = "m", call = signal)
+
+class MentionPollContentTest {
+    private fun decodeJson(json: String) = ContentCodec.decode(Padding.pad(json.toByteArray()))
+    private val bind = """"conversation_id":"c","message_id":"m""""
+
+    @Test
+    fun `mentions round-trip on text and are omitted when unset`() {
+        val c = Content(text = "hej @Anna", mentions = listOf("u1", "u2"), conversationId = "c", messageId = "m")
+        assertEquals(c, ContentCodec.decode(ContentCodec.encode(c)))
+        val plain = SwahnChatJson.parseToJsonElement(
+            Padding.unpad(ContentCodec.encode(Content(text = "x", conversationId = "c", messageId = "m"))).decodeToString(),
+        ).jsonObject
+        assertTrue("mentions" !in plain.keys && "poll" !in plain.keys && "option_ids" !in plain.keys && "close" !in plain.keys)
+    }
+
+    @Test
+    fun `more than 50 mentions or an empty id are refused`() {
+        val fifty = (1..50).joinToString(",") { "\"u$it\"" }
+        assertEquals(50, decodeJson("""{"v":2,"type":"text","text":"x","mentions":[$fifty],$bind}""").mentions?.size)
+        assertFailsWith<IllegalArgumentException> { decodeJson("""{"v":2,"type":"text","text":"x","mentions":[$fifty,"u51"],$bind}""") }
+        assertFailsWith<IllegalArgumentException> { decodeJson("""{"v":2,"type":"text","text":"x","mentions":[""],$bind}""") }
+    }
+
+    private fun poll(question: String = "Pizza?", options: String = """[{"id":0,"text":"Ja"},{"id":1,"text":"Nej"}]""", extra: String = "") =
+        """{"v":2,"type":"poll","text":"$question","poll":{"options":$options,"multiple":false},$bind$extra}"""
+
+    @Test
+    fun `a poll round-trips and is a known type`() {
+        val c = Content(
+            type = ContentType.POLL, text = "Pizza?", poll = PollSpec(listOf(PollOption(0, "Ja"), PollOption(1, "Nej")), multiple = true),
+            conversationId = "c", messageId = "m",
+        )
+        val back = ContentCodec.decode(ContentCodec.encode(c))
+        assertEquals(c, back)
+        assertTrue(back.isKnownType)
+        assertEquals(true, decodeJson(poll()).poll?.options?.size == 2)
+    }
+
+    @Test
+    fun `a poll needs a question, two to ten distinct options and no target`() {
+        assertFailsWith<IllegalArgumentException> { decodeJson(poll(question = "")) }
+        assertFailsWith<IllegalArgumentException> { decodeJson(poll(question = "x".repeat(201))) }
+        decodeJson(poll(question = "x".repeat(200)))
+        assertFailsWith<IllegalArgumentException> { decodeJson(poll(options = """[{"id":0,"text":"Ja"}]""")) }
+        val eleven = (0..10).joinToString(",", "[", "]") { """{"id":$it,"text":"a$it"}""" }
+        assertFailsWith<IllegalArgumentException> { decodeJson(poll(options = eleven)) }
+        val ten = (0..9).joinToString(",", "[", "]") { """{"id":$it,"text":"a$it"}""" }
+        assertEquals(10, decodeJson(poll(options = ten)).poll?.options?.size)
+        assertFailsWith<IllegalArgumentException> { decodeJson(poll(options = """[{"id":0,"text":"a"},{"id":0,"text":"b"}]""")) }
+        assertFailsWith<IllegalArgumentException> { decodeJson(poll(options = """[{"id":0,"text":"a"},{"id":10,"text":"b"}]""")) }
+        assertFailsWith<IllegalArgumentException> { decodeJson(poll(options = """[{"id":0,"text":"a"},{"id":1,"text":"${"y".repeat(101)}"}]""")) }
+        assertFailsWith<IllegalArgumentException> { decodeJson(poll(options = """[{"id":0,"text":"a"},{"id":1,"text":" "}]""")) }
+        assertFailsWith<IllegalArgumentException> { decodeJson(poll(extra = ""","target_message_id":"t"""")) }
+        assertFailsWith<IllegalArgumentException> { decodeJson("""{"v":2,"type":"poll","text":"x",$bind}""") }
+    }
+
+    private fun vote(body: String) = """{"v":2,"type":"poll_vote",$body,$bind}"""
+
+    @Test
+    fun `a poll vote names a target and valid options, or closes the poll`() {
+        assertEquals(listOf(1, 3), decodeJson(vote(""""target_message_id":"p","option_ids":[1,3]""")).optionIds)
+        assertEquals(emptyList(), decodeJson(vote(""""target_message_id":"p","option_ids":[]""")).optionIds) // withdrawn
+        assertEquals(true, decodeJson(vote(""""target_message_id":"p","close":true""")).close)
+        assertFailsWith<IllegalArgumentException> { decodeJson(vote(""""option_ids":[1]""")) } // no target
+        assertFailsWith<IllegalArgumentException> { decodeJson(vote(""""target_message_id":"p"""")) } // neither options nor close
+        assertFailsWith<IllegalArgumentException> { decodeJson(vote(""""target_message_id":"p","option_ids":[1,1]""")) }
+        assertFailsWith<IllegalArgumentException> { decodeJson(vote(""""target_message_id":"p","option_ids":[-1]""")) }
+        assertFailsWith<IllegalArgumentException> { decodeJson(vote(""""target_message_id":"p","option_ids":[10]""")) }
+        assertFailsWith<IllegalArgumentException> { decodeJson(vote(""""target_message_id":"p","option_ids":[1],"close":true""")) }
+        assertFailsWith<IllegalArgumentException> { decodeJson(vote(""""target_message_id":"p","option_ids":[1],"text":"hi"""")) }
+    }
+
+    @Test
+    fun `unknown types are still tolerated after the new ones were added`() {
+        val c = decodeJson("""{"v":2,"type":"hologram",$bind,"x":1}""")
+        assertTrue(!c.isKnownType)
+        assertTrue(ContentType.POLL in ContentType.KNOWN && ContentType.POLL_VOTE in ContentType.KNOWN)
+    }
+}

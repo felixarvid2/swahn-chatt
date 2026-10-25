@@ -131,6 +131,43 @@ interface StoreDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putTimer(t: ConversationTimerEntity)
     @Query("DELETE FROM conversation_timers WHERE conversationId = :id") suspend fun deleteTimer(id: String)
 
+    // --- poll votes, stars, mentions ----------------------------------------------------------------------------------
+    @Query("SELECT * FROM poll_votes WHERE messageId = :messageId AND userId = :userId")
+    suspend fun pollVote(messageId: String, userId: String): PollVoteEntity?
+    @Query("SELECT * FROM poll_votes WHERE messageId = :messageId AND optionIds != '' ORDER BY at, userId")
+    suspend fun pollVotes(messageId: String): List<PollVoteEntity>
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putPollVote(v: PollVoteEntity)
+    @Query("DELETE FROM poll_votes WHERE messageId = :messageId AND userId = :userId")
+    suspend fun deletePollVote(messageId: String, userId: String)
+    @Query("DELETE FROM poll_votes WHERE messageId = :messageId") suspend fun deletePollVotesOfMessage(messageId: String)
+    @Query("DELETE FROM poll_votes WHERE conversationId = :id") suspend fun deletePollVotesOf(id: String)
+
+    @Upsert suspend fun putStar(s: StarredMessageEntity)
+    @Query("DELETE FROM starred_messages WHERE messageId = :messageId") suspend fun deleteStar(messageId: String)
+    @Query("DELETE FROM starred_messages WHERE conversationId = :id") suspend fun deleteStarsOf(id: String)
+    @Query("SELECT COUNT(*) FROM starred_messages WHERE messageId = :messageId") suspend fun starCount(messageId: String): Int
+
+    @Query(
+        "SELECT m.* FROM messages m JOIN starred_messages s ON s.messageId = m.id " +
+            "WHERE (:conversationId IS NULL OR s.conversationId = :conversationId) ORDER BY s.starredAt DESC, m.id",
+    )
+    suspend fun starredMessages(conversationId: String?): List<MessageEntity>
+
+    @Query(
+        "SELECT COUNT(*) FROM messages m WHERE m.conversationId = :id AND m.outgoing = 0 AND m.deleted = 0 " +
+            "AND m.systemType IS NULL AND m.imported = 0 AND COALESCE(m.seq, 0) > COALESCE((SELECT myReadSeq FROM conversations WHERE id = :id), 0) " +
+            "AND m.mentions LIKE '%,' || :userId || ',%'",
+    )
+    suspend fun unreadMentionCount(id: String, userId: String): Int
+
+    /** The unread messages that mention [userId], for notifications of muted conversations (oldest first). */
+    @Query(
+        "SELECT * FROM messages m WHERE m.conversationId = :id AND m.outgoing = 0 AND m.deleted = 0 AND m.systemType IS NULL " +
+            "AND m.imported = 0 AND COALESCE(m.seq, 0) > COALESCE((SELECT myReadSeq FROM conversations WHERE id = :id), 0) " +
+            "AND m.mentions LIKE '%,' || :userId || ',%' ORDER BY COALESCE(m.seq, 0) LIMIT :limit",
+    )
+    suspend fun unreadMentions(id: String, userId: String, limit: Int): List<MessageEntity>
+
     @Query(
         "SELECT * FROM messages WHERE expireAt IS NOT NULL AND expireAt <= :now AND status != 'PENDING' " +
             "ORDER BY expireAt, id LIMIT :limit",
@@ -236,6 +273,8 @@ data class ConversationOverviewRow(
     val pinnedAt: Long?,
     val mutedUntil: Long,
     val archived: Boolean,
+    /** Unread messages that mention this account (the "@" marker of the list). */
+    val mentioned: Int = 0,
 )
 
 /** A message found by the search (the text is the decrypted one; highlighting is done by the caller). */
@@ -268,6 +307,9 @@ interface UiDao {
             "c.lastMessageAt AS lastMessageAt, c.updatedAt AS updatedAt, " +
             "(SELECT COUNT(*) FROM messages m WHERE m.conversationId = c.id AND m.outgoing = 0 AND m.deleted = 0 " +
             "AND m.systemType IS NULL AND m.imported = 0 AND COALESCE(m.seq, 0) > c.myReadSeq) AS unread, " +
+            "(SELECT COUNT(*) FROM messages m WHERE m.conversationId = c.id AND m.outgoing = 0 AND m.deleted = 0 " +
+            "AND m.systemType IS NULL AND m.imported = 0 AND COALESCE(m.seq, 0) > c.myReadSeq " +
+            "AND m.mentions LIKE '%,' || COALESCE((SELECT userId FROM account WHERE id = 1), '') || ',%') AS mentioned, " +
             "s.pinnedAt AS pinnedAt, COALESCE(s.mutedUntil, 0) AS mutedUntil, COALESCE(s.archived, 0) AS archived " +
             "FROM conversations c LEFT JOIN conversation_settings s ON s.conversationId = c.id " +
             "ORDER BY COALESCE(c.lastMessageAt, c.updatedAt) DESC, c.id",
@@ -285,6 +327,28 @@ interface UiDao {
     /** The reactions that stand in a conversation (not taken back), for the bubbles. */
     @Query("SELECT * FROM reactions WHERE conversationId = :conversationId AND emoji IS NOT NULL ORDER BY at, userId")
     fun observeReactions(conversationId: String): Flow<List<ReactionEntity>>
+
+    /** The votes that stand in a conversation (not withdrawn), for the poll bubbles. */
+    @Query("SELECT * FROM poll_votes WHERE conversationId = :conversationId AND optionIds != '' ORDER BY at, userId")
+    fun observePollVotes(conversationId: String): Flow<List<PollVoteEntity>>
+
+    /** Ids of the starred messages of a conversation, for the star icon of the bubbles. */
+    @Query("SELECT messageId FROM starred_messages WHERE conversationId = :conversationId")
+    fun observeStarredIds(conversationId: String): Flow<List<String>>
+
+    /** The starred messages ([conversationId] null: of all conversations), the most recently starred first. */
+    @Query(
+        "SELECT m.* FROM messages m JOIN starred_messages s ON s.messageId = m.id " +
+            "WHERE (:conversationId IS NULL OR s.conversationId = :conversationId) ORDER BY s.starredAt DESC, m.id",
+    )
+    fun observeStarred(conversationId: String?): Flow<List<MessageEntity>>
+
+    /** Outgoing messages waiting for their time ([conversationId] null: all), earliest first. */
+    @Query(
+        "SELECT * FROM messages WHERE scheduledAt IS NOT NULL AND (:conversationId IS NULL OR conversationId = :conversationId) " +
+            "ORDER BY scheduledAt, id",
+    )
+    fun observeScheduled(conversationId: String?): Flow<List<MessageEntity>>
 
     @Query("SELECT * FROM conversation_timers WHERE conversationId = :conversationId")
     fun observeTimer(conversationId: String): Flow<ConversationTimerEntity?>
@@ -371,7 +435,7 @@ interface UiDao {
 
     /** The last real message (not a system notice) of a conversation. */
     @Query(
-        "SELECT * FROM messages WHERE conversationId = :conversationId AND systemType IS NULL " +
+        "SELECT * FROM messages WHERE conversationId = :conversationId AND systemType IS NULL AND scheduledAt IS NULL " +
             "ORDER BY COALESCE(seq, $MAX_LONG) DESC, clientTs DESC, id DESC LIMIT 1",
     )
     suspend fun lastMessage(conversationId: String): MessageEntity?

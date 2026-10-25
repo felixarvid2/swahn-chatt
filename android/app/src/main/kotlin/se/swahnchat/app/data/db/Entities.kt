@@ -126,6 +126,12 @@ data class MessageEntity(
     val expireAt: Long? = null,
     /** Added in version 5: the number a system notice is about (the new timer in seconds for `timer_changed`). */
     val systemValue: Long? = null,
+    /** Added in version 6: the users mentioned with `@`, as `,id1,id2,` (so a query can look for `,id,`), empty: none. */
+    @ColumnInfo(defaultValue = "''") val mentions: String = "",
+    /** Added in version 6: the poll this message is, as JSON ([PollJson]); null: not a poll. The question is [text]. */
+    val poll: String? = null,
+    /** Added in version 6: an outgoing message waiting for its time (epoch ms); null: not scheduled. */
+    val scheduledAt: Long? = null,
 )
 
 @Entity(tableName = "outbox")
@@ -150,6 +156,16 @@ data class OutboxEntity(
     val expiresIn: Long? = null,
     /** Added in version 5: a reaction that takes the emoji back. */
     @ColumnInfo(defaultValue = "0") val remove: Boolean = false,
+    /** Added in version 6: the mentions of a group message, as in [MessageEntity.mentions]. */
+    @ColumnInfo(defaultValue = "''") val mentions: String = "",
+    /** Added in version 6: JSON of the poll spec of a poll message. */
+    val poll: String? = null,
+    /** Added in version 6: the option ids of a poll vote, comma separated (empty string: withdrawn); null: not a vote. */
+    val optionIds: String? = null,
+    /** Added in version 6: a poll vote that closes the poll. */
+    @ColumnInfo(defaultValue = "0") val close: Boolean = false,
+    /** Added in version 6: a scheduled message is not sent before this time (epoch ms). */
+    val sendAt: Long? = null,
 )
 
 /**
@@ -245,6 +261,32 @@ data class ConversationTimerEntity(
     val setBy: String,
     val seq: Long?,
     val at: Long,
+)
+
+/**
+ * A member's vote on a poll (added in database version 6). One row per member and poll; the highest `seq` wins; [optionIds] is
+ * the comma-separated list of chosen options (empty: withdrawn). [seq] is null while our own vote waits in the outbox. Removed
+ * with the message and with the conversation.
+ */
+@Entity(tableName = "poll_votes", primaryKeys = ["messageId", "userId"], indices = [Index("conversationId")])
+data class PollVoteEntity(
+    val messageId: String,
+    val userId: String,
+    val conversationId: String,
+    val optionIds: String,
+    val seq: Long?,
+    val at: Long,
+)
+
+/**
+ * A starred message (added in database version 6). Purely local, never sent anywhere. The row goes with the message (deleted
+ * for everyone, for me, expired) and with the conversation.
+ */
+@Entity(tableName = "starred_messages", indices = [Index("conversationId")])
+data class StarredMessageEntity(
+    @PrimaryKey val messageId: String,
+    val conversationId: String,
+    val starredAt: Long,
 )
 
 // --- libsignal state (ProtocolStorage) ---------------------------------------------------------------------------

@@ -246,7 +246,9 @@ nothing on the server side; their devices are excluded from future envelopes.
   attachments. A reaction is not a message for the server: it does not change `last_message_at`/`last_message_seq`
   or unread counts. It is synchronised as an ordinary `message` event whose `data.kind` is `"reaction"` and is
   part of the history (`GET /conversations/{id}/messages`). Deleting the target drops undelivered reaction
-  envelopes too (those events are then skipped). Old clients that do not know the kind ignore it.
+  envelopes too (those events are then skipped). Old clients that do not know the kind ignore it. The server places
+  no constraint on the encrypted content: the apps also send poll votes this way (content type `poll_vote`, see
+  ARCHITECTURE.md "Content types and local-only data"), so the server cannot tell a vote from an emoji reaction.
 - `kind: "call"` is the signalling channel for 1:1 audio/video calls (offer, answer, ICE candidates, hangup, busy;
   the encrypted content decides which). Only in `direct` conversations (`409 calls_direct_only` otherwise), no
   `target_message_id`, no attachments (`422`). It carries envelopes for the full device set like a message, so all
