@@ -23,6 +23,9 @@
 -keep,allowobfuscation class se.swahnchat.core.client.StoredMessage { *; }
 -keep,allowobfuscation class se.swahnchat.core.client.Reaction { *; }
 -keep,allowobfuscation class se.swahnchat.core.client.ConversationTimer { *; }
+-keep,allowobfuscation class se.swahnchat.core.client.OutboxEntry { *; }
+-keep,allowobfuscation class se.swahnchat.core.client.PollVote { *; }
+-keep,allowobfuscation class se.swahnchat.core.client.PollInfo { *; }
 -keep,allowobfuscation class se.swahnchat.app.data.db.RoomLocalStore { *; }
 
 # App code the tests drive directly
