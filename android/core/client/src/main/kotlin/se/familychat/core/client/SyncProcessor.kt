@@ -10,6 +10,7 @@ import se.familychat.core.crypto.InvalidCiphertextException
 import se.familychat.core.crypto.NoSessionException
 import se.familychat.core.crypto.UntrustedIdentityException
 import se.familychat.core.model.AckRequest
+import se.familychat.core.model.CallSignal
 import se.familychat.core.model.Content
 import se.familychat.core.model.ContentType
 import se.familychat.core.model.Conversation
@@ -109,6 +110,7 @@ internal class SyncProcessor(private val ctx: EngineContext, private val directo
             MessageKind.EDIT -> applyEdit(m)
             MessageKind.DELETE -> applyDelete(m)
             MessageKind.REACTION -> applyReaction(m)
+            MessageKind.CALL -> applyCall(m)
             // A kind from a newer server or app: consume it like any message, so the ratchet moves on, and show nothing.
             else -> applyUnknownKind(m)
         }
@@ -243,6 +245,35 @@ internal class SyncProcessor(private val ctx: EngineContext, private val directo
             directory.postNotice(conversation, "sys-timer-${m.id}", SystemEvent.TimerChanged(m.senderUserId, seconds), seq = m.seq, at = m.serverTs)
         }
         ctx.emit(EngineEvent.ConversationChanged(conversation.id))
+    }
+
+    /**
+     * A call signal: authenticated like a reaction (sender device listed and pinned, sender a member, content bound to
+     * the event) and, on top, from a `direct` conversation and no older than [CALL_SIGNAL_MAX_AGE_MS] by the server's clock.
+     * The ciphertext is always decrypted so the ratchet moves on, but whatever fails a check is dropped: a signal is
+     * never stored, queued or retried, and a call must never ring from a stale or untrusted event. An event without an
+     * envelope (the server's short call retention removed it) is consumed silently. Nothing is written to the store and
+     * no [EngineEvent.MessageReceived] is emitted, so a call never counts as unread or raises a message notification.
+     */
+    private suspend fun applyCall(m: Message) {
+        val envelope = m.envelope ?: return
+        val account = ctx.requireAccount()
+        if (m.senderDeviceId == account.deviceId) return
+        ensureConversation(m.conversationId)
+        val direct = ctx.store.getConversation(m.conversationId)?.type == ConversationType.DIRECT
+        val fresh = ctx.serverNow() - m.serverTs <= CALL_SIGNAL_MAX_AGE_MS
+        val deviceKnown = resolveSender(m.senderUserId, m.senderDeviceId)
+        val member = deviceKnown && direct && senderIsMember(m.conversationId, m.senderUserId)
+        var signal: CallSignal? = null
+        decryptAndWrite(
+            m.senderUserId, m.senderDeviceId.takeIf { deviceKnown }, envelope.type, envelope.body,
+            check = { c -> member && fresh && isBoundTo(c, m, ContentType.CALL) && c.call != null },
+        ) { r -> signal = (r as? Decrypted.Ok)?.content?.call }
+        signal?.let {
+            ctx.callSignals.tryEmit(
+                CallSignalEvent(m.conversationId, m.senderUserId, m.senderDeviceId, m.senderUserId == account.userId, m.serverTs, it),
+            )
+        }
     }
 
     /** A kind this version does not know. Decrypts (the ratchet must advance) and drops, whatever the content says. */
@@ -531,5 +562,8 @@ internal class SyncProcessor(private val ctx: EngineContext, private val directo
 
     companion object {
         const val PAGE_SIZE = 200
+
+        /** A call signal older than this (server clock) is dropped instead of ringing; the server keeps them for much longer. */
+        const val CALL_SIGNAL_MAX_AGE_MS = 60_000L
     }
 }

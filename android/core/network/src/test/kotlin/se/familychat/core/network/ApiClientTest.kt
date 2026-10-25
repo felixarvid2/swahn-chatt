@@ -292,4 +292,34 @@ class ApiClientTest {
         assertNull(client().api.updateConversation("c", clearDisappearing = true).disappearingSeconds)
         assertEquals("""{"disappearing_seconds":null}""", server.takeRequest().body.readUtf8())
     }
+
+    @Test
+    fun `turn credentials are fetched with the bearer token`() = runBlocking<Unit> {
+        server.enqueue(json(200, """{"urls":["turn:h:3478?transport=udp"],"username":"1:u1","credential":"c","ttl":3600}"""))
+        val turn = client().api.turnCredentials()
+        assertEquals(TurnCredentials(listOf("turn:h:3478?transport=udp"), "1:u1", "c", 3600), turn)
+        val r = server.takeRequest()
+        assertEquals("/api/v1/calls/turn", r.path)
+        assertEquals("Bearer old", r.getHeader("Authorization"))
+        server.enqueue(json(200, """{"urls":[],"username":null,"credential":null,"ttl":0}"""))
+        assertNull(client().api.turnCredentials().username)
+    }
+
+    @Test
+    fun `server clock learns the offset from the Date header of a successful response`() = runBlocking<Unit> {
+        val c = client()
+        assertEquals(0L, c.serverClock.offsetMs)
+        val skewed = System.currentTimeMillis() + 5 * 60_000
+        val date = java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME
+            .format(java.time.Instant.ofEpochMilli(skewed).atZone(java.time.ZoneOffset.UTC))
+        server.enqueue(json(200, USER).setHeader("Date", date))
+        c.api.me()
+        assertTrue(kotlin.math.abs(c.serverClock.offsetMs - 5 * 60_000) < 3_000, "offset ${c.serverClock.offsetMs}")
+        assertTrue(kotlin.math.abs(c.serverClock.now() - skewed) < 3_000)
+        // an error response (or none) does not move it
+        val before = c.serverClock.offsetMs
+        server.enqueue(json(500, """{"code":"internal","message":"x"}""").setHeader("Date", "Thu, 01 Jan 1970 00:00:00 GMT"))
+        runCatching { c.api.me() }
+        assertEquals(before, c.serverClock.offsetMs)
+    }
 }

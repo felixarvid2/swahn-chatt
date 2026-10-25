@@ -43,6 +43,10 @@ interface FamilyChatApi {
     suspend fun clearPush()
     suspend fun deleteDevice(deviceId: String)
 
+    // --- calls ---------------------------------------------------------------------------------------------------
+    /** Fresh TURN REST credentials (or STUN-only urls with null secret) for one call; fetch per call, never cache. */
+    suspend fun turnCredentials(): TurnCredentials
+
     // --- keys ----------------------------------------------------------------------------------------------------
     suspend fun uploadKeys(request: UploadKeysRequest)
     suspend fun keyStatus(): KeyStatus

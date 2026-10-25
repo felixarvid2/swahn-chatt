@@ -1,6 +1,9 @@
 package se.familychat.core.client
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -9,6 +12,7 @@ import se.familychat.core.crypto.NoSessionException
 import se.familychat.core.crypto.Recipient
 import se.familychat.core.model.AttachmentPurpose
 import se.familychat.core.model.AttachmentRef
+import se.familychat.core.model.CallSignal
 import se.familychat.core.model.Content
 import se.familychat.core.model.ContentCodec
 import se.familychat.core.model.ContentType
@@ -328,7 +332,7 @@ internal class SendPipeline(private val ctx: EngineContext, private val director
                 val recipients = directory.recipientsFor(conversation)
                 val prepared = directory.ensureSessions(recipients)
                 val content = buildContent(entry) ?: return fail(entry, FailureReason.TOO_LARGE)
-                val envelopes = encryptMissing(entry, prepared, content)
+                val envelopes = encryptMissing(entry.envelopes, prepared, content)
                 if (envelopes != entry.envelopes) {
                     entry = entry.copy(envelopes = envelopes)
                     ctx.store.putOutbox(entry)
@@ -477,6 +481,75 @@ internal class SendPipeline(private val ctx: EngineContext, private val director
         }
     }
 
+    // --- call signals -------------------------------------------------------------------------------------------------
+
+    /**
+     * Sends one call signal to the other member of a `direct` conversation and to this account's other devices. Unlike
+     * [process] this never touches the outbox: a signal is time-critical and must not be delivered hours later, so
+     * nothing is stored, there is no local message, and it does not wait behind a running outbox pass. The encryption
+     * (shared with [sendEntry]: recipients, sessions, mismatch handling, the crypto lock) happens once; a failed POST
+     * is repeated up to [SIGNAL_SEND_RETRIES] times within [SIGNAL_SEND_TIMEOUT_MS] with the same message id and the
+     * same ciphertexts, so a lost response ends in `duplicate: true` and never in a second delivery.
+     *
+     * @throws IOException the server could not be reached in time
+     * @throws ApiException the server refused (a `429` is not retried)
+     * @throws IllegalStateException a device is not trusted (the identity change is noted like for a message), or we are not a member
+     * @throws IllegalArgumentException the conversation is unknown or not `direct`
+     */
+    suspend fun sendSignal(conversationId: String, signal: CallSignal) {
+        val first = ctx.store.getConversation(conversationId) ?: throw IllegalArgumentException("Unknown conversation")
+        require(first.type == ConversationType.DIRECT) { "Calls are only possible in direct conversations" }
+        val id = ctx.config.newId()
+        val clientTs = ctx.now()
+        val content = Content(type = ContentType.CALL, conversationId = conversationId, messageId = id, call = signal)
+        var envelopes: List<Envelope>? = null
+        var mismatch: ApiException.MismatchedDevices? = null
+        try {
+            repeat(ctx.config.maxMismatchRetries + 1) {
+                val conversation = ctx.store.getConversation(conversationId) ?: error("Not a member")
+                val prepared = directory.ensureSessions(directory.recipientsFor(conversation))
+                val sealed = encryptMissing(envelopes, prepared, content)
+                envelopes = sealed
+                val request = SendMessageRequest(id = id, conversationId = conversationId, kind = MessageKind.CALL, clientTs = clientTs, envelopes = sealed)
+                try {
+                    postSignal(request)
+                    return
+                } catch (e: ApiException.MismatchedDevices) {
+                    mismatch = e
+                    val extra = refreshAfterMismatch(conversationId, e) ?: error("Not a member")
+                    envelopes = sealed.filter { it.deviceId !in extra }
+                }
+            }
+        } catch (e: IdentityChangedException) {
+            if (!e.unapproved) directory.noteIdentityChange(e.userId, e.deviceId, e.newKey)
+            else ctx.emit(EngineEvent.IdentityChanged(e.userId, e.deviceId, e.newKey))
+            error("A device is not trusted")
+        }
+        throw mismatch ?: IllegalStateException("Signal not sent")
+    }
+
+    /** One signal POST, repeated on a network error or a 5xx (same request, so the server de-duplicates), within the time box. */
+    private suspend fun postSignal(request: SendMessageRequest) {
+        try {
+            withTimeout(SIGNAL_SEND_TIMEOUT_MS) {
+                var attempt = 0
+                while (true) {
+                    try {
+                        ctx.api.sendMessage(request)
+                        return@withTimeout
+                    } catch (e: IOException) {
+                        if (++attempt > SIGNAL_SEND_RETRIES) throw e
+                    } catch (e: ApiException.Server) {
+                        if (++attempt > SIGNAL_SEND_RETRIES) throw e
+                    }
+                    delay(SIGNAL_RETRY_DELAY_MS * attempt)
+                }
+            }
+        } catch (e: TimeoutCancellationException) {
+            throw IOException("Call signal timed out", e)
+        }
+    }
+
     // --- content and envelopes ----------------------------------------------------------------------------------------
 
     private fun buildContent(entry: OutboxEntry): Content? {
@@ -519,8 +592,8 @@ internal class SendPipeline(private val ctx: EngineContext, private val director
     }
 
     /** Reuses already produced ciphertexts for devices still in the target set and encrypts for the others. */
-    private suspend fun encryptMissing(entry: OutboxEntry, prepared: List<Recipient>, content: Content): List<Envelope> {
-        val existing = entry.envelopes.orEmpty().associateBy { it.deviceId }
+    private suspend fun encryptMissing(have: List<Envelope>?, prepared: List<Recipient>, content: Content): List<Envelope> {
+        val existing = have.orEmpty().associateBy { it.deviceId }
         val missing = prepared.filter { it.deviceId !in existing }
         val fresh = if (missing.isEmpty()) emptyList()
         else withContext(ctx.config.ioDispatcher) { ctx.crypto.encryptContent(content, missing) }
@@ -538,9 +611,17 @@ internal class SendPipeline(private val ctx: EngineContext, private val director
      * the conversation (and this account) are ever read.
      */
     private suspend fun resolveMismatch(entry: OutboxEntry, e: ApiException.MismatchedDevices): OutboxEntry? {
+        val extraIds = refreshAfterMismatch(entry.conversationId, e) ?: return null
+        return entry.copy(envelopes = entry.envelopes?.filter { it.deviceId !in extraIds }).also {
+            if (it != entry) ctx.store.putOutbox(it)
+        }
+    }
+
+    /** The device refresh of [resolveMismatch]; returns the ids of the devices to drop ciphertexts for, or null if we are no longer a member. */
+    private suspend fun refreshAfterMismatch(conversationId: String, e: ApiException.MismatchedDevices): Set<String>? {
         val account = ctx.requireAccount()
         val fresh = try {
-            ctx.api.getConversation(entry.conversationId)
+            ctx.api.getConversation(conversationId)
         } catch (nf: ApiException.NotFound) {
             return null
         }
@@ -550,10 +631,7 @@ internal class SendPipeline(private val ctx: EngineContext, private val director
         for (u in users) directory.refreshDevices(u)
         for (m in fresh.members) if (ctx.store.getDevices(m.userId).isEmpty()) directory.refreshDevices(m.userId)
         for (d in e.extraDevices) directory.dropSession(d.userId, d.deviceId)
-        val extraIds = e.extraDevices.mapTo(HashSet()) { it.deviceId }
-        return entry.copy(envelopes = entry.envelopes?.filter { it.deviceId !in extraIds }).also {
-            if (it != entry) ctx.store.putOutbox(it)
-        }
+        return e.extraDevices.mapTo(HashSet()) { it.deviceId }
     }
 
     // --- attachments --------------------------------------------------------------------------------------------------
@@ -642,6 +720,9 @@ internal class SendPipeline(private val ctx: EngineContext, private val director
         const val MAX_ATTACHMENTS = 10
         const val MAX_TEXT_BYTES = 40_000
         private const val MAX_CHUNK_FAILURES = 5
+        private const val SIGNAL_SEND_RETRIES = 2
+        private const val SIGNAL_SEND_TIMEOUT_MS = 3_000L
+        private const val SIGNAL_RETRY_DELAY_MS = 300L
         private const val PENDING_TIMER_PATCH = "pending_timer_patch:"
 
         /** Padded plaintext limit; an envelope body may be 64 KiB and libsignal adds ~100 bytes of overhead. */

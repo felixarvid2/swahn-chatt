@@ -182,6 +182,36 @@ Client data flow:
   `ShareReceiverActivity` takes shared content from other apps. Large attachments (> 8 MiB) use the resumable
   `/attachments/uploads` API.
 
+### Calls (client)
+
+1:1 audio/video calls in `direct` conversations; the server only relays signalling and hands out TURN credentials
+(API.md "kind: call", "Calls"). Everything in `:core:client` below is platform-free and unit-tested with fake media.
+
+- **Signalling path.** A signal is a `Content` of type `call` (`CallSignal`: offer/answer with SDP, ICE candidates,
+  hangup, reject, busy), encrypted with Signal per device like a message and posted as `kind: "call"`. It is *not* a
+  message: `SendPipeline.sendSignal` bypasses the outbox (a call must never be retried hours later), encrypts once for the
+  full device set (own other devices included) and repeats only the POST, at most twice within about 3 s, with the same
+  message id and ciphertexts so a lost response ends in `duplicate: true`. It never stores anything.
+  `SyncProcessor.applyCall` authenticates a received signal like a reaction (listed and pinned sender device, sender a
+  member, content bound to the event, `direct` conversation), always decrypts it so the ratchet moves on, and drops it
+  when the identity is untrusted, a check fails, an envelope is missing (server retention) or it is older than 60 s. What
+  passes is emitted on `FamilyChatEngine.callSignals` as `CallSignalEvent`; nothing reaches the message store, the unread
+  counts or `EngineEvent.MessageReceived`, so no message notification. Age is judged on the server's clock:
+  `ServerClock` in `:core:network` learns `Date header - local time` from successful responses.
+- **State machine.** `CallManager` (one call at a time) is driven by `engine.callSignals` (the app calls `start()` at
+  startup) and the user's `startCall`, `accept`, `reject`, `hangup`; it exposes `state: StateFlow<CallState>`
+  (`Idle`, `Outgoing`, `Incoming`, `Connecting`, `Connected`, `Ended(reason)` which falls back to `Idle`). All devices of
+  the callee ring; the caller locks onto the first answering device and ignores other devices' answers and candidates;
+  an answer or reject on another own device ends the ringing (`ANSWERED_ELSEWHERE`/`REJECTED`) without sending. A second
+  offer is answered with `busy`. Offers are accepted only from the other member, once per call id, and not when stale.
+  Local ICE candidates go out in batches (one signal per 250 ms, at most 50 candidates, at most 20 signals per call; a
+  failed batch is dropped, the call goes on). Timeouts: ringing 45 s (`NO_ANSWER`/`MISSED`), connecting 30 s (`FAILED`
+  plus hangup). Every end path closes the `MediaSession` and cancels the call's jobs.
+- **Media.** `MediaSessionFactory`/`MediaSession` abstract WebRTC; the app implements them (DTLS-SRTP only, the
+  fingerprints travel in the encrypted SDP, which `ContentCodec` refuses without `a=fingerprint:`). Credentials are
+  fetched fresh per call from `GET /calls/turn`; if that fails the call tries host candidates. A setting can force relay
+  only (hides the IP address from the other side). SDP and candidates are never logged.
+
 ## Notifications: FCM vs self-hosted
 
 | | Firebase Cloud Messaging | UnifiedPush (ntfy on the Pi) | Own foreground service + WebSocket |

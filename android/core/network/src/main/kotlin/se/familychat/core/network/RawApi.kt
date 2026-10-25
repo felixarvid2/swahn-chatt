@@ -31,6 +31,8 @@ internal interface RawApi {
     @DELETE("devices/me/push") suspend fun clearPush()
     @DELETE("devices/{id}") suspend fun deleteDevice(@Path("id") id: String)
 
+    @GET("calls/turn") suspend fun turnCredentials(): TurnCredentials
+
     @PUT("keys") suspend fun uploadKeys(@Body r: UploadKeysRequest)
     @GET("keys/status") suspend fun keyStatus(): KeyStatus
     @GET("keys/{userId}") suspend fun getKeys(

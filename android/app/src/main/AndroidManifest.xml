@@ -6,6 +6,8 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- Audio mode and routing during a call (WebRTC audio device module) -->
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <!-- Only asked for when the person chooses to scan a QR code (safety number, invitation); no photo is taken or kept -->
     <uses-permission android:name="android.permission.CAMERA" />
     <!-- Expedited sync on Android 11 and older runs as a short foreground service (WorkManager) -->

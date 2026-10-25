@@ -97,6 +97,9 @@ object MessageKind {
     const val EDIT = "edit"
     const val DELETE = "delete"
     const val REACTION = "reaction"
+
+    /** A 1:1 call signal: transient, never stored by the server (docs/API.md "kind: call"). */
+    const val CALL = "call"
 }
 
 @Serializable

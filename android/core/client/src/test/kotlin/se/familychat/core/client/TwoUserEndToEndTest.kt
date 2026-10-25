@@ -10,7 +10,15 @@ import org.junit.Assume
 import org.junit.BeforeClass
 import org.junit.Test
 import se.familychat.core.crypto.InMemoryProtocolStorage
+import se.familychat.core.client.call.CallManager
+import se.familychat.core.client.call.CallState
+import se.familychat.core.client.call.EndReason
+import se.familychat.core.client.call.FakeMedia
+import se.familychat.core.client.call.MediaConnectionState
+import se.familychat.core.model.CallAction
+import se.familychat.core.model.CallSignal
 import se.familychat.core.model.MessageKind
+import se.familychat.core.model.SendMessageRequest
 import se.familychat.core.network.ApiClient
 import se.familychat.core.network.ApiException
 import se.familychat.core.network.InMemoryTokenProvider
@@ -422,6 +430,58 @@ class TwoUserEndToEndTest {
         val copy = carol.store.getMessage(copies.single())!!
         assertTrue(copy.forwarded)
         assertContentEquals(data, carol.engine.downloadAttachment(copy.id, copy.attachments.single().id).readBytes())
+    }
+
+    @Test
+    fun callBetweenTwoPhonesThroughTheBackendWithFakeMedia() = runBlocking<Unit> {
+        val conv = directChat(alice, bob)
+        bob.engine.sync()
+        alice.engine.startRealtime(); bob.engine.startRealtime()
+        val aliceMedia = FakeMedia(); val bobMedia = FakeMedia()
+        val aliceCalls = CallManager(alice.engine, aliceMedia, alice.scope).also { it.start() }
+        val bobCalls = CallManager(bob.engine, bobMedia, bob.scope).also { it.start() }
+        try {
+            val textsBefore = bob.texts(conv)
+            val id = aliceCalls.startCall(conv, video = false)
+            eventually(timeout, "bob rings") { bobCalls.state.value is CallState.Incoming }
+            assertEquals(CallState.Incoming(id, conv, alice.userId, false), bobCalls.state.value)
+            // the offer reached bob end to end encrypted and with the DTLS fingerprint the media layer needs
+            bobCalls.accept()
+            eventually(timeout, "alice gets the answer") { aliceCalls.state.value is CallState.Connecting }
+            assertEquals(1, aliceMedia.last.acceptedAnswers.size)
+            assertTrue(bobMedia.last.acceptedOffers.single().contains("a=fingerprint:"))
+
+            aliceMedia.last.candidate(1)
+            eventually(timeout, "bob gets alice's candidate") { bobMedia.last.remoteCandidates.size == 1 }
+            aliceMedia.last.state(MediaConnectionState.CONNECTED)
+            bobMedia.last.state(MediaConnectionState.CONNECTED)
+            eventually(timeout, "both connected") { aliceCalls.state.value is CallState.Connected && bobCalls.state.value is CallState.Connected }
+
+            aliceCalls.hangup()
+            eventually(timeout, "bob sees the hangup") { bobCalls.state.value is CallState.Ended }
+            assertEquals(EndReason.HANGUP_REMOTE, (bobCalls.state.value as CallState.Ended).reason)
+            assertEquals(1, aliceMedia.last.closed)
+            eventually(timeout, "bob's media closed") { bobMedia.last.closed == 1 }
+            // a call leaves no message anywhere
+            assertEquals(textsBefore, bob.texts(conv))
+            assertTrue(alice.store.getOutbox().isEmpty())
+        } finally {
+            aliceCalls.stop(); bobCalls.stop()
+            alice.engine.stopRealtime(); bob.engine.stopRealtime()
+        }
+    }
+
+    @Test
+    fun callsAreRefusedInGroupsAndWithATargetByTheServer() = runBlocking<Unit> {
+        val conv = directChat(alice, bob)
+        val g = alice.engine.createGroup("Samtal $run", listOf(bob.userId, carol.userId))
+        val api = alice.rawApi()
+        fun call(conversation: String, target: String? = null) =
+            SendMessageRequest(UUID.randomUUID().toString(), conversation, MessageKind.CALL, target, 1)
+        assertFailsWith<IllegalArgumentException> { alice.engine.sendCallSignal(g.id, CallSignal(UUID.randomUUID().toString(), CallAction.HANGUP)) }
+        val groupRefusal = assertFailsWith<ApiException.Conflict> { api.sendMessage(call(g.id)) }
+        assertEquals("calls_direct_only", groupRefusal.code)
+        assertFailsWith<ApiException.Invalid> { api.sendMessage(call(conv, target = UUID.randomUUID().toString())) }
     }
 
     private fun indexOf(haystack: ByteArray, needle: ByteArray): Int {

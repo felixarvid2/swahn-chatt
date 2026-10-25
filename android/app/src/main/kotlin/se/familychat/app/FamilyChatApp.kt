@@ -21,6 +21,7 @@ import se.familychat.app.platform.security.AppLock
 import se.familychat.app.platform.work.WorkScheduler
 import se.familychat.core.client.FamilyChatEngine
 import se.familychat.core.client.LocalStore
+import se.familychat.core.client.call.CallManager
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -52,17 +53,24 @@ class AppStarter @Inject constructor(
     private val preparer: AttachmentPreparer,
     private val appLock: AppLock,
     private val expiry: se.familychat.app.platform.work.ExpiryManager,
+    private val calls: CallManager,
     @ApplicationScope private val scope: CoroutineScope,
 ) {
     fun start() {
         foreground.addListener { fg -> if (fg) appLock.onForeground() else appLock.onBackground() }
         foreground.attach()
         notifier.start()
+        calls.start()
         session.start()
 
         // No account, no lock (a new sign-in starts without one).
         scope.launch {
-            session.state.collect { if (it is SessionState.SignedOut && appLock.enabled) appLock.disable() }
+            session.state.collect {
+                if (it is SessionState.SignedOut) {
+                    calls.hangup()
+                    if (appLock.enabled) appLock.disable()
+                }
+            }
         }
 
         // Realtime (WebSocket + sync on hints) only while the app is visible; in the background push and WorkManager take over.

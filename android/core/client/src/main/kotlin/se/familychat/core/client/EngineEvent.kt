@@ -1,5 +1,6 @@
 package se.familychat.core.client
 
+import se.familychat.core.model.CallSignal
 import se.familychat.core.network.LogoutReason
 
 /**
@@ -32,6 +33,19 @@ sealed interface EngineEvent {
     /** The server rejected our session: show the login screen (then call `logout()` to wipe local data). */
     data class SessionEnded(val reason: LogoutReason) : EngineEvent
 }
+
+/**
+ * A decrypted call signal, delivered on `FamilyChatEngine.callSignals` and nowhere else: nothing about a call is ever
+ * stored. [fromSelf] is true for a signal from one of this account's other devices. [serverTs] is the server's clock.
+ */
+data class CallSignalEvent(
+    val conversationId: String,
+    val fromUserId: String,
+    val fromDeviceId: String,
+    val fromSelf: Boolean,
+    val serverTs: Long,
+    val signal: CallSignal,
+)
 
 /** Who is typing where (cleared automatically after a few seconds without refresh). */
 typealias TypingMap = Map<String, Set<String>>

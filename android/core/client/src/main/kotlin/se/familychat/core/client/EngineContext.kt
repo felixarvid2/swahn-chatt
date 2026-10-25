@@ -19,6 +19,9 @@ internal class EngineContext(
     val keyManager = KeyManager(signalStore, protocolStorage, config.clock)
     val events = MutableSharedFlow<EngineEvent>(extraBufferCapacity = 512)
 
+    /** Decrypted call signals; time-critical, so they bypass [events] and the store (see [CallSignalEvent]). */
+    val callSignals = MutableSharedFlow<CallSignalEvent>(extraBufferCapacity = 64)
+
     @Volatile var account: Account? = null
     @Volatile var connection: ServerConnection? = null
 
@@ -30,6 +33,9 @@ internal class EngineContext(
     }
 
     fun now(): Long = config.clock()
+
+    /** [now] moved by the learned difference between the server's clock and ours (0 until a response was seen). */
+    fun serverNow(): Long = now() + (connection?.serverClock?.offsetMs ?: 0L)
 }
 
 /** The operation needs a signed-in account (call login/redeemInvite/restoreSession first). */

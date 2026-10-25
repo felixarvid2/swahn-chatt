@@ -88,6 +88,19 @@ class FakeServer {
     /** Chronological log of API calls (e.g. "sync:0", "ack:7", "send:<id>") for ordering assertions. */
     val log: MutableList<String> = CopyOnWriteArrayList()
 
+    /** The server's clock for call messages (`server_ts`); ordinary messages keep the fixed 1000 the tests expect. */
+    @Volatile var serverTime: () -> Long = System::currentTimeMillis
+
+    /** What `GET /calls/turn` answers; [failTurn] makes it fail like a server that is down. */
+    @Volatile var turn = TurnCredentials(listOf("stun:fake.example:3478", "turn:fake.example:3478?transport=udp"), "1:user", "secret", 3600)
+    @Volatile var failTurn = false
+    val turnFetches = java.util.concurrent.atomic.AtomicInteger()
+
+    private val callSendTimes = HashMap<String, ArrayDeque<Long>>() // sender user -> recent call sends (60 per minute)
+
+    /** The `call` messages the server holds, in order (they are never part of history). */
+    fun callMessages(): List<MsgRec> = synchronized(lock) { messages.values.filter { it.kind == MessageKind.CALL } }
+
     // --- fault injection ----------------------------------------------------------------------------------------------
     @Volatile var failSends = 0 // next N sendMessage calls throw IOException before reaching the server
     @Volatile var loseSendResponses = 0 // next N sends are stored, then the response is "lost"
@@ -169,7 +182,7 @@ class FakeServer {
     }
 
     /** A connection that is not yet bound to a device; `login`/`redeemInvite` binds it. */
-    fun connect(deviceId: String = ""): FakeConnection = FakeConnection(this, deviceId)
+    fun connect(deviceId: String = ""): FakeConnection = FakeConnection(this, deviceId).also { it.serverClock.record(serverTime()) }
 
     /** Log in over the fake API without an engine (used by helper code). */
     private fun auth(u: UserRec, d: DeviceRec) = AuthResponse(
@@ -259,6 +272,12 @@ class FakeServer {
         override suspend fun setPush(request: PushRegistration) = Unit
         override suspend fun clearPush() = Unit
         override suspend fun deleteDevice(deviceId: String) { revokeDevice(deviceId) }
+
+        override suspend fun turnCredentials(): TurnCredentials {
+            turnFetches.incrementAndGet()
+            if (failTurn) throw IOException("simulated turn failure")
+            return turn
+        }
 
         override suspend fun uploadKeys(request: UploadKeysRequest) {
             synchronized(lock) {
@@ -390,6 +409,29 @@ class FakeServer {
             return response
         }
 
+        /** What the backend checks for `kind: call` before the device set: direct only, no target or attachments, 60 a minute. */
+        private fun checkCall(c: ConvRec, r: SendMessageRequest) {
+            if (c.type != ConversationType.DIRECT) throw ApiException.Conflict("calls_direct_only", "calls are for direct conversations")
+            if (r.targetMessageId != null || r.attachmentIds.isNotEmpty()) {
+                throw ApiException.Invalid("invalid_request", "a call has no target or attachments")
+            }
+            val now = serverTime()
+            val recent = callSendTimes.getOrPut(me.userId) { ArrayDeque() }
+            while (recent.isNotEmpty() && now - recent.first() > 60_000) recent.removeFirst()
+            if (recent.size >= 60) throw ApiException.RateLimited("too many call messages", 5)
+            recent.addLast(now)
+        }
+
+        /**
+         * The `server_ts` of a new message, and its expiry from the conversation's timer. A call is not a message: it ignores the
+         * timer and carries the real server time (the client drops stale ones).
+         */
+        private fun stampMessage(c: ConvRec, r: SendMessageRequest): Long {
+            if (r.kind == MessageKind.CALL) return serverTime()
+            expiresAt[r.id] = c.disappearingSeconds?.let { 1000 + it * 1000 }
+            return 1000
+        }
+
         private fun doSend(r: SendMessageRequest): SendMessageResponse {
             log += "send:${r.id}"
             val c = conversations[r.conversationId]?.takeIf { me.userId in it.members } ?: throw ApiException.NotFound("not_found", "x")
@@ -397,6 +439,7 @@ class FakeServer {
                 if (it.msg.senderUserId != me.userId) throw ApiException.Conflict("id_conflict", "x")
                 return SendMessageResponse(it.msg.copy(envelope = null), true)
             }
+            if (r.kind == MessageKind.CALL) checkCall(c, r)
             if (alwaysMismatch) throw ApiException.MismatchedDevices("forced", emptyList(), emptyList())
             forcedMismatches.poll()?.let { throw it }
             val expected = c.members.keys.flatMap { activeDevices(it) }.filter { it.keys != null && it.id != me.id }.map { it.id }.toSet()
@@ -412,14 +455,14 @@ class FakeServer {
                     throw ApiException.NotFound("not_found", "target")
                 }
                 if (r.attachmentIds.isNotEmpty()) throw ApiException.Invalid("invalid_request", "no attachments")
-            } else if (r.kind != MessageKind.MESSAGE) {
+            } else if (r.kind in setOf(MessageKind.EDIT, MessageKind.DELETE)) { // (a call has no target)
                 val t = messages[r.targetMessageId] ?: throw ApiException.NotFound("not_found", "target")
                 if (t.msg.senderUserId != me.userId || t.deleted) throw ApiException.NotFound("not_found", "target")
             }
             for (id in r.attachmentIds) if (id !in attachmentBlobs) throw ApiException.Invalid("invalid_request", "unknown attachment $id")
-            expiresAt[r.id] = c.disappearingSeconds?.let { 1000 + it * 1000 }
+            val serverTs = stampMessage(c, r)
             val msg = Message(
-                r.id, r.conversationId, me.userId, me.id, r.kind, r.targetMessageId, r.clientTs, 1000, messageSeq.incrementAndGet(),
+                r.id, r.conversationId, me.userId, me.id, r.kind, r.targetMessageId, r.clientTs, serverTs, messageSeq.incrementAndGet(),
                 r.attachmentIds, false, null,
             )
             val envMap = r.envelopes.associate { it.deviceId to MessageEnvelope(it.type, it.body) }
@@ -561,5 +604,8 @@ class FakeConnection(private val server: FakeServer, deviceId: String) : ServerC
     val deviceId: String get() = fakeApi.deviceId
     val sessionFlow = MutableSharedFlow<LogoutReason>(extraBufferCapacity = 4)
     override val sessionEvents: SharedFlow<LogoutReason> = sessionFlow
+
+    /** Learns the server's clock (see [FakeServer.serverTime]) once, at connect, as the real client does from `Date` headers. */
+    override val serverClock = ServerClock()
     override fun realtime(scope: CoroutineScope): RealtimeConnection = server.FakeRealtime(fakeApi.deviceId, scope)
 }

@@ -235,6 +235,73 @@ class EmojiTest {
 
 class DtoTest {
     @Test
+    fun `a call signal round-trips and is a known type`() {
+        val offer = callContent(CallSignal(CALL_ID, CallAction.OFFER, video = true, sdp = SDP))
+        val ice = callContent(CallSignal(CALL_ID, CallAction.ICE, candidates = listOf(IceCandidate("0", 0, "candidate:1 1 udp 1 10.0.0.1 9 typ host"))))
+        val hangup = callContent(CallSignal(CALL_ID, CallAction.HANGUP, reason = "done"))
+        for (c in listOf(offer, ice, hangup)) {
+            val back = ContentCodec.decode(ContentCodec.encode(c))
+            assertEquals(c, back)
+            assertTrue(back.isKnownType)
+        }
+        val wire = FamilyChatJson.parseToJsonElement(FamilyChatJson.encodeToString(Content.serializer(), ice)).jsonObject["call"]!!.jsonObject
+        assertEquals("ice", wire["action"]!!.jsonPrimitive.content)
+        assertTrue("sdp_m_line_index" in wire["candidates"].toString())
+    }
+
+    @Test
+    fun `a call signal needs a call, a uuid call_id, a known action and no target or content`() {
+        fun fails(c: Content) = assertFailsWith<IllegalArgumentException> { ContentCodec.decode(ContentCodec.encode(c)) }
+        val ok = callContent(CallSignal(CALL_ID, CallAction.HANGUP))
+        ContentCodec.decode(ContentCodec.encode(ok))
+        fails(ok.copy(call = null))
+        fails(ok.copy(call = ok.call!!.copy(callId = "not-a-uuid")))
+        fails(ok.copy(call = ok.call!!.copy(action = "ring")))
+        fails(ok.copy(targetMessageId = "t"))
+        fails(ok.copy(text = "hi"))
+        fails(ok.copy(attachments = listOf(AttachmentRef("a", "k", "h", 1, "image/png"))))
+    }
+
+    @Test
+    fun `an offer or answer needs a bounded sdp with a DTLS fingerprint`() {
+        fun fails(sdp: String?, action: String = CallAction.OFFER) =
+            assertFailsWith<IllegalArgumentException> { ContentCodec.decode(ContentCodec.encode(callContent(CallSignal(CALL_ID, action, sdp = sdp)))) }
+        for (action in listOf(CallAction.OFFER, CallAction.ANSWER)) {
+            ContentCodec.decode(ContentCodec.encode(callContent(CallSignal(CALL_ID, action, sdp = SDP))))
+            fails(null, action)
+            fails("   ", action)
+            fails("v=0\r\na=setup:actpass\r\n", action)
+        }
+        val padding = "x".repeat(Content.MAX_SDP_BYTES)
+        fails(SDP + padding)
+        ContentCodec.decode(ContentCodec.encode(callContent(CallSignal(CALL_ID, CallAction.OFFER, sdp = SDP + "x".repeat(Content.MAX_SDP_BYTES - SDP.length)))))
+    }
+
+    @Test
+    fun `an ice signal needs one to fifty candidates of at most 1 KiB`() {
+        fun ice(vararg c: IceCandidate) = callContent(CallSignal(CALL_ID, CallAction.ICE, candidates = c.toList()))
+        fun cand(size: Int = 20) = IceCandidate("0", 0, "c".repeat(size))
+        ContentCodec.decode(ContentCodec.encode(ice(cand())))
+        ContentCodec.decode(ContentCodec.encode(ice(*Array(Content.MAX_CANDIDATES) { cand() })))
+        ContentCodec.decode(ContentCodec.encode(ice(cand(Content.MAX_CANDIDATE_BYTES))))
+        assertFailsWith<IllegalArgumentException> { ContentCodec.decode(ContentCodec.encode(ice())) }
+        assertFailsWith<IllegalArgumentException> { ContentCodec.decode(ContentCodec.encode(ice(*Array(Content.MAX_CANDIDATES + 1) { cand() }))) }
+        assertFailsWith<IllegalArgumentException> { ContentCodec.decode(ContentCodec.encode(ice(cand(Content.MAX_CANDIDATE_BYTES + 1)))) }
+        assertFailsWith<IllegalArgumentException> {
+            ContentCodec.decode(ContentCodec.encode(callContent(CallSignal(CALL_ID, CallAction.ICE, candidates = null))))
+        }
+    }
+
+    @Test
+    fun `turn credentials parse with and without a secret`() {
+        val full = FamilyChatJson.decodeFromString(TurnCredentials.serializer(), """{"urls":["turn:h:3478"],"username":"u","credential":"c","ttl":600}""")
+        assertEquals(TurnCredentials(listOf("turn:h:3478"), "u", "c", 600), full)
+        val stun = FamilyChatJson.decodeFromString(TurnCredentials.serializer(), """{"urls":["stun:h:3478"],"username":null,"credential":null,"ttl":0}""")
+        assertNull(stun.username)
+        assertNull(stun.credential)
+    }
+
+    @Test
     fun `auth response parses with unknown keys`() {
         val s = """{"access_token":"a","access_expires_at":5,"refresh_token":"r","refresh_expires_at":6,
             "user":{"id":"u","username":"anna","display_name":"Anna","avatar_attachment_id":null,"is_admin":true,
@@ -309,3 +376,8 @@ class DtoTest {
 
 private inline fun <reified T> kotlinx.serialization.json.Json.encodeToJsonElementForTest(v: T): JsonObject =
     encodeToJsonElement(kotlinx.serialization.serializer<T>(), v).jsonObject
+
+private const val CALL_ID = "3f2b8c1e-5d4a-4e6f-9a7b-1c2d3e4f5a6b"
+private const val SDP = "v=0\r\na=fingerprint:sha-256 AA:BB\r\na=setup:actpass\r\n"
+
+private fun callContent(signal: CallSignal) = Content(type = ContentType.CALL, conversationId = "c", messageId = "m", call = signal)

@@ -21,6 +21,7 @@ import se.familychat.core.crypto.SafetyNumbers
 import se.familychat.core.model.AddMembersRequest
 import se.familychat.core.model.AttachmentPurpose
 import se.familychat.core.model.AuthResponse
+import se.familychat.core.model.CallSignal
 import se.familychat.core.model.ChangePasswordRequest
 import se.familychat.core.model.Device
 import se.familychat.core.model.PushRegistration
@@ -35,6 +36,7 @@ import se.familychat.core.model.MarkReadRequest
 import se.familychat.core.model.RedeemInviteRequest
 import se.familychat.core.model.ServerFrame
 import se.familychat.core.model.SetRoleRequest
+import se.familychat.core.model.TurnCredentials
 import se.familychat.core.model.TypingState
 import se.familychat.core.network.ApiClient
 import se.familychat.core.network.ApiException
@@ -93,6 +95,12 @@ class FamilyChatEngine(
 
     /** Change notifications; see [EngineEvent]. */
     val events: SharedFlow<EngineEvent> = ctx.events.asSharedFlow()
+
+    /**
+     * Call signals from the other member of a direct conversation or from this account's other devices, already
+     * decrypted and checked (sender, conversation, age). Never replayed and never stored: collect it from app start.
+     */
+    val callSignals: SharedFlow<CallSignalEvent> = ctx.callSignals.asSharedFlow()
 
     private val _typing = MutableStateFlow<TypingMap>(emptyMap())
 
@@ -415,6 +423,26 @@ class FamilyChatEngine(
     /** Admin only: creates an invitation code (shown once). */
     suspend fun createInvitation(note: String? = null, expiresInHours: Int? = null, admin: Boolean = false): CreatedInvitation =
         ctx.api.createInvitation(CreateInvitationRequest(note, expiresInHours, if (admin) true else null))
+
+    // =========================================================================================================
+    // Calls
+    // =========================================================================================================
+
+    /** Sends one call signal in a direct conversation right away (no outbox, no retry later); see [SendPipeline.sendSignal]. */
+    suspend fun sendCallSignal(conversationId: String, signal: CallSignal) = sender.sendSignal(conversationId, signal)
+
+    /** Fresh TURN/STUN credentials for one call (`GET /calls/turn`). */
+    suspend fun fetchTurnCredentials(): TurnCredentials = ctx.api.turnCredentials()
+
+    /** The other member of a direct conversation, or null if it is unknown or not direct. */
+    suspend fun directPeer(conversationId: String): String? {
+        val me = ctx.account?.userId ?: return null
+        val c = ctx.store.getConversation(conversationId)?.takeIf { it.type == ConversationType.DIRECT } ?: return null
+        return c.members.firstOrNull { it.userId != me }?.userId
+    }
+
+    /** The current time on the server's clock as far as known (the local clock until a response told the difference). */
+    fun serverNow(): Long = ctx.serverNow()
 
     // =========================================================================================================
     // Sending

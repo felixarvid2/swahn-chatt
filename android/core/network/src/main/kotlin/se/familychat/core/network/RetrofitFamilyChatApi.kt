@@ -68,6 +68,8 @@ internal class RetrofitFamilyChatApi(
     override suspend fun clearPush() = call { raw.clearPush() }
     override suspend fun deleteDevice(deviceId: String) = call { raw.deleteDevice(deviceId) }
 
+    override suspend fun turnCredentials() = call { raw.turnCredentials() }
+
     override suspend fun uploadKeys(request: UploadKeysRequest) = call { raw.uploadKeys(request) }
     override suspend fun keyStatus() = call { raw.keyStatus() }
     override suspend fun getKeys(userId: String, deviceId: String?) = call { raw.getKeys(userId, deviceId) }

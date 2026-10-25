@@ -62,3 +62,12 @@
 # --- crash reports -------------------------------------------------------------------------------------------------------------
 -keepattributes SourceFile, LineNumberTable
 -renamesourcefileattribute SourceFile
+
+# --- WebRTC (calls) ------------------------------------------------------------------------------------------------------------
+# The AAR ships no consumer rules. libwebrtc's native code looks up org.webrtc classes, methods and fields by name through JNI
+# (jni_zero), so nothing in these packages may be renamed or removed.
+-keep class org.webrtc.** { *; }
+-keep class org.jni_zero.** { *; }
+-dontwarn org.webrtc.**
+# JniZero refers to a generated JniZeroJni class that the AAR does not contain (only reachable through JniZero.setJniClassLoader).
+-dontwarn org.jni_zero.JniZeroJni

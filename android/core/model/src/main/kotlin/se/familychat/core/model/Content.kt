@@ -14,8 +14,11 @@ object ContentType {
     /** A change of the conversation's disappearing-messages timer (sent as an ordinary `message`). */
     const val TIMER = "timer"
 
+    /** One step of a 1:1 call's signalling (sent as message kind `call`, never stored; see [CallSignal]). */
+    const val CALL = "call"
+
     /** The types this app version understands; anything else is well-formed content from a newer app (see [ContentCodec]). */
-    val KNOWN: Set<String> = setOf(TEXT, EDIT, DELETE, REACTION, TIMER)
+    val KNOWN: Set<String> = setOf(TEXT, EDIT, DELETE, REACTION, TIMER, CALL)
 }
 
 object AttachmentKind {
@@ -61,6 +64,7 @@ data class AttachmentRef(
  * `type = "edit"`: [text] is the new text. `type = "delete"`: only the binding fields are set. [replyTo] is the id of
  * the message this one replies to. `type = "reaction"`: [targetMessageId] is the message reacted to, [emoji] the reaction,
  * [remove] true when the reaction is taken back. `type = "timer"`: [seconds] is the new disappearing-messages timer (0: off).
+ * `type = "call"`: [call] is the signalling step.
  *
  * Every field added after version 2 shipped is optional and omitted when null, so older apps ignore it: [expiresIn]
  * (seconds a text message lives on the receiver's phone once displayed), [forwarded].
@@ -80,6 +84,7 @@ data class Content(
     val seconds: Long? = null,
     @SerialName("expires_in") val expiresIn: Long? = null,
     val forwarded: Boolean? = null,
+    @SerialName("call") val call: CallSignal? = null,
 ) {
     /** True for a type this app version knows how to apply. */
     val isKnownType: Boolean get() = type in ContentType.KNOWN
@@ -90,6 +95,11 @@ data class Content(
         /** Shortest and longest disappearing-messages timer, the server's own limits (docs/API.md). */
         const val MIN_TIMER_SECONDS = 300L
         const val MAX_TIMER_SECONDS = 31_536_000L
+
+        /** Largest SDP and ICE candidate a call signal may carry, and most candidates per ICE signal (docs/API.md). */
+        const val MAX_SDP_BYTES = 32 * 1024
+        const val MAX_CANDIDATE_BYTES = 1024
+        const val MAX_CANDIDATES = 50
 
         /** 0 is "off". */
         fun isValidTimer(seconds: Long?): Boolean = seconds != null && (seconds == 0L || seconds in MIN_TIMER_SECONDS..MAX_TIMER_SECONDS)
@@ -133,8 +143,33 @@ object ContentCodec {
                 require(Content.isValidTimer(content.seconds)) { "timer without a valid seconds value" }
                 require(content.targetMessageId == null) { "a timer has no target" }
             }
+            ContentType.CALL -> requireValidCall(content)
             else -> Unit // a newer app's type: well-formed and bound, nothing more is known about it
         }
         return content
+    }
+}
+
+private val UUID_PATTERN = Regex("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+
+/** The rules for a `call` content: a signal bound to nothing but its call, with DTLS-SRTP kept in every SDP. */
+private fun requireValidCall(content: Content) {
+    require(content.targetMessageId == null) { "a call signal has no target" }
+    require(content.text == null && content.attachments.isEmpty()) { "a call signal carries no content" }
+    val call = requireNotNull(content.call) { "call content without call" }
+    require(UUID_PATTERN.matches(call.callId)) { "call_id is not a UUID" }
+    require(call.action in CallAction.ALL) { "unknown call action" }
+    when (call.action) {
+        CallAction.OFFER, CallAction.ANSWER -> {
+            val sdp = call.sdp
+            require(!sdp.isNullOrBlank()) { "${call.action} without sdp" }
+            require(sdp.toByteArray(Charsets.UTF_8).size <= Content.MAX_SDP_BYTES) { "sdp too large" }
+            require("a=fingerprint:" in sdp) { "sdp without a DTLS fingerprint" }
+        }
+        CallAction.ICE -> {
+            val candidates = call.candidates
+            require(candidates != null && candidates.size in 1..Content.MAX_CANDIDATES) { "ice needs 1..${Content.MAX_CANDIDATES} candidates" }
+            require(candidates.all { it.candidate.toByteArray(Charsets.UTF_8).size <= Content.MAX_CANDIDATE_BYTES }) { "ice candidate too large" }
+        }
     }
 }

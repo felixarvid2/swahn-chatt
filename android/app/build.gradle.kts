@@ -168,6 +168,7 @@ dependencies {
     implementation(libs.androidx.biometric)
     implementation(libs.media3.exoplayer)
     implementation(libs.media3.ui)
+    implementation(libs.webrtc.android)
     implementation(libs.zxing.core)
     implementation(libs.zxing.android.embedded) { isTransitive = false } // camera preview only; zxing core is declared above
 

@@ -36,6 +36,7 @@ androidxTestRules = "1.6.1"
 detekt = "1.23.8"
 zxing = "3.5.3"
 zxingEmbedded = "4.3.0"
+webrtc = "150.7871.01"
 
 [libraries]
 # Signal protocol: JVM build (tests, compileOnly in :core:crypto) and Android build (app)
@@ -104,6 +105,8 @@ detekt-formatting = { module = "io.gitlab.arturbosch.detekt:detekt-formatting", 
 # QR codes: zxing core (pure Java) generates and decodes; zxing-android-embedded is only the camera view for scanning (no Google Play services)
 zxing-core = { module = "com.google.zxing:core", version.ref = "zxing" }
 zxing-android-embedded = { module = "com.journeyapps:zxing-android-embedded", version.ref = "zxingEmbedded" }
+# WebRTC media for calls (BSD-3, Maven Central; the AAR ships no consumer R8 rules, see proguard-rules.pro)
+webrtc-android = { module = "io.github.webrtc-sdk:android", version.ref = "webrtc" }
 robolectric = { module = "org.robolectric:robolectric", version.ref = "robolectric" }
 
 junit = { module = "junit:junit", version.ref = "junit" }

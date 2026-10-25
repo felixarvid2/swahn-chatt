@@ -18,6 +18,9 @@ import java.util.concurrent.TimeUnit
 interface ServerConnection {
     val api: FamilyChatApi
 
+    /** The server's clock relative to this phone's; the default never learns an offset. */
+    val serverClock: ServerClock get() = ServerClock.UNSYNCED
+
     /** Emits when the session ended (refresh rejected, token reused, device revoked) and the app must log in. */
     val sessionEvents: SharedFlow<LogoutReason>
 
@@ -43,6 +46,8 @@ class ApiClient private constructor(
     private val refresher: TokenRefresher,
     private val httpClient: OkHttpClient,
     private val sessionFlow: MutableSharedFlow<LogoutReason>,
+    /** The offset between the server's clock and this phone's, learned from response `Date` headers. */
+    override val serverClock: ServerClock,
 ) : ServerConnection {
     override val sessionEvents: SharedFlow<LogoutReason> = sessionFlow.asSharedFlow()
 
@@ -93,9 +98,11 @@ class ApiClient private constructor(
                 .also(configure)
                 .build()
             val sessionFlow = MutableSharedFlow<LogoutReason>(extraBufferCapacity = 8)
+            val serverClock = ServerClock()
             val refresher = TokenRefresher(url, base, tokens) { sessionFlow.tryEmit(it) }
             val http = base.newBuilder()
                 .addInterceptor(AuthInterceptor(tokens))
+                .addInterceptor(ServerClockInterceptor(serverClock))
                 .authenticator(RefreshAuthenticator(refresher, tokens))
                 .build()
             val retrofit = Retrofit.Builder()
@@ -103,7 +110,8 @@ class ApiClient private constructor(
                 .client(http)
                 .addConverterFactory(FamilyChatJson.asConverterFactory("application/json; charset=UTF-8".toMediaType()))
                 .build()
-            return ApiClient(url, RetrofitFamilyChatApi(retrofit.create(RawApi::class.java)) { tokens.getTokens() == null }, tokens, refresher, http, sessionFlow)
+            val api = RetrofitFamilyChatApi(retrofit.create(RawApi::class.java)) { tokens.getTokens() == null }
+            return ApiClient(url, api, tokens, refresher, http, sessionFlow, serverClock)
         }
     }
 }

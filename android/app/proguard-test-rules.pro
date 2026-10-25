@@ -68,3 +68,8 @@
 -keep,allowobfuscation class se.familychat.core.model.Padding { *; }
 -keep,allowobfuscation class se.familychat.core.model.ContentType { *; }
 -keep,allowobfuscation class se.familychat.core.model.FamilyChatJson { *; }
+
+# Calls: WebRtcLoopbackTest builds the real factory and drives the media session interface from :core:client. org.webrtc itself is
+# kept by the app rules (WebRTC section of proguard-rules.pro), so a missing rule there fails the test.
+-keep,allowobfuscation class se.familychat.app.call.WebRtcMediaSessionFactory { <init>(...); }
+-keep,allowobfuscation class se.familychat.core.client.call.** { *; }
