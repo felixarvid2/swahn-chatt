@@ -42,3 +42,6 @@ captures/
 
 # empty files some PostgreSQL test runs leave in backend/
 backend/fc_t_*
+
+# TLS certificates copied in for the coturn profile (see docs/RASPBERRY_PI_SETUP.md, Calls)
+deployment/turn-certs/

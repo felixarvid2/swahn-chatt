@@ -451,6 +451,86 @@ The entrypoint runs `alembic upgrade head` against PostgreSQL on every start, li
   ARCHITECTURE.md, "Sync cursor and the database"); a request that cannot get it within 10 s fails with a server
   error and the client retries. Keep one backend worker, as always.
 
+## 12. Audio and video calls (optional TURN relay)
+
+Calls are WebRTC between the two phones; the media is encrypted end to end (DTLS-SRTP) and the signalling travels as
+encrypted `call` messages through the normal server. The server only has two jobs: hand out relay credentials
+(`GET /api/v1/calls/turn`) and, if you want one, run the relay. Nothing is needed on the server for calls to work when
+both phones can reach each other directly.
+
+**Which setup do I need?**
+
+- **Everybody on the same Tailscale network (recommended): usually no relay.** The phones find each other through
+  their tailnet addresses (`100.x.y.z`) and talk directly; Tailscale hole-punches or relays (DERP) the packets itself.
+  Leave `FAMILYCHAT_TURN_URLS` empty. If a call connects but has no sound on some mobile networks, add the relay below.
+- **Public setup, or some phones are not on the tailnet:** run the `turn` profile. It relays when a direct path fails
+  (symmetric NAT, carrier-grade NAT, strict firewalls). A relay is also what makes a call work between two phones that
+  are on different mobile networks.
+
+**Start the relay**
+
+1. Add to `.env` (the same secret is used by the backend and by coturn):
+   ```bash
+   openssl rand -base64 48                       # copy the output into FAMILYCHAT_TURN_SECRET
+   FAMILYCHAT_TURN_SECRET=<that value>
+   FAMILYCHAT_TURN_URLS=turn:pi.your-tailnet.ts.net:3478?transport=udp,turn:pi.your-tailnet.ts.net:3478?transport=tcp
+   FAMILYCHAT_STUN_URLS=stun:pi.your-tailnet.ts.net:3478          # optional
+   TURN_EXTERNAL_IP=                                              # public IP (or PUBLIC/PRIVATE) behind NAT
+   ```
+2. `docker compose --profile turn up -d` (or add `turn` to `COMPOSE_PROFILES`), then `docker compose up -d` again so
+   the backend picks up the new variables. `docker compose logs turn` shows `Total relay threads`, and
+   `docker compose ps` shows the service `healthy`. The backend refuses to start with `FAMILYCHAT_TURN_URLS` and a
+   secret shorter than 32 bytes.
+3. Check the credentials: `curl -s -H "Authorization: Bearer <access token>" https://<server>/api/v1/calls/turn`.
+
+The container (`coturn/coturn:4.18.0`, pinned) uses **host networking**: a relay has to see the real peer addresses
+and a range of UDP ports, which Docker's published-port NAT handles badly. It runs as an unprivileged user with a
+read-only filesystem and no capabilities beyond `NET_BIND_SERVICE` (the file capability on the binary). The configuration
+is `deployment/turnserver.conf` (no secrets) plus the lines `turn-start.sh` appends from the environment into a
+tmpfs; the secret is never written to disk or printed. Because of host networking the service listens on every
+interface of the Pi: use the host firewall (`ufw`) to decide who may reach it.
+
+**Ports**
+
+| Port | Protocol | What | Open to the internet? |
+|---|---|---|---|
+| 3478 | UDP and TCP | STUN and TURN | only in a public setup |
+| 5349 | TCP (and UDP) | TURN over TLS (`turns:`), only with certificates in `deployment/turn-certs/` | only in a public setup |
+| 49160-49200 | UDP | relayed media (one port per call leg) | only in a public setup |
+
+Tailscale-only: open nothing on the router, allow these ports only on `tailscale0` (`sudo ufw allow in on tailscale0 to
+any port 3478` and `... proto udp to any port 49160:49200`). Public setup: forward exactly the table above to the Pi, set
+`TURN_EXTERNAL_IP` to the public address, and prefer `turns:` with a certificate for the TCP fallback on networks that
+block UDP (copy `fullchain.pem` and `privkey.pem` to `deployment/turn-certs/`, readable by the user "nobody", for example
+from Caddy's certificate volume or `tailscale cert`, and add `turns:your.host:5349?transport=tcp` to
+`FAMILYCHAT_TURN_URLS`). Certificate renewals need a copy and a `docker compose restart turn`.
+
+**Tailscale addresses and the relay (`TURN_ALLOW_TAILNET_PEERS`)**
+
+coturn only relays to peer addresses it is allowed to, and the configuration denies the private ranges (RFC 1918, ULA,
+link-local, loopback, `0.0.0.0/8`), so a stolen credential cannot be used to reach your home network or other containers
+through the Pi. The Tailscale range `100.64.0.0/10` (and `fd7a:115c:a1e0::/48`) is denied by default too, because the Pi
+is normally a member of your tailnet and the relay would otherwise let any credential holder send packets to every
+other tailnet host the Pi can reach (a NAS, a laptop, an admin interface). The cost: if both phones are on the tailnet
+and the relay is the only path between them, relaying to their `100.x` addresses is refused. That case is rare, because
+tailnet phones connect directly (or through Tailscale's own DERP) and do not use a relay. If you do need it, set
+`TURN_ALLOW_TAILNET_PEERS=true`, restart `turn`, and restrict what the Pi's node may reach with Tailscale ACLs.
+
+**Limits** (in `turnserver.conf`): 10 allocations per user, 40 in total, about 12 Mbit/s per allocation, UDP relays only
+(no TCP relay), relay ports 49160-49200, nonces valid 10 minutes, STUN `fingerprint` on, no admin CLI. coturn 4.18 already
+requires TLS 1.2 and starts no DTLS listener, so no extra options are set for that.
+
+**Privacy.** The relay sees both phones' IP addresses and how much and when they send, never the content. In a direct
+(non-relayed) call the two phones learn each other's current IP addresses. If someone should not learn the other's IP,
+the app must use "relay only" mode: then only the relay's address is visible to the callee, at the cost of latency and
+the Pi's upload bandwidth (about 1-2 Mbit/s per audio+video leg; check your uplink). Push for an incoming call is a
+normal content-free push with high priority (`Priority: 5`); your ntfy server sees "urgent", nothing else.
+
+Verified in this repository's test environment: `docker compose --profile turn config`, container start, a client
+allocating a relay with generated credentials and exchanging packets (`turnutils_uclient`), refusal of bad and expired
+credentials, and refusal to relay to the denied ranges. Not verified: calls between real phones, `turns:` with real
+certificates, behind-NAT operation, Raspberry Pi hardware.
+
 ## Troubleshooting
 
 | Symptom | Look at |

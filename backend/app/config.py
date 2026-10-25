@@ -18,6 +18,13 @@ class ConfigError(RuntimeError):
     pass
 
 
+def _check_ice_urls(name: str, urls: list[str], schemes: tuple[str, ...]) -> None:
+    for url in urls:
+        scheme, sep, rest = url.partition(":")
+        if scheme.lower() not in schemes or not sep or not rest.split("?", 1)[0]:
+            raise ConfigError(f"{name} entries must look like {schemes[0]}:host:port (got an invalid entry)")
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="FAMILYCHAT_", extra="ignore")
 
@@ -68,6 +75,14 @@ class Settings(BaseSettings):
     # Optional operator alerts: a full ntfy topic URL (https; http only in development) and an optional access token.
     admin_ntfy_url: str = ""
     admin_ntfy_token: str = ""
+    # 1:1 calls (WebRTC). Call signalling messages (kind "call") are deleted, delivered or not, after this long.
+    call_retention_seconds: int = Field(600, ge=30)
+    # TURN relay for calls (coturn with `use-auth-secret`): comma separated turn:/turns: URLs handed to clients, and
+    # the secret shared with coturn (`static-auth-secret`). Never logged or printed. Optional STUN URLs.
+    turn_urls: str = ""
+    turn_secret: str = ""
+    stun_urls: str = ""
+    turn_ttl_seconds: int = Field(3600, ge=60, le=86400)
 
     @model_validator(mode="after")
     def _finish(self) -> "Settings":
@@ -94,11 +109,27 @@ class Settings(BaseSettings):
                     "FAMILYCHAT_ADMIN_NTFY_URL must use https (plain http is only allowed in development)"
                 )
             self.admin_ntfy_url = self.admin_ntfy_url.strip()
+        if self.turn_urls.strip():
+            if len(self.turn_secret.encode()) < 32:
+                raise ConfigError(
+                    "FAMILYCHAT_TURN_SECRET must be at least 32 bytes when FAMILYCHAT_TURN_URLS is set "
+                    "(generate one with: openssl rand -base64 48)"
+                )
+            _check_ice_urls("FAMILYCHAT_TURN_URLS", self.turn_url_list, ("turn", "turns"))
+        _check_ice_urls("FAMILYCHAT_STUN_URLS", self.stun_url_list, ("stun", "stuns"))
         if not self.database_url:
             self.database_url = f"sqlite:///{(self.data_dir / 'familychat.db').resolve()}"
         if self.attachments_dir is None:
             self.attachments_dir = self.data_dir / "attachments"
         return self
+
+    @property
+    def turn_url_list(self) -> list[str]:
+        return [u.strip() for u in self.turn_urls.split(",") if u.strip()]
+
+    @property
+    def stun_url_list(self) -> list[str]:
+        return [u.strip() for u in self.stun_urls.split(",") if u.strip()]
 
     @property
     def push_requires_allowlist(self) -> bool:

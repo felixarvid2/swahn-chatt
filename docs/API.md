@@ -230,7 +230,7 @@ nothing on the server side; their devices are excluded from future envelopes.
 
 `POST /messages`:
 ```json
-{"id": "uuid", "conversation_id": "uuid", "kind": "message|edit|delete", "target_message_id": "uuid|null",
+{"id": "uuid", "conversation_id": "uuid", "kind": "message|edit|delete|reaction|call", "target_message_id": "uuid|null",
  "client_ts": 0, "attachment_ids": ["uuid"],
  "envelopes": [{"device_id": "uuid", "type": "prekey|whisper", "body": "b64"}]}
 ```
@@ -247,6 +247,18 @@ nothing on the server side; their devices are excluded from future envelopes.
   or unread counts. It is synchronised as an ordinary `message` event whose `data.kind` is `"reaction"` and is
   part of the history (`GET /conversations/{id}/messages`). Deleting the target drops undelivered reaction
   envelopes too (those events are then skipped). Old clients that do not know the kind ignore it.
+- `kind: "call"` is the signalling channel for 1:1 audio/video calls (offer, answer, ICE candidates, hangup, busy;
+  the encrypted content decides which). Only in `direct` conversations (`409 calls_direct_only` otherwise), no
+  `target_message_id`, no attachments (`422`). It carries envelopes for the full device set like a message, so all
+  of the callee's devices ring and the caller's other devices learn the outcome; the server never sees the SDP.
+  It is **not a message** for the server: no `last_message_*`/`updated_at`/unread change, it ignores
+  `disappearing_seconds`, is never in `GET /conversations/{id}/messages`, and cannot be edited, deleted or reacted
+  to. It is synchronised as an ordinary `message` event with `data.kind: "call"`. Retention is short: the hourly
+  maintenance job deletes call messages with their envelopes, delivered or not, once older than
+  `FAMILYCHAT_CALL_RETENTION_SECONDS` (default 600), so a device that was offline gets the event but may see no
+  content; clients must ignore call events whose `server_ts` is older than the call timeout (about a minute) rather
+  than ring. At most 60 call messages per minute per sender (`429 rate_limited`). The push for it is content-free
+  like any other (`{"t":"sync"}`) but is sent with high priority (see below). Old clients ignore the unknown kind.
 - `kind: "edit"` and `kind: "delete"` need `target_message_id` naming a non-deleted message by the same sender
   in the same conversation. Both carry envelopes for the full device set, like a normal message: an edit holds
   the new encrypted content, a delete holds an encrypted `{"v":2,"type":"delete","conversation_id","message_id","target_message_id"}` content. Recipients apply a delete
@@ -267,6 +279,23 @@ nothing on the server side; their devices are excluded from future envelopes.
   (SECURITY.md). The server column limits how long ciphertext stays on the server.
 - Limits: each envelope body ≤ 64 KiB decoded, ≤ 1000 envelopes, ≤ 10 attachments.
 
+## Calls
+
+`GET /calls/turn` (authenticated, 30 per minute per user) → short-lived TURN credentials per the TURN REST API
+(coturn `use-auth-secret`):
+```json
+{"urls": ["stun:pi.example.ts.net:3478", "turn:pi.example.ts.net:3478?transport=udp"],
+ "username": "1767225600:<user_id>", "credential": "<base64 HMAC-SHA1(secret, username)>", "ttl": 3600}
+```
+`username` is `<expiry unix seconds>:<user_id>`; use them as the `iceServers` entry. Without `FAMILYCHAT_TURN_URLS`
+there is no relay: `urls` holds only the optional STUN URLs (`FAMILYCHAT_STUN_URLS`, possibly empty) and
+`username` and `credential` are `null`, so clients still try direct (host) candidates. Fetch fresh credentials per
+call. Setup: RASPBERRY_PI_SETUP.md, section 12.
+
+Push for calls: a `call` message makes the server push immediately like any message, with the same content-free body
+`{"t":"sync"}`, plus the request headers `Priority: 5` (ntfy: max/urgent) and `Urgency: high` (RFC 8030, for
+distributors that honour it). Nothing about the call is in the body.
+
 ## Synchronisation
 
 Every device has its own event queue on the server. History and delivery never depend on an open WebSocket:
@@ -283,7 +312,7 @@ receives events created after the device was registered (use `GET /conversations
 
 | `type` | `data` |
 |---|---|
-| `message` | `Message` with this device's envelope (also used for edits, deletes and reactions: see `data.kind`) |
+| `message` | `Message` with this device's envelope (also used for edits, deletes, reactions and call signals: see `data.kind`) |
 | `receipt` | `{"conversation_id", "user_id", "type": "delivered", "message_ids": [...]}` or `{"conversation_id", "user_id", "type": "read", "up_to_seq": 0}`. Receipts a device has not acknowledged yet are coalesced: per (conversation, user, type) the device has at most one queued `read` receipt (the highest `up_to_seq`) and one `delivered` receipt (all `message_ids`). The merged receipt gets a new, higher event `seq`, so a device that already fetched an older one receives it again on its next sync (process it idempotently, as always). Clients show the event's `created_at` as the delivered/read time, so a merged receipt carries the time of the merge |
 | `conversation_updated` | `Conversation` (created, renamed, avatar, members or roles changed) |
 | `conversation_removed` | `{"conversation_id"}` — the user left or was removed |

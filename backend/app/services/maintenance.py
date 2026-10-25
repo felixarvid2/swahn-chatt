@@ -59,6 +59,11 @@ def prune(db: Session, settings: Settings) -> dict[str, int]:
         )
     ).rowcount
     messages = expire_messages(db, now)
+    # Call signalling is only useful for seconds: drop it with its envelopes, delivered or not.
+    calls = db.execute(
+        delete(Message).where(Message.kind == "call", Message.server_ts < now - settings.call_retention_seconds * 1000)
+    ).rowcount
+    messages += calls
     # A delivered envelope is ciphertext nobody needs again (the recipient has it). Undelivered ones stay: they
     # are the only copy a device that was offline for months can still fetch.
     envelopes = db.execute(

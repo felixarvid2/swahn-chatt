@@ -348,6 +348,40 @@ Risks of libsignal that we accept and mitigate:
   `NET_BIND_SERVICE`) and, for the backend, a read-only root filesystem; the Caddy and ntfy images are pinned to
   versions.
 
+## Calls (server and operations)
+
+Audio/video calls are WebRTC between the phones; media is DTLS-SRTP, end to end (the relay only forwards encrypted
+packets). Signalling (offer, answer, ICE candidates, hangup, busy) is ordinary end-to-end encrypted content in
+messages of kind `call`, so the server never sees SDP, which also means it sees no codecs, call type or the phones'
+addresses in signalling. What the server does learn is metadata: who signalled whom and when (a `call` message), how
+many, and that a push marked urgent was sent.
+
+- `call` messages: direct conversations only, full device-set envelopes, no attachments or targets, no effect on
+  `last_message_*`, unread counts or history, 60 per minute per sender, and **deleted with their envelopes 10
+  minutes after sending** (`FAMILYCHAT_CALL_RETENTION_SECONDS`), delivered or not.
+- The push for a `call` message is content-free like all pushes (`{"t":"sync"}`); it only adds `Priority: 5` and
+  `Urgency: high` headers so the phone is woken at once. A `{"t":"call"}` body was rejected on purpose: the header
+  already tells the push server (your own ntfy) "urgent", and nothing more should leak to a third-party distributor.
+- TURN credentials (`GET /calls/turn`) follow the TURN REST API: username `<expiry>:<user_id>`, credential
+  `base64(HMAC-SHA1(secret, username))`, valid one hour, handed only to authenticated users (30 requests per minute).
+  HMAC-SHA1 is what coturn defines; it is a keyed MAC here, not a hash used for collision resistance. The shared
+  secret (`FAMILYCHAT_TURN_SECRET`, at least 32 bytes) is never logged or printed by `check-config`; a leaked credential
+  works for at most its lifetime. coturn limits allocations per user (10) and in total (40), restricts relays to UDP
+  ports 49160-49200, and has no CLI or web admin.
+- **TURN sees IP addresses**, and the peers see each other's unless the app forces relay-only candidates. In a direct
+  connection the other party learns your current IP (a stalker-style risk when calling someone you do not trust); with
+  relay-only the callee sees only the relay's address, at the price of the server's bandwidth and latency. The TURN
+  server sees both phones' IPs and traffic volume and timing, never the content.
+- The relay must not become a tunnel into the server's network: coturn runs with `denied-peer-ip` for loopback,
+  link-local, RFC 1918, ULA and `0.0.0.0/8`, with multicast peers off, **and for the Tailscale range
+  `100.64.0.0/10` (+ `fd7a:115c:a1e0::/48`) by default**. Anyone holding a credential could otherwise ask the relay to
+  reach every other host on the tailnet that the Pi can reach. Allowing it (`TURN_ALLOW_TAILNET_PEERS=true`) is only
+  needed when phones reach each other through the relay while on the tailnet; most of the time tailnet phones connect
+  directly and do not need it.
+- Opening the TURN ports to the internet exposes a UDP/TCP service that only answers authenticated requests, but it
+  can still be probed and, with a leaked credential, used for free bandwidth until it expires. Prefer reaching it
+  over Tailscale; for a public setup forward only 3478 (and 5349 with TLS) plus the relay range.
+
 ## Presence (online / last seen)
 
 Presence is **opt-in and off by default** (`PATCH /users/me/settings {"share_presence": true}`), and the server
@@ -386,4 +420,5 @@ metadata and password hashes.
 - Display names, avatars and device names shown in notices are server data.
 - No message history transfer between devices.
 - Rate limiting (including the per-username login counters) is per-process memory and resets on restart.
+- Calls leak IP addresses to the TURN server and, without relay-only, to the other party (see "Calls").
 - The security review in `HANDOVER.md` lists what was tested and what still needs an external review.
