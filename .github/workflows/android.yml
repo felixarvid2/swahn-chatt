@@ -128,7 +128,7 @@ jobs:
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: true
           working-directory: familychat/android
-          script: ./gradlew connectedDebugAndroidTest --stacktrace && ./gradlew connectedQaAndroidTest -PtestBuildType=qa --stacktrace
+          script: ./scripts/run-instrumented.sh
 
       - name: Upload instrumented test reports
         if: always()
@@ -139,6 +139,7 @@ jobs:
             familychat/android/app/build/reports/androidTests/
             familychat/android/app/build/outputs/androidTest-results/
             familychat/android/app/build/outputs/mapping/qa/
+            familychat/android/app/build/logcat.txt
           if-no-files-found: ignore
           retention-days: 14
 
