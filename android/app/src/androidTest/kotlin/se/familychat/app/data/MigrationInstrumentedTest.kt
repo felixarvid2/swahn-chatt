@@ -101,7 +101,7 @@ class MigrationInstrumentedTest {
             fillVersion1(db)
             db.execSQL("INSERT INTO drafts (conversationId, text, updatedAt) VALUES ('c1', 'Utkast', 5)")
         }
-        helper.runMigrationsAndValidate("mig-v2-v3", AppDatabase.VERSION, true, AppDatabase.MIGRATION_2_3).use { db ->
+        helper.runMigrationsAndValidate("mig-v2-v3", AppDatabase.VERSION, true, *AppDatabase.MIGRATIONS).use { db ->
             assertEquals(1L, db.count("drafts"))
             assertEquals(4L, db.count("messages"))
             assertEquals(listOf("m1", "m2"), db.matches("hej"))
