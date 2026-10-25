@@ -107,6 +107,40 @@ messages and checks pages, order and timing of the message list.
 SQLCipher itself cannot be loaded on a PC (its native library is built for Android), so the database tests use plain
 SQLite through the same Room code; the encryption layer has to be checked on a phone (section 8).
 
+#### Instrumented tests (emulator or phone) and the R8 build
+
+The JVM tests cannot load SQLCipher, use the Android Keystore or run R8, so `app/src/androidTest` holds tests that do, on a
+real Android runtime: the encrypted database through `DatabaseProvider`/`PassphraseVault` (file is not plain SQLite, wrong
+passphrase fails, lost Keystore key starts over), the Keystore wrapper (round trip, non-exportable, lost key), the Room
+migration chain 1 -> 2 -> 3 on SQLCipher with the search index, libsignal and Tink, kotlinx.serialization and the Retrofit
+API proxy, and app start (`ActivityScenario`) with the login screen (Compose).
+
+```bash
+./gradlew assembleDebugAndroidTest                         # compile only, no device needed
+./gradlew connectedDebugAndroidTest                        # debug build on a connected device / running emulator
+./gradlew connectedQaAndroidTest -PtestBuildType=qa        # the same tests against the R8-minified `qa` build
+```
+
+`qa` is the release build (same R8 rules, minify and resource shrinking on) with the application id suffix `.qa`, signed
+with the debug key, so it can sit next to a real install. `-PtestBuildType=qa` is needed because the tests target one build
+type at a time (the task `connectedQaAndroidTest` only exists with it). The qa run skips the Compose UI test (package
+`se.familychat.app.ui`). The tests use their own database file and Keystore alias, never `familychat.db`, but app start
+opens the real one of the `.debug` / `.qa` app, so use a device without data you care about. If a qa test fails with
+`NoSuchMethodError`, `ClassNotFoundException` or a serialization error, a keep rule is missing: fix `app/proguard-rules.pro`
+if the app needs it, `app/proguard-test-rules.pro` only if the test APK alone calls it (that file is only used for `qa`).
+CI runs both on API 30 and 34 emulators (job `instrumented`).
+
+#### Static analysis
+
+```bash
+./gradlew detekt                # detekt + detekt-formatting (ktlint rules), all modules; part of ./gradlew build
+./gradlew detektBaseline        # re-create the baselines (only after deliberately accepting existing findings)
+```
+
+The configuration is `config/detekt/detekt.yml` (Compose conventions: `@Composable` functions may be PascalCase and are
+exempt from the length limits). Findings that existed when detekt was introduced are in each module's `detekt-baseline.xml`;
+new code must not add findings. Remove an entry from the baseline when you fix it.
+
 ## 2. Install on a phone
 
 **With a cable (adb):** enable *Developer options* and *USB debugging* on the phone, connect it, and run

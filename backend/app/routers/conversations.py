@@ -148,6 +148,6 @@ def mark_read(
     conversation_id: str, body: ReadRequest, p: Principal = Depends(get_principal), db: Session = Depends(get_db)
 ):
     conv, me = svc.require_member(db, conversation_id, p.user_id)
-    svc.mark_read(db, conv, me, p.device_id, body.up_to_seq)
+    svc.mark_read(db, conv, me, p.device_id, body.up_to_seq, body.notify)
     db.commit()
     return Response(status_code=204)

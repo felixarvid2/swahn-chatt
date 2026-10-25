@@ -299,3 +299,13 @@ def test_invalid_setting_values_exit_1_with_a_message(cli_env, capsys):
 def test_check_config_touches_nothing(cli_env, capsys, tmp_path):
     run_check(cli_env, capsys, **GOOD_PROD)
     assert not (tmp_path / "cli-data").exists()
+
+
+def test_check_config_shows_new_settings_but_never_the_alert_topic(cli_env, capsys):
+    code, out, err = run_check(
+        cli_env, capsys, **GOOD_PROD, admin_ntfy_url="https://ntfy.example.org/SECRETTOPIC-123", hsts="true"
+    )
+    assert code == 0 and "WARNING" not in out
+    assert any(line.split() == ["admin_alerts", "on"] for line in out.splitlines())
+    assert any(line.split() == ["hsts", "true"] for line in out.splitlines())
+    assert "SECRETTOPIC" not in out + err

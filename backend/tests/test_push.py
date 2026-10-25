@@ -102,6 +102,7 @@ def test_push_never_blocks_requests_and_survives_failures(tmp_path, new_settings
     app = create_app(new_settings(tmp_path), push_transport=httpx.MockTransport(slow_failing))
     from fastapi.testclient import TestClient
 
+    app.state.push._retry_delays = ()  # no retries here (they have their own tests: test_push_reliability.py)
     with TestClient(app) as client:
         f = Factory(app, client)
         a, b = f.user("alice"), f.user("bob")

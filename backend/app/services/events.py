@@ -6,7 +6,7 @@ After the commit (see app/db.py) the Dispatcher hints connected devices over Web
 import logging
 from collections.abc import Iterable
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app import clock
@@ -52,6 +52,46 @@ def emit(
     pending: dict[str, int] = db.info.setdefault("pending_notify", {})
     for row in rows:
         pending[row.device_id] = max(pending.get(row.device_id, 0), row.seq)
+
+
+def emit_receipt(db: Session, device_ids: Iterable[str], payload: dict, conversation_id: str) -> None:
+    """`emit` for a `receipt` event that folds into what the device has not acknowledged yet: of the queued receipts
+    with the same conversation, user and type, a read receipt keeps only the highest `up_to_seq`, and delivered
+    receipts merge their `message_ids`. The older rows are deleted and one row with a new, higher `seq` is
+    inserted, never updated in place: a device that already fetched the old row (its cursor is past it) still gets
+    the merged event on its next sync, so cursor semantics are unchanged. Clients see fewer events, not different
+    ones."""
+    ids = list(dict.fromkeys(device_ids))
+    if not ids:
+        return
+    queued = db.scalars(
+        select(Event).where(Event.device_id.in_(ids), Event.type == "receipt", Event.conversation_id == conversation_id)
+    ).all()
+    mine = [
+        e for e in queued if e.payload.get("user_id") == payload["user_id"] and e.payload.get("type") == payload["type"]
+    ]
+    merged: dict[str, dict] = {}
+    for e in sorted(mine, key=lambda e: e.seq):
+        merged[e.device_id] = _merge_receipt(merged[e.device_id], e.payload) if e.device_id in merged else e.payload
+    if mine:
+        db.execute(delete(Event).where(Event.seq.in_([e.seq for e in mine])))
+    for device_id in ids:
+        emit(
+            db,
+            [device_id],
+            "receipt",
+            _merge_receipt(merged[device_id], payload) if device_id in merged else payload,
+            conversation_id,
+        )
+
+
+def _merge_receipt(old: dict, new: dict) -> dict:
+    if new["type"] == "read":
+        return {**new, "up_to_seq": max(old["up_to_seq"], new["up_to_seq"])}
+    seen = list(old["message_ids"])
+    known = set(seen)
+    seen.extend(m for m in new["message_ids"] if m not in known)
+    return {**new, "message_ids": seen}
 
 
 def kick_devices(db: Session, device_ids: Iterable[str]) -> None:

@@ -40,8 +40,9 @@ def ensure_not_locked(limiter: RateLimiter, settings: Settings, username: str) -
     limiter.ensure_below(daily, LOGIN_FAILS_PER_DAY, DAY_S)
 
 
-def record_failure(db: Session, limiter: RateLimiter, settings: Settings, username: str) -> None:
-    """Count the failure and persist it in the caller's transaction (the login route commits it with the audit row)."""
+def record_failure(db: Session, limiter: RateLimiter, settings: Settings, username: str) -> bool:
+    """Count the failure and persist it in the caller's transaction (the login route commits it with the audit row).
+    Returns True when this failure is the one that locked the username (for the operator alert)."""
     digest = key_hash(settings, username)
     hourly, daily = _keys(digest)
     limiter.record(hourly, HOUR_S)
@@ -49,6 +50,7 @@ def record_failure(db: Session, limiter: RateLimiter, settings: Settings, userna
     if limiter.enabled:
         db.add(LoginFailure(key_hash=digest, at=clock.now_ms()))
         db.flush()
+    return limiter.count(hourly, HOUR_S) == LOGIN_FAILS_PER_HOUR or limiter.count(daily, DAY_S) == LOGIN_FAILS_PER_DAY
 
 
 def restore(db: Session, limiter: RateLimiter) -> int:

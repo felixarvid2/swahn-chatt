@@ -10,7 +10,10 @@ plugins {
 android {
     namespace = "se.familychat.app"
     compileSdk = 35
-
+    // Which build type the instrumented tests run against: debug (default) or qa (R8-minified, see below). The tasks are
+    // connected<Debug|Qa>AndroidTest; AGP only creates the one for this build type, so CI passes -PtestBuildType=qa.
+    val testBuild = providers.gradleProperty("testBuildType").getOrElse("debug")
+    testBuildType = testBuild
 
     defaultConfig {
         applicationId = "se.familychat.app"
@@ -21,6 +24,8 @@ android {
         // libsignal ships arm64 for phones and x86_64 for emulators (see SECURITY.md)
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        // The R8 (qa) run covers crypto, serialization, database and app start; the Compose UI checks need the debug build.
+        if (testBuild == "qa") testInstrumentationRunnerArguments["notPackage"] = "se.familychat.app.ui"
     }
 
     signingConfigs {
@@ -54,6 +59,20 @@ android {
             } else {
                 signingConfigs.getByName("debug")
             }
+        }
+        // The release build (same R8 rules, same shrinking) that can be installed next to a real release and tested on a
+        // device: ./gradlew connectedQaAndroidTest -PtestBuildType=qa. Never published; signed with the debug key.
+        create("qa") {
+            initWith(getByName("release"))
+            applicationIdSuffix = ".qa"
+            versionNameSuffix = "-qa"
+            isMinifyEnabled = true
+            isShrinkResources = true
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks += listOf("release")
+            // Only what the test APK itself calls and the app never uses (otherwise R8 removes it from the app before the tests
+            // run; AGP's testProguardFiles only reach the test APK). The app rules stay untouched, so a missing app rule fails a test.
+            proguardFile("proguard-test-rules.pro")
         }
     }
 
@@ -93,6 +112,8 @@ android {
     // Room's exported schemas are assets of the debug variant (never of release), so MigrationTestHelper can open old
     // versions in Robolectric tests and on a device; unit tests read the assets of the variant under test.
     sourceSets.getByName("debug").assets.srcDir("$projectDir/schemas")
+    // ... and of the test APK, which is where MigrationTestHelper looks on a device (needed for the qa build too).
+    sourceSets.getByName("androidTest").assets.srcDir("$projectDir/schemas")
 }
 
 // The UnifiedPush connector drags in the JVM build of Tink, which duplicates tink-android's classes.
@@ -102,6 +123,7 @@ configurations.all { exclude(group = "com.google.crypto.tink", module = "tink") 
 // release variant is checked by assembleRelease (R8 with the real rules) instead.
 androidComponents {
     beforeVariants(selector().withBuildType("release")) { variant -> variant.enableUnitTest = false }
+    beforeVariants(selector().withBuildType("qa")) { variant -> variant.enableUnitTest = false }
 }
 
 kotlin {
@@ -176,6 +198,18 @@ dependencies {
     testImplementation(libs.androidx.room.testing)
     testImplementation(libs.androidx.paging.testing)
     testImplementation(libs.androidx.work.testing)
+
+    // On-device tests (src/androidTest): connectedDebugAndroidTest / connectedQaAndroidTest
+    androidTestImplementation(kotlin("test"))
+    androidTestImplementation(libs.junit)
+    androidTestImplementation(libs.androidx.test.core)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.rules)
+    androidTestImplementation(libs.androidx.test.ext.junit)
+    androidTestImplementation(libs.kotlinx.coroutines.test)
+    androidTestImplementation(libs.androidx.room.testing)
+    androidTestImplementation(platform(libs.androidx.compose.bom))
+    androidTestImplementation(libs.androidx.compose.ui.test.junit4)
 }
 
 tasks.withType<Test>().configureEach {

@@ -22,6 +22,8 @@ Om inget annat står körs kommandona på Pi:n, i mappen `~/familychat/deploymen
 12. [Push-aviseringar fungerar inte](#12-push-aviseringar-fungerar-inte)
 13. [Granska säkerhetsloggen](#13-granska-säkerhetsloggen)
 14. [Felsökningstabell](#14-felsökningstabell)
+15. [Larm till din telefon (ntfy)](#15-larm-till-din-telefon-ntfy)
+16. [Databasunderhåll och HTTPS-skydd](#16-databasunderhåll-och-https-skydd)
 
 ## 1. Rutiner: dagligen, veckovis, månadsvis
 
@@ -40,7 +42,8 @@ utrymme. Svarar den `503` står orsaken i `code`: `database_unavailable`, `migra
 
 - `GET /admin/stats` (avsnitt 2 visar hur du når den): antal användare och enheter, `undelivered_envelopes`
   (meddelanden som väntar på avstängda telefoner), `db_bytes`, `attachments_bytes`, `disk_free_bytes`, `uptime_seconds`.
-  Titta på trenden: växer disken snabbare än du väntat dig?
+  Titta på trenden: växer disken snabbare än du väntat dig. `db_maintenance` visar veckans databasunderhåll
+  (avsnitt 16): `ok` ska vara `true` och `at` högst ungefär en vecka gammal.
 - Loggarna, bara fel de senaste sju dagarna:
 
   ```bash
@@ -353,8 +356,18 @@ Utan push kommer meddelandena ändå fram, men först när appen är öppen elle
 4. **Telefonen:** ntfy-appens *Standardserver* ska vara er `NTFY_BASE_URL`; i FamilyChat ska *Inställningar →
    Pushnotiser* visa "Aktiv via ntfy"; och **batterioptimering** ska vara avstängd ("Obegränsad") för både ntfy och
    FamilyChat. Det är den vanligaste orsaken, särskilt på Samsung, Xiaomi, Huawei och OnePlus (https://dontkillmyapp.com).
-5. Om bara *en* person saknar aviseringar ligger felet nästan alltid i den telefonen (punkt 4). Om *ingen* får dem
-   ligger det på servern (punkt 1 till 3).
+5. **Hur gick det senaste försöket?** Som administratör ser du per enhet hur den senaste pushen gick:
+   `GET /admin/users` (avsnitt 2) har under varje konto en lista `devices` med `push_registered`, `last_push_at`,
+   `last_push_status` (HTTP-svaret från ntfy; `0` betyder inget svar alls, alltså nätverksfel eller timeout) och
+   `push_failures` (antal pushar i rad som misslyckats helt). Servern försöker själv igen efter 5 sekunder, 30 sekunder
+   och 2 minuter vid tillfälliga fel (nätverksfel, 429, 5xx), så ett enstaka fel syns inte som misslyckande. Hög
+   `push_failures` med status `0` pekar på ntfy eller nätet, `403`/`401` på ntfy:s åtkomstregler, `404`/`410` betyder att
+   ntfy har glömt prenumerationen (servern rensar då adressen).
+6. **Testa en enda telefon.** Personen kan trigga `POST /devices/me/push/test` (en testpush, högst 3 per 10 minuter);
+   resultatet står i `last_push_at` och `last_push_status` på `GET /devices/me` en stund senare. `409 push_not_configured`
+   betyder att telefonen inte har registrerat någon push-adress eller att `FAMILYCHAT_PUSH_ALLOWED_HOSTS` är tom.
+7. Om bara *en* person saknar aviseringar ligger felet nästan alltid i den telefonen (punkt 4). Om *ingen* får dem
+   ligger det på servern (punkt 1 till 3 och 5).
 
 ## 13. Granska säkerhetsloggen
 
@@ -393,7 +406,54 @@ kan ändra den, så den är en anteckning till familjen och inte bevis.
 | En återkallad enhet verkar ändå ansluten | Anslutningarna stängs inom `FAMILYCHAT_WS_REVALIDATE_SECONDS` (60 s) |
 | `/readyz` ger `migration_mismatch` | Databasen och programversionen stämmer inte: avsnitt 9 |
 | Inga aviseringar | Avsnitt 12 |
+| Inga larm till telefonen | Avsnitt 15 |
+| `db_maintenance` i `/admin/stats` är `null` eller har `ok: false` | Avsnitt 16 |
 | Disken fylls | Avsnitt 10 |
 
 Fortfarande fast? Samla `docker compose logs --since 1h backend`, `docker compose ps` och utskriften av
 `check-config` (innehåller aldrig hemliga nycklar) innan du frågar någon.
+
+## 15. Larm till din telefon (ntfy)
+
+Servern kan skicka ett kort larm till ett ntfy-ämne som bara du prenumererar på. Det är valfritt och av som standard.
+Skapa ett ämne med ett långt slumpmässigt namn (alla som känner till adressen kan läsa larmen) och lägg i `.env`:
+
+```bash
+FAMILYCHAT_ADMIN_NTFY_URL=https://ntfy.example.org/familychat-admin-x7k2q9w4m1    # hela ämnesadressen, https
+FAMILYCHAT_ADMIN_NTFY_TOKEN=                                                      # bara om ntfy kräver inloggning
+```
+
+Starta om med `docker compose up -d`. Servern vägrar starta om adressen inte är `https://` i produktion. Larmen är fasta
+korta texter utan användarnamn, adresser, meddelanden eller hemligheter:
+
+| Larm | När | Som tätast |
+|---|---|---|
+| Low disk space | Disken har mindre än `FAMILYCHAT_MIN_FREE_DISK_MB` ledigt (`/readyz` eller timjobbet) | var 6:e timme |
+| Server maintenance failed | Timjobbet eller veckans databasunderhåll misslyckades (se loggen) | var 6:e timme |
+| A login lockout was triggered | Ett användarnamn har blivit utelåst efter för många felaktiga lösenord (säger inte vilket) | var 30:e minut |
+| A refresh token was reused | En gammal inloggningsnyckel kom tillbaka: sessionen återkallades. Kontrollera säkerhetsloggen (avsnitt 13) | var 10:e minut |
+| A new administrator was granted | Någon blev administratör (inbjudan eller befordran) | varje minut |
+
+Högst 20 larm per timme totalt. Larmet skickas i bakgrunden: är ntfy nere märks det bara som en varning i loggen
+(`docker compose logs backend | grep -i alert`), aldrig som ett fel för användarna. Servern ser **inte** om
+nattbackupen misslyckas (den körs utanför servern): använd `familychat-notify-failure@.service` (avsnitt 7).
+Larm för en ny administratör som skapas direkt med kommandoraden (`create-invite --admin`) kommer när inbjudan
+löses in.
+
+## 16. Databasunderhåll och HTTPS-skydd
+
+**Veckojobbet.** Backend kör en gång i veckan (`FAMILYCHAT_DB_MAINTENANCE_DAYS`, standard 7, `0` stänger av) ett
+underhåll av databasen, i bakgrunden och inte i någon begäran. SQLite: `PRAGMA optimize`, `ANALYZE`, tömning av
+WAL-filen och `VACUUM` bara om mer än 20 % av databasfilen är tomma sidor och disken har gott om plats (1,25 gånger
+databasens storlek). `VACUUM` skriver om hela filen och stoppar skrivningar medan den pågår (sekunder för en
+familjedatabas), så den väntar tills ingen använt servern på en minut och provas om varje timme tills det blir tyst.
+PostgreSQL: bara `ANALYZE`, resten sköter autovacuum. Resultatet loggas (`docker compose logs backend | grep dbmaint`)
+och står i `db_maintenance` i `GET /admin/stats`: `vacuum` är `done`, `not_needed`, `disk_space` (för lite ledig disk,
+frigör plats enligt avsnitt 10), `busy` (väntar på ett lugnt ögonblick) eller `n/a`. Ett misslyckat underhåll provas om
+vid nästa timkörning och ger larmet "Server maintenance failed" (avsnitt 15).
+
+**HTTPS-skydd (HSTS).** Sätt `FAMILYCHAT_HSTS=true` i `.env` först när *alla* når servern via HTTPS (Caddy eller
+`tailscale serve`): webbläsare vägrar då vanlig http mot adressen i ett år. Är du osäker, låt den vara av. Övriga
+säkerhetshuvuden (`nosniff`, `X-Frame-Options`, CSP m.fl.) skickas alltid och kräver ingen inställning. Sidan
+`/api/v1/docs` (bara om du slagit på `FAMILYCHAT_EXPOSE_DOCS`) hämtar sin kod från `cdn.jsdelivr.net` och har därför en
+något lösare policy.

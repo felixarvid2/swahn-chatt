@@ -1,0 +1,11 @@
+<?xml version="1.0" ?>
+<SmellBaseline>
+  <ManuallySuppressedIssues/>
+  <CurrentIssues>
+    <ID>MaxLineLength:ApiClient.kt$ApiClient.Companion$return ApiClient(url, RetrofitFamilyChatApi(retrofit.create(RawApi::class.java)) { tokens.getTokens() == null }, tokens, refresher, http, sessionFlow)</ID>
+    <ID>MaxLineLength:BaseUrlTest.kt$BaseUrlTest$for</ID>
+    <ID>ReturnCount:BaseUrl.kt$BaseUrl$internal fun isPrivateHost(host: String): Boolean</ID>
+    <ID>ReturnCount:TokenRefresher.kt$RefreshAuthenticator$override fun authenticate(route: Route?, response: Response): Request?</ID>
+    <ID>ThrowsCount:BaseUrl.kt$BaseUrl$fun normalize(input: String, allowInsecureLan: Boolean = false): HttpUrl</ID>
+  </CurrentIssues>
+</SmellBaseline>

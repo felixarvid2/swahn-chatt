@@ -1,0 +1,156 @@
+<?xml version="1.0" ?>
+<SmellBaseline>
+  <ManuallySuppressedIssues/>
+  <CurrentIssues>
+    <ID>CyclomaticComplexMethod:ChatRows.kt$private fun StoredMessage.toUi(ctx: ChatRowContext, replyTarget: StoredMessage?): MessageUi</ID>
+    <ID>Indentation:Common.kt$ </ID>
+    <ID>Indentation:ConversationsScreen.kt$ </ID>
+    <ID>LongMethod:RoomEngineE2ETest.kt$RoomEngineE2ETest$@Test fun `two users exchange messages while one phone runs on Room`()</ID>
+    <ID>LoopWithTooManyJumpStatements:Notifier.kt$Notifier$for</ID>
+    <ID>MaxLineLength:AppDatabase.kt$AppDatabase.Companion.&lt;no name provided&gt;$db.execSQL("CREATE TABLE IF NOT EXISTS `conversation_settings` (`conversationId` TEXT NOT NULL, `pinnedAt` INTEGER, `mutedUntil` INTEGER NOT NULL, `archived` INTEGER NOT NULL, PRIMARY KEY(`conversationId`))")</ID>
+    <ID>MaxLineLength:AppDatabase.kt$AppDatabase.Companion.&lt;no name provided&gt;$db.execSQL("CREATE TABLE IF NOT EXISTS `drafts` (`conversationId` TEXT NOT NULL, `text` TEXT NOT NULL, `updatedAt` INTEGER NOT NULL, PRIMARY KEY(`conversationId`))")</ID>
+    <ID>MaxLineLength:AppDatabase.kt$AppDatabase.Companion.&lt;no name provided&gt;$db.execSQL("CREATE TRIGGER IF NOT EXISTS room_fts_content_sync_message_fts_AFTER_INSERT AFTER INSERT ON `messages` BEGIN INSERT INTO `message_fts`(`docid`, `text`) VALUES (NEW.`rowid`, NEW.`text`); END")</ID>
+    <ID>MaxLineLength:AppDatabase.kt$AppDatabase.Companion.&lt;no name provided&gt;$db.execSQL("CREATE TRIGGER IF NOT EXISTS room_fts_content_sync_message_fts_AFTER_UPDATE AFTER UPDATE ON `messages` BEGIN INSERT INTO `message_fts`(`docid`, `text`) VALUES (NEW.`rowid`, NEW.`text`); END")</ID>
+    <ID>MaxLineLength:AppDatabase.kt$AppDatabase.Companion.&lt;no name provided&gt;$db.execSQL("CREATE TRIGGER IF NOT EXISTS room_fts_content_sync_message_fts_BEFORE_DELETE BEFORE DELETE ON `messages` BEGIN DELETE FROM `message_fts` WHERE `docid`=OLD.`rowid`; END")</ID>
+    <ID>MaxLineLength:AppDatabase.kt$AppDatabase.Companion.&lt;no name provided&gt;$db.execSQL("CREATE TRIGGER IF NOT EXISTS room_fts_content_sync_message_fts_BEFORE_UPDATE BEFORE UPDATE ON `messages` BEGIN DELETE FROM `message_fts` WHERE `docid`=OLD.`rowid`; END")</ID>
+    <ID>MaxLineLength:AppDatabase.kt$AppDatabase.Companion.&lt;no name provided&gt;$db.execSQL("CREATE VIRTUAL TABLE IF NOT EXISTS `message_fts` USING FTS4(`text` TEXT, tokenize=unicode61 `remove_diacritics=0`, content=`messages`)")</ID>
+    <ID>MaxLineLength:AttachmentPreparer.kt$AttachmentPreparer$Bitmap.createScaledBitmap(upright, (upright.width * scale).roundToInt().coerceAtLeast(1), (upright.height * scale).roundToInt().coerceAtLeast(1), true)</ID>
+    <ID>MaxLineLength:AttachmentPreparer.kt$AttachmentPreparer$val t = if (scale &lt; 1f) Bitmap.createScaledBitmap(src, (src.width * scale).roundToInt().coerceAtLeast(1), (src.height * scale).roundToInt().coerceAtLeast(1), true) else src</ID>
+    <ID>MaxLineLength:Bubbles.kt$Text(a.name ?: stringResource(R.string.attachment_file), maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyMedium)</ID>
+    <ID>MaxLineLength:Bubbles.kt$if</ID>
+    <ID>MaxLineLength:Bubbles.kt$is TransferUi.Downloading -&gt; CircularProgressIndicator(color = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(24.dp), strokeWidth = 2.dp)</ID>
+    <ID>MaxLineLength:ChatRowsTest.kt$ChatRowsTest$assertEquals(listOf("date", "msg", "msg", "date", "msg"), rows.map { when (it) { is ChatRow.DateHeader -&gt; "date"; is ChatRow.Message -&gt; "msg"; else -&gt; "other" } })</ID>
+    <ID>MaxLineLength:ChatRowsTest.kt$ChatRowsTest$assertNull(buildChatRows(listOf(m("q", "bob", attachments = listOf(broken))), ctx()).filterIsInstance&lt;ChatRow.Message&gt;().single().message.attachments.single().thumbnail)</ID>
+    <ID>MaxLineLength:ChatRowsTest.kt$ChatRowsTest$listOf(m("f", "me", status = MessageStatus.FAILED), m("s", "me"), m("in", "bob"), m("att", "me", text = null, attachments = listOf(attachment("a"))))</ID>
+    <ID>MaxLineLength:ChatRowsTest.kt$ChatRowsTest$private</ID>
+    <ID>MaxLineLength:ChatRowsTest.kt$ChatRowsTest$val a = attachment("local-1", state = DownloadState.DONE, path = "/src").copy(thumbnail = java.util.Base64.getEncoder().encodeToString(byteArrayOf(1, 2, 3)))</ID>
+    <ID>MaxLineLength:ChatRowsTest.kt$ChatRowsTest$val deleted = buildChatRows(listOf(m("t", "bob", text = null).copy(deleted = true), m("r", "me", replyTo = "t")), ctx()).filterIsInstance&lt;ChatRow.Message&gt;().last().message.reply!!</ID>
+    <ID>MaxLineLength:ChatRowsTest.kt$ChatRowsTest$val outside = buildChatRows(listOf(m("r", "me", replyTo = "t")), ctx(referenced = mapOf("t" to m("t", "me", text = "mine")))).filterIsInstance&lt;ChatRow.Message&gt;().single().message.reply!!</ID>
+    <ID>MaxLineLength:ContactScreen.kt$LazyColumn</ID>
+    <ID>MaxLineLength:ContactScreen.kt$Text(g, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Medium, style = MaterialTheme.typography.titleMedium, modifier = Modifier.widthIn(min = 72.dp))</ID>
+    <ID>MaxLineLength:ContactScreen.kt$Text(stringResource(R.string.verified), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(start = 8.dp).weight(1f))</ID>
+    <ID>MaxLineLength:ContactScreen.kt$TextButton(onClick = { onVerified(false) }, modifier = Modifier.heightIn(min = 48.dp)) { Text(stringResource(R.string.remove_verification)) }</ID>
+    <ID>MaxLineLength:ContactScreen.kt$colors = CardDefaults.cardColors(containerColor = if (warning) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.surfaceContainerLow)</ID>
+    <ID>MaxLineLength:ContactScreen.kt$colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error, contentColor = MaterialTheme.colorScheme.onError)</ID>
+    <ID>MaxLineLength:ContactScreen.kt$confirmButton = { TextButton(onClick = { onAccept(device.deviceId, pending.newKey); confirm = null }) { Text(stringResource(R.string.accept_key_confirm)) } }</ID>
+    <ID>MaxLineLength:ContactScreen.kt$stringResource(if (d.pending.newDevice) R.string.new_device_warning else R.string.identity_changed_warning)</ID>
+    <ID>MaxLineLength:ConversationScreen.kt$colors = TextFieldDefaults.colors(focusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent, unfocusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent)</ID>
+    <ID>MaxLineLength:ConversationScreen.kt$modifier = Modifier.clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh).padding(horizontal = 12.dp, vertical = 4.dp)</ID>
+    <ID>MaxLineLength:ConversationScreen.kt$val needsFetch = m.attachments.any { it.transfer is TransferUi.Remote || (it.transfer is TransferUi.Downloading &amp;&amp; it.transfer.progress == null) }</ID>
+    <ID>MaxLineLength:ConversationSettingsTest.kt$ConversationSettingsTest$for (i in 1..7) store.upsertConversation(Conversation(id = "c$i", type = "direct", name = null, createdBy = "me", createdAt = 1, updatedAt = i.toLong()))</ID>
+    <ID>MaxLineLength:ConversationSettingsTest.kt$ConversationSettingsTest$val s = arrangeConversations(listOf(item("a"), item("b", pinned = true), item("c", archived = true, unread = 2), item("d"), item("e", pinned = true), item("f", archived = true, unread = 1)))</ID>
+    <ID>MaxLineLength:ConversationViewModel.kt$ConversationViewModel$cur.copy(attachments = cur.attachments.map { x -&gt; if (x.id == a.id) x.copy(downloadState = DownloadState.NONE, localPath = null) else x })</ID>
+    <ID>MaxLineLength:ConversationViewModel.kt$ConversationViewModel$download(m.id, AttachmentUi(a.id, AttachmentKindUi.FILE, a.mime, a.name, a.size, null, null, null, null, se.familychat.app.ui.model.TransferUi.Remote))</ID>
+    <ID>MaxLineLength:ConversationViewModel.kt$ConversationViewModel$private</ID>
+    <ID>MaxLineLength:ConversationViewModel.kt$ConversationViewModel$}</ID>
+    <ID>MaxLineLength:ConversationsScreen.kt$fontStyle = if (item.typing || item.previewKind == PreviewKind.DELETED || item.previewKind == PreviewKind.UNDECRYPTABLE) FontStyle.Italic else FontStyle.Normal</ID>
+    <ID>MaxLineLength:ConversationsScreen.kt$if (unread &gt; 0) Text(unread.toString(), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(end = 8.dp))</ID>
+    <ID>MaxLineLength:ConversationsScreen.kt$modifier.fillMaxWidth().heightIn(min = 72.dp).combinedClickable(onClick = onClick, onLongClick = onLongClick).padding(horizontal = 16.dp, vertical = 10.dp)</ID>
+    <ID>MaxLineLength:Fixtures.kt$Fixtures$ConversationItemUi("d3", "Emma Berg", false, emma.avatar, PreviewKind.PHOTO, null, null, true, DeliveryUi.DELIVERED, at(10, 22, 9, 15), 0, typing = false)</ID>
+    <ID>MaxLineLength:Fixtures.kt$Fixtures$ConversationItemUi("d4", "David Ek", false, david.avatar, PreviewKind.TEXT, "Skickas inte än …", null, true, DeliveryUi.PENDING, at(10, 14, 8, 30), 0, typing = false)</ID>
+    <ID>MaxLineLength:Fixtures.kt$Fixtures$ConversationItemUi("g1", "Familjen Ek", true, AvatarUi("Familjen Ek"), PreviewKind.TEXT, "Vi grillar på lördag, vem kommer?", "Cecilia", false, DeliveryUi.NONE, at(10, 24, 15, 58), 3)</ID>
+    <ID>MaxLineLength:Fixtures.kt$Fixtures$ConversationItemUi("g2", "Semesterplanering", true, AvatarUi("Semesterplanering"), PreviewKind.FILE, "boende-kroatien.pdf", "David", false, DeliveryUi.NONE, at(10, 19, 18, 2), 0)</ID>
+    <ID>MaxLineLength:Fixtures.kt$Fixtures$attachments = listOf(AttachmentUi("v2", AttachmentKindUi.VIDEO, "video/mp4", "film.mp4", 9_400_000, 1280, 720, 42_000, videoThumb, TransferUi.Ready("/y")))</ID>
+    <ID>MaxLineLength:Fixtures.kt$Fixtures$msg("8", cia, null, at(10, 24, 12, 3), attachments = listOf(AttachmentUi("f1", AttachmentKindUi.FILE, "application/pdf", "boende-kroatien.pdf", 482_000, null, null, null, null, TransferUi.Remote)))</ID>
+    <ID>MaxLineLength:Fixtures.kt$Fixtures$msg("c", null, null, at(10, 24, 14, 33), group = false, delivery = DeliveryUi.SENT, attachments = listOf(photo("p2", TransferUi.Downloading(0.4f))))</ID>
+    <ID>MaxLineLength:Fixtures.kt$Fixtures$msg("d", bob, "Fint foto! Vilken utsikt. Mer här: https://exempel.se/utsikt eller ring 070-123 45 67", at(10, 24, 14, 40), group = false, undecryptable = null)</ID>
+    <ID>MaxLineLength:Fixtures.kt$Fixtures$se.familychat.app.ui.model.SearchHitUi(id, conversation, time, sender, se.familychat.app.data.Snippets.of(text, se.familychat.app.data.SearchQuery.terms(terms)))</ID>
+    <ID>MaxLineLength:Fixtures.kt$Fixtures$val</ID>
+    <ID>MaxLineLength:GroupInfoScreen.kt$Modifier.fillMaxWidth().heightIn(min = 64.dp).clickable(enabled = !member.isMe) { cb.onOpenMember(member.userId) }.padding(start = 16.dp, end = 4.dp, top = 6.dp, bottom = 6.dp)</ID>
+    <ID>MaxLineLength:GroupInfoScreen.kt$Text(stringResource(R.string.leave_group), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(start = 16.dp))</ID>
+    <ID>MaxLineLength:GroupInfoScreen.kt$TextButton(onClick = cb.onClearAvatar, modifier = Modifier.heightIn(min = 48.dp)) { Text(stringResource(R.string.action_remove_picture)) }</ID>
+    <ID>MaxLineLength:GroupInfoScreen.kt$TextButton(onClick = cb.onPickAvatar, modifier = Modifier.heightIn(min = 48.dp)) { Text(stringResource(R.string.action_change_picture)) }</ID>
+    <ID>MaxLineLength:GroupInfoScreen.kt$if (member.isAdmin) Text(stringResource(R.string.role_admin), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)</ID>
+    <ID>MaxLineLength:LocalStoreContract.kt$LocalStoreContract$(1..20).map { i -&gt; async(kotlinx.coroutines.Dispatchers.Default) { store.updateMessage("m1") { it.copy(deliveredTo = it.deliveredTo + "u$i") } } }.awaitAll()</ID>
+    <ID>MaxLineLength:LocalStoreContract.kt$LocalStoreContract$seq = 8</ID>
+    <ID>MaxLineLength:LoginViewModel.kt$LoginViewModel$_state.update { it.copy(busy = false, error = error, password = if (error == null) "" else it.password, confirmPassword = if (error == null) "" else it.confirmPassword) }</ID>
+    <ID>MaxLineLength:MediaViewerScreen.kt$Icon(Icons.Filled.BrokenImage, contentDescription = null, tint = Color.White, modifier = Modifier.size(48.dp).align(Alignment.CenterHorizontally))</ID>
+    <ID>MaxLineLength:MediaViewerScreen.kt$ViewerButton({ openFile(context, ready.file.absolutePath, ready.mime, ready.name) }) { Icon(Icons.Filled.Share, stringResource(R.string.action_share)) }</ID>
+    <ID>MaxLineLength:MessagePagingTest.kt$MessagePagingTest$"INSERT INTO messages (id, conversationId, senderUserId, senderDeviceId, outgoing, status, seq, clientTs, serverTs, text, replyTo, attachments, edited, editedAt, deleted, decryptError, failureReason, deliveredTo, readBy, systemType, systemUserId, systemDeviceId, systemDeviceName, pendingEnvelopeType, pendingEnvelopeBody) "</ID>
+    <ID>MaxLineLength:MessagePagingTest.kt$MessagePagingTest$"VALUES ('m${"%05d".format(i)}', 'c1', 'bob', 'd', 0, 'RECEIVED', $i, ${1000 + i}, ${1000 + i}, 't $i', NULL, '[]', 0, NULL, 0, NULL, NULL, '', '', NULL, NULL, NULL, NULL, NULL, NULL)"</ID>
+    <ID>MaxLineLength:MessagePagingTest.kt$MessagePagingTest$db.openHelper.writableDatabase.execSQL("INSERT INTO conversations (id, type, name, avatarAttachmentId, createdBy, createdAt, updatedAt, lastMessageAt, lastMessageSeq, myReadSeq) VALUES ('c1', 'direct', NULL, NULL, 'me', 1, 1, 1, 10, 6)")</ID>
+    <ID>MaxLineLength:MessagePagingTest.kt$MessagePagingTest$db.openHelper.writableDatabase.execSQL("INSERT INTO conversations (id, type, name, avatarAttachmentId, createdBy, createdAt, updatedAt, lastMessageAt, lastMessageSeq, myReadSeq) VALUES ('c2', 'direct', NULL, NULL, 'me', 1, 1, 1, 1, 0)")</ID>
+    <ID>MaxLineLength:MigrationTest.kt$MigrationTest$"INSERT INTO messages (id, conversationId, senderUserId, senderDeviceId, outgoing, status, seq, clientTs, serverTs, text, replyTo, attachments, edited, editedAt, deleted, decryptError, failureReason, deliveredTo, readBy, systemType, systemUserId, systemDeviceId, systemDeviceName, pendingEnvelopeType, pendingEnvelopeBody) "</ID>
+    <ID>MaxLineLength:MigrationTest.kt$MigrationTest$"VALUES ('m$i', 'c1', 'bob', 'd', 0, 'RECEIVED', $i, $i, $i, 'hej $i', NULL, '[]', 0, NULL, 0, NULL, NULL, '', '', NULL, NULL, NULL, NULL, NULL, NULL)"</ID>
+    <ID>MaxLineLength:MigrationTest.kt$MigrationTest$"VALUES ('m3', 'c1', 'bob', 'd', 0, 'RECEIVED', 3, 3, 3, 'Åsa bakar bullar', NULL, '[]', 0, NULL, 0, NULL, NULL, '', '', NULL, NULL, NULL, NULL, NULL, NULL)"</ID>
+    <ID>MaxLineLength:MigrationTest.kt$MigrationTest$"VALUES ('m4', 'c1', 'bob', 'd', 0, 'RECEIVED', 4, 4, 4, NULL, NULL, '[]', 0, NULL, 1, NULL, NULL, '', '', NULL, NULL, NULL, NULL, NULL, NULL)"</ID>
+    <ID>MaxLineLength:MigrationTest.kt$MigrationTest$"VALUES ('m5', 'c1', 'bob', 'd', 0, 'RECEIVED', 5, 5, 5, 'ny post', NULL, '[]', 0, NULL, 0, NULL, NULL, '', '', NULL, NULL, NULL, NULL, NULL, NULL)"</ID>
+    <ID>MaxLineLength:MigrationTest.kt$MigrationTest$db.execSQL("INSERT INTO account (id, serverUrl, userId, deviceId, deviceNumber, username, displayName, isAdmin, deviceName) VALUES (1, 'https://x', 'me', 'dev', 1, 'anna', 'Anna', 0, 'Pixel')")</ID>
+    <ID>MaxLineLength:MigrationTest.kt$MigrationTest$db.execSQL("INSERT INTO conversations (id, type, name, avatarAttachmentId, createdBy, createdAt, updatedAt, lastMessageAt, lastMessageSeq, myReadSeq) VALUES ('c1', 'direct', NULL, NULL, 'me', 1, 2, 3, 2, 1)")</ID>
+    <ID>MaxLineLength:Notifier.kt$Notifier$style.addMessage(NotificationCompat.MessagingStyle.Message(countText, unread.maxOf { it.serverTs ?: it.clientTs }, Person.Builder().setName(appName).build()))</ID>
+    <ID>MaxLineLength:Notifier.kt$Notifier$val style = NotificationCompat.MessagingStyle(me).addMessage(NotificationCompat.MessagingStyle.Message(shown, System.currentTimeMillis(), null as Person?))</ID>
+    <ID>MaxLineLength:NotifierTest.kt$NotifierTest$private</ID>
+    <ID>MaxLineLength:PassphraseVaultTest.kt$PassphraseVaultTest$for</ID>
+    <ID>MaxLineLength:ProtocolStorageContract.kt$ProtocolStorageContract$Thread { repeat(25) { val first = s.reserveKeyIds(KeyIdKind.KYBER_PRE_KEY, 3); for (i in 0 until 3) assertTrue(seen.add(first + i), "id ${first + i} handed out twice") } }</ID>
+    <ID>MaxLineLength:RoomEngineE2ETest.kt$RoomEngineE2ETest$assertContentEquals(payload, bob.engine.downloadAttachment(withAttachment, bob.store.getMessage(withAttachment)!!.attachments.single().id).readBytes())</ID>
+    <ID>MaxLineLength:RoomEngineE2ETest.kt$RoomEngineE2ETest$val withAttachment = alice.sendAttachments(conv, listOf(OutgoingAttachment(file, "application/octet-stream", "file", "photo.bin")), caption = "bilaga")</ID>
+    <ID>MaxLineLength:RoomTokenProvider.kt$RoomTokenProvider$dao.put(TokenEntity(accessToken = tokens.accessToken, refreshToken = tokens.refreshToken, accessExpiresAt = tokens.accessExpiresAt, refreshExpiresAt = tokens.refreshExpiresAt))</ID>
+    <ID>MaxLineLength:SafetyTest.kt$SafetyTest$assertEquals(SafetyState.NONE, computeSafety("me", setOf("bob"), devices, listOf(pin("b1", "bob"), pin("b2", "bob", verified = false)), emptySet()).state)</ID>
+    <ID>MaxLineLength:SafetyTest.kt$SafetyTest$assertEquals(SafetyState.NONE, computeSafety("me", setOf("bob", "cy"), listOf(bob1), listOf(pin("b1", "bob")), emptySet()).state, "cy has no known device")</ID>
+    <ID>MaxLineLength:SafetyTest.kt$SafetyTest$val s = computeSafety("me", setOf("bob"), listOf(bob1, bob2), listOf(pin("b1", "bob"), pin("b2", "bob", verified = false, approved = false)), emptySet())</ID>
+    <ID>MaxLineLength:ScreenshotTest.kt$ScreenshotTest$@Test fun conversationConnectingLight()</ID>
+    <ID>MaxLineLength:ScreenshotTest.kt$ScreenshotTest$@Test fun conversationOfflineDark()</ID>
+    <ID>MaxLineLength:ScreenshotTest.kt$ScreenshotTest$@Test fun conversationOfflineLight()</ID>
+    <ID>MaxLineLength:ScreenshotTest.kt$ScreenshotTest$@Test fun conversationVerifiedDark()</ID>
+    <ID>MaxLineLength:ScreenshotTest.kt$ScreenshotTest$@Test fun conversationVerifiedLight()</ID>
+    <ID>MaxLineLength:ScreenshotTest.kt$ScreenshotTest$@Test fun newConversationDark()</ID>
+    <ID>MaxLineLength:ScreenshotTest.kt$ScreenshotTest$@Test fun newConversationLight()</ID>
+    <ID>MaxLineLength:ScreenshotTest.kt$ScreenshotTest$@Test fun searchEmptyLight()</ID>
+    <ID>MaxLineLength:ScreenshotTest.kt$ScreenshotTest$private val groupInfo = GroupInfoState(name = "Familjen Ek", avatar = AvatarUi("Familjen Ek"), members = Fixtures.members, meIsAdmin = true, addable = listOf(Fixtures.emma))</ID>
+    <ID>MaxLineLength:ScreenshotTest.kt$ScreenshotTest$private val searchIn = SearchUiState(query = "middag", conversationId = "g1", conversationTitle = "Familjen Ek", searched = true, groups = Fixtures.searchGroups.take(1))</ID>
+    <ID>MaxLineLength:ScreenshotTest.kt$ScreenshotTest$private val serverOk = ServerSettingsUiState(url = "https://hemma.tail1234.ts.net", result = ServerCheck.Reachable("https://hemma.tail1234.ts.net/api/v1/", true))</ID>
+    <ID>MaxLineLength:SearchScreen.kt$HorizontalDivider(Modifier.padding(start = if (inConversation) 16.dp else 76.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))</ID>
+    <ID>MaxLineLength:SearchScreen.kt$colors = TextFieldDefaults.colors(focusedContainerColor = androidx.compose.ui.graphics.Color.Transparent, unfocusedContainerColor = androidx.compose.ui.graphics.Color.Transparent)</ID>
+    <ID>MaxLineLength:SearchScreen.kt$val style = SpanStyle(fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary, background = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f))</ID>
+    <ID>MaxLineLength:ServerSettingsScreen.kt$ServerCheck.InsecureNotAllowed -&gt; Notice(Icons.Filled.ErrorOutline, stringResource(R.string.connection_failed), stringResource(R.string.error_insecure_url), error = true)</ID>
+    <ID>MaxLineLength:ServerSettingsScreen.kt$ServerCheck.InvalidUrl -&gt; Notice(Icons.Filled.ErrorOutline, stringResource(R.string.connection_failed), stringResource(R.string.check_invalid_url), error = true)</ID>
+    <ID>MaxLineLength:ServerSettingsScreen.kt$ServerCheck.TlsProblem -&gt; Notice(Icons.Filled.ErrorOutline, stringResource(R.string.connection_failed), stringResource(R.string.check_tls_problem), error = true)</ID>
+    <ID>MaxLineLength:ServerSettingsScreen.kt$ServerCheck.Unreachable -&gt; Notice(Icons.Filled.ErrorOutline, stringResource(R.string.connection_failed), stringResource(R.string.check_unreachable), error = true)</ID>
+    <ID>MaxLineLength:ServerSettingsScreen.kt$is ServerCheck.UnexpectedAnswer -&gt; Notice(Icons.Filled.ErrorOutline, stringResource(R.string.connection_failed), stringResource(R.string.check_unexpected, result.status), error = true)</ID>
+    <ID>MaxLineLength:SettingsScreen.kt$DevicesUi.Failed -&gt; Text(stringResource(R.string.devices_load_failed), modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp), color = MaterialTheme.colorScheme.error)</ID>
+    <ID>MaxLineLength:SettingsScreen.kt$Icon(Icons.Filled.Delete, contentDescription = stringResource(R.string.revoke_device_description, device.name), tint = MaterialTheme.colorScheme.error)</ID>
+    <ID>MaxLineLength:SettingsScreen.kt$Modifier.fillMaxWidth().heightIn(min = 48.dp).selectable(selected = d.packageName == state.selectedDistributor, role = Role.RadioButton) { onSelect(d.packageName) }</ID>
+    <ID>MaxLineLength:SettingsScreen.kt$Modifier.fillMaxWidth().heightIn(min = 48.dp).selectable(selected = state.theme == mode, role = Role.RadioButton) { cb.onTheme(mode); pickTheme = false }</ID>
+    <ID>MaxLineLength:SettingsScreen.kt$Row</ID>
+    <ID>MaxLineLength:SettingsScreen.kt$SettingRow(Icons.Filled.Security, stringResource(R.string.my_devices_safety), stringResource(R.string.my_devices_safety_hint), onClick = cb.onOpenOwnSafety)</ID>
+    <ID>MaxLineLength:SettingsScreen.kt$cb.onOpenLanguageSettings?.let { open -&gt; SettingRow(Icons.Filled.Language, stringResource(R.string.language), stringResource(R.string.language_hint), onClick = open) }</ID>
+    <ID>MaxLineLength:SettingsScreen.kt$confirmButton = { TextButton(enabled = text.isNotBlank(), onClick = { cb.onSetName(text); editName = false }) { Text(stringResource(R.string.action_save)) } }</ID>
+    <ID>MaxLineLength:SettingsScreen.kt$if (device.lastSeen &lt;= 0) null else DateTimeFormatter.ofLocalizedDateTime(FormatStyle.SHORT).format(Instant.ofEpochMilli(device.lastSeen).atZone(ZoneId.systemDefault()))</ID>
+    <ID>MaxLineLength:SettingsScreen.kt$if (explanation != null) Text(stringResource(explanation), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(bottom = 8.dp))</ID>
+    <ID>MaxLineLength:SettingsScreen.kt$if (state.isAdmin) SettingRow(Icons.Filled.PersonAdd, stringResource(R.string.create_invitation), stringResource(R.string.create_invitation_hint), onClick = { createInvite = true })</ID>
+    <ID>MaxLineLength:SettingsScreen.kt$onAuthenticate = { done -&gt; if (activity != null) Authenticator.prompt(activity, promptTitle, null) { ok -&gt; if (ok) done() } }</ID>
+    <ID>MaxLineLength:SettingsScreen.kt$private</ID>
+    <ID>MaxLineLength:SettingsScreen.kt$visualTransformation = PasswordVisualTransformation()</ID>
+    <ID>MaxLineLength:UiQueriesTest.kt$UiQueriesTest$db.protocolDao().putRemoteIdentity(se.familychat.app.data.db.SignalRemoteIdentityEntity("dev-1", "bob", byteArrayOf(1, 2), verified = true, approved = true))</ID>
+    <ID>MaxLineLength:UiQueriesTest.kt$UiQueriesTest$db.protocolDao().putRemoteIdentity(se.familychat.app.data.db.SignalRemoteIdentityEntity("dev-2", "bob", byteArrayOf(3), verified = false, approved = false))</ID>
+    <ID>MaxLineLength:UiQueriesTest.kt$UiQueriesTest$for (m in listOf(msg("a", 1), msg("b", 2), msg("c", 3), msg("d", 4, deleted = true), msg("e", 5, system = "member_added"), msg("f", 6, outgoing = true), msg("g", 7))) dao.putMessage(m)</ID>
+    <ID>MaxLineLength:UiQueriesTest.kt$UiQueriesTest$private</ID>
+    <ID>NestedBlockDepth:AttachmentPreparer.kt$AttachmentPreparer$private fun copyToOutgoing(uri: Uri, prefix: String, ext: String): File</ID>
+    <ID>NestedBlockDepth:ConversationViewModel.kt$ConversationViewModel$private fun scheduleWork(list: List&lt;StoredMessage&gt;)</ID>
+    <ID>NoBlankLineBeforeRbrace:ScreenshotTest.kt$ScreenshotTest$ </ID>
+    <ID>NoConsecutiveBlankLines:AppNav.kt$ </ID>
+    <ID>NoConsecutiveBlankLines:ConversationsScreen.kt$ </ID>
+    <ID>NoMultipleSpaces:LinksTest.kt$LinksTest$ </ID>
+    <ID>NoUnusedImports:ChatRepository.kt$se.familychat.app.data.ChatRepository.kt</ID>
+    <ID>NoUnusedImports:ConversationScreen.kt$se.familychat.app.ui.screens.ConversationScreen.kt</ID>
+    <ID>NoUnusedImports:ConversationUiTest.kt$se.familychat.app.ui.ConversationUiTest.kt</ID>
+    <ID>NoUnusedImports:ConversationViewModel.kt$se.familychat.app.ui.screens.ConversationViewModel.kt</ID>
+    <ID>NoUnusedImports:ConversationsScreen.kt$se.familychat.app.ui.screens.ConversationsScreen.kt</ID>
+    <ID>NoUnusedImports:GroupInfoScreen.kt$se.familychat.app.ui.screens.GroupInfoScreen.kt</ID>
+    <ID>NoUnusedImports:MediaViewerScreen.kt$se.familychat.app.ui.screens.MediaViewerScreen.kt</ID>
+    <ID>NoUnusedImports:Notifier.kt$se.familychat.app.platform.notify.Notifier.kt</ID>
+    <ID>NoUnusedImports:PeopleScreens.kt$se.familychat.app.ui.screens.PeopleScreens.kt</ID>
+    <ID>NoUnusedImports:RoomEngineE2ETest.kt$se.familychat.app.data.RoomEngineE2ETest.kt</ID>
+    <ID>NoUnusedImports:ScreenshotTest.kt$se.familychat.app.screenshots.ScreenshotTest.kt</ID>
+    <ID>NoUnusedImports:SettingsScreen.kt$se.familychat.app.ui.screens.SettingsScreen.kt</ID>
+    <ID>ReturnCount:AttachmentPreparer.kt$AttachmentPreparer$internal fun decodeUpright(uri: Uri, maxEdge: Int): Bitmap?</ID>
+    <ID>SpacingAroundComma:Common.kt$,</ID>
+    <ID>StringTemplate:MessagePagingTest.kt$MessagePagingTest$${worst}</ID>
+    <ID>UnusedParameter:ChatRepository.kt$ChatRepository$isGroup: Boolean</ID>
+    <ID>UnusedParameter:ChatRepository.kt$ChatRepository$me: String?</ID>
+    <ID>UnusedParameter:ChatRepository.kt$ChatRepository$users: Map&lt;String, UserEntity&gt;</ID>
+    <ID>UnusedParameter:Notifier.kt$Notifier$title: String</ID>
+    <ID>UnusedParameter:PeopleScreens.kt$name: String</ID>
+    <ID>UnusedPrivateProperty:Notifier.kt$Notifier$r</ID>
+  </CurrentIssues>
+</SmellBaseline>

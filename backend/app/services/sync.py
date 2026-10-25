@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from app import clock
 from app.deps import Principal
 from app.models import ConversationMember, DeliveryReceipt, Device, Event, Message, MessageEnvelope, User
-from app.services.events import active_device_ids, emit
+from app.services.events import active_device_ids, emit_receipt
 from app.services.views import conversations_out, messages_out, user_out
 
 
@@ -127,10 +127,9 @@ def _delivery_receipts(db: Session, p: Principal, message_ids: set[str], now: in
         grouped.setdefault((m.sender_user_id, m.conversation_id), []).append(m.id)
     db.flush()
     for (sender, conv_id), ids in grouped.items():
-        emit(
+        emit_receipt(
             db,
             active_device_ids(db, [sender]),
-            "receipt",
             {"conversation_id": conv_id, "user_id": p.user_id, "type": "delivered", "message_ids": ids},
             conv_id,
         )

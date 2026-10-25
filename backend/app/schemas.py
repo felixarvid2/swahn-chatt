@@ -145,6 +145,17 @@ class DeviceOut(BaseModel):
     identity_key: str | None
 
 
+class OwnDeviceOut(DeviceOut):
+    """The calling device as `GET /devices/me` shows it: DeviceOut plus its push health."""
+
+    last_push_at: int | None = None  # when the server last tried to push to this device
+    last_push_status: int | None = None  # HTTP status of that attempt; 0 = no answer (network error, timeout)
+
+
+class PushTestQueued(BaseModel):
+    status: Literal["queued"]
+
+
 class AuthResponse(BaseModel):
     access_token: str
     access_expires_at: int
@@ -249,6 +260,17 @@ class InvitationOut(BaseModel):
     remaining: int = 1  # 0 once used up, revoked or expired
 
 
+class AdminDeviceOut(BaseModel):
+    id: str
+    number: int
+    name: str
+    last_seen_at: int
+    push_registered: bool
+    last_push_at: int | None
+    last_push_status: int | None  # HTTP status of the last push attempt; 0 = no answer
+    push_failures: int  # pushes in a row that failed for good (0 after a success)
+
+
 class AdminUserOut(BaseModel):
     id: str
     username: str
@@ -260,11 +282,23 @@ class AdminUserOut(BaseModel):
     last_seen_at: int | None  # newest last_seen_at over all of the user's devices
     active_devices: int
     attachment_bytes: int
+    devices: list[AdminDeviceOut] = []  # active devices with their push health
 
 
 class MigrationInfo(BaseModel):
     head: str  # newest revision this code ships
     current: str | None  # revision the database is at
+
+
+class DbMaintenanceInfo(BaseModel):
+    at: int  # when the last run finished (epoch ms)
+    dialect: str
+    ok: bool
+    steps: list[str]  # what ran, e.g. ["optimize", "analyze", "wal_checkpoint", "vacuum"]
+    vacuum: str  # "done", or why it was skipped ("not_needed", "disk_space", "busy", "n/a")
+    duration_ms: int
+    freelist_ratio: float | None = None
+    error: str | None = None
 
 
 class AdminStats(BaseModel):
@@ -280,6 +314,7 @@ class AdminStats(BaseModel):
     version: str
     migration: MigrationInfo
     uptime_seconds: int
+    db_maintenance: DbMaintenanceInfo | None = None  # last weekly database maintenance run, null if none yet
 
 
 class UploadSessionOut(BaseModel):
@@ -455,6 +490,8 @@ class RoleChange(Req):
 
 class ReadRequest(Req):
     up_to_seq: int = Field(ge=0, le=2**62)
+    # false: move the pointer without telling the other members (own devices still get the `read` receipt)
+    notify: bool = True
 
 
 class EnvelopeIn(Req):

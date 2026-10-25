@@ -39,17 +39,21 @@ object DatabaseProvider {
      * passphrase is read and SQLCipher opens the file. A fresh copy of the passphrase goes to SQLCipher each time because
      * it may wipe the array it was given.
      */
-    fun create(context: Context, vault: PassphraseVault = PassphraseVault.forContext(context)): AppDatabase {
+    fun create(
+        context: Context,
+        vault: PassphraseVault = PassphraseVault.forContext(context),
+        name: String = AppDatabase.FILE_NAME, // only the instrumented tests use another file
+    ): AppDatabase {
         val app = context.applicationContext
         val factory = LazyOpenHelperFactory {
             loadNative()
             SupportOpenHelperFactory(
                 passphrase(vault) {
                     Log.w(TAG, "Database key unreadable, resetting the local database")
-                    app.deleteDatabase(AppDatabase.FILE_NAME)
+                    app.deleteDatabase(name)
                 },
             )
         }
-        return AppDatabase.build(app, factory)
+        return AppDatabase.build(app, factory, name)
     }
 }

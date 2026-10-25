@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from starlette.datastructures import MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app import __version__, metrics
@@ -32,11 +33,13 @@ from app.routers import (
     users,
     ws,
 )
-from app.services import lockout
+from app.services import dbmaint, lockout
+from app.services.alerts import AdminAlerts
 from app.services.events import Dispatcher
 from app.services.maintenance import prune
 from app.services.presence import Presence
 from app.services.push import PushService, parse_hosts
+from app.services.stats import free_disk_bytes
 
 log = logging.getLogger("familychat")
 
@@ -103,7 +106,56 @@ class BodyLimitMiddleware:
         await self.app(scope, limited, guarded_send)
 
 
-def create_app(settings: Settings | None = None, push_transport=None) -> FastAPI:
+DOCS_PATH = "/api/v1/docs"
+API_CSP = "default-src 'none'; frame-ancestors 'none'"
+# Swagger UI (FastAPI's page) loads its script and stylesheet from cdn.jsdelivr.net, the favicon from
+# fastapi.tiangolo.com, and starts with one inline script and inline styles. Only the docs page gets this policy.
+DOCS_CSP = (
+    "default-src 'none'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+    "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; img-src 'self' data: https://fastapi.tiangolo.com "
+    "https://cdn.jsdelivr.net; font-src https://cdn.jsdelivr.net; connect-src 'self'; frame-ancestors 'none'"
+)
+HSTS_VALUE = "max-age=31536000"
+
+
+class SecurityHeadersMiddleware:
+    """Headers every HTTP response carries (errors and the 413 of the body limit included). A header a route set
+    itself (the attachment download's Cache-Control, say) is kept."""
+
+    def __init__(self, app: ASGIApp, hsts: bool = False):
+        self.app = app
+        self.hsts = hsts
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        docs = scope["path"].rstrip("/") == DOCS_PATH
+
+        async def with_headers(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                headers = MutableHeaders(raw=message["headers"]) if "headers" in message else MutableHeaders()
+                message["headers"] = headers.raw
+                defaults = {
+                    "X-Content-Type-Options": "nosniff",
+                    "Referrer-Policy": "no-referrer",
+                    "X-Frame-Options": "DENY",
+                    "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+                    "Cross-Origin-Resource-Policy": "same-site",
+                    "Content-Security-Policy": DOCS_CSP if docs else API_CSP,
+                    "Cache-Control": "no-store",
+                }
+                if self.hsts:
+                    defaults["Strict-Transport-Security"] = HSTS_VALUE
+                for name, value in defaults.items():
+                    if name not in headers:
+                        headers[name] = value
+            await send(message)
+
+        await self.app(scope, receive, with_headers)
+
+
+def create_app(settings: Settings | None = None, push_transport=None, alert_transport=None) -> FastAPI:
     settings = settings or get_settings()
     configure_logging(settings.log_level)
     settings.data_dir.mkdir(parents=True, exist_ok=True)
@@ -128,12 +180,14 @@ def create_app(settings: Settings | None = None, push_transport=None) -> FastAPI
             "FAMILYCHAT_PUSH_ALLOWED_HOSTS is empty: push (UnifiedPush) registration is refused until it lists "
             "the push server's host name"
         )
+    alerts = AdminAlerts(settings.admin_ntfy_url, settings.admin_ntfy_token, transport=alert_transport)
     info["dispatcher"] = Dispatcher(hub, push)
     _restore_lockouts(session_factory, limiter)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         push.start()
+        alerts.start()
         stop = asyncio.Event()
         task = asyncio.create_task(_maintenance_loop(app, stop)) if settings.background_tasks else None
         log.info("familychat started env=%s", settings.env)
@@ -156,6 +210,7 @@ def create_app(settings: Settings | None = None, push_transport=None) -> FastAPI
             presence.stop()
             try:
                 push.stop()
+                alerts.stop()
             finally:
                 engine.dispose()
 
@@ -175,6 +230,8 @@ def create_app(settings: Settings | None = None, push_transport=None) -> FastAPI
     app.state.hub = hub
     app.state.limiter = limiter
     app.state.push = push
+    app.state.alerts = alerts
+    app.state.last_activity = time.monotonic()  # newest request (the database VACUUM waits for quiet)
     app.state.http_metrics = http_metrics = metrics.HttpMetrics()
     app.state.started_at = time.monotonic()
     app.state.uploads_busy = set()  # upload ids with a chunk being written (single process)
@@ -187,10 +244,8 @@ def create_app(settings: Settings | None = None, push_transport=None) -> FastAPI
     async def request_log(request: Request, call_next):
         start = time.monotonic()
         response = await call_next(request)
-        response.headers.setdefault("X-Content-Type-Options", "nosniff")
-        if request.url.path.startswith("/api/") and "cache-control" not in response.headers:
-            response.headers["Cache-Control"] = "no-store"
         if request.url.path not in ("/healthz", "/readyz"):
+            app.state.last_activity = time.monotonic()
             log.info(
                 "request",
                 extra={
@@ -206,6 +261,7 @@ def create_app(settings: Settings | None = None, push_transport=None) -> FastAPI
         return response
 
     app.add_middleware(metrics.MetricsMiddleware, metrics=http_metrics)
+    app.add_middleware(SecurityHeadersMiddleware, hsts=settings.hsts)
     app.add_middleware(RequestIdMiddleware)  # added last = outermost: everything below sees the ID
 
     app.include_router(health.router, include_in_schema=False)  # probes for the container runtime
@@ -229,16 +285,41 @@ def _restore_lockouts(session_factory, limiter: RateLimiter) -> None:
         log.warning("could not restore login failure counters", exc_info=True)
 
 
+def _idle(app: FastAPI) -> bool:
+    return time.monotonic() - app.state.last_activity >= dbmaint.IDLE_SECONDS
+
+
 async def _maintenance_loop(app: FastAPI, stop: asyncio.Event) -> None:
     def run() -> None:
-        with app.state.session_factory() as db:
-            prune(db, app.state.settings)
-        app.state.limiter.cleanup()
+        settings = app.state.settings
+        failed = False
+        try:
+            with app.state.session_factory() as db:
+                prune(db, settings)
+            app.state.limiter.cleanup()
+        except Exception:
+            failed = True
+            log.exception("maintenance failed")
+        try:
+            with app.state.read_session_factory() as rdb:
+                due = dbmaint.is_due(rdb, settings)
+            if due:
+                with app.state.session_factory() as db:
+                    result = dbmaint.run(db, app.state.engine, settings, idle=lambda: _idle(app))
+                    failed |= not result["ok"]
+        except Exception:
+            failed = True
+            log.exception("database maintenance failed")
+        if failed:
+            app.state.alerts.send("maintenance_failed")
+        if settings.min_free_disk_mb > 0:
+            try:
+                if free_disk_bytes(settings.data_dir) < settings.min_free_disk_mb * 1024 * 1024:
+                    app.state.alerts.send("low_disk")
+            except OSError:
+                log.warning("cannot read free disk space of the data directory", exc_info=True)
 
     while not stop.is_set():
-        try:
-            await asyncio.to_thread(run)
-        except Exception:
-            log.exception("maintenance failed")
+        await asyncio.to_thread(run)
         with contextlib.suppress(TimeoutError):
             await asyncio.wait_for(stop.wait(), MAINTENANCE_INTERVAL_S)

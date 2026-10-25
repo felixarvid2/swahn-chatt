@@ -63,6 +63,9 @@ def check(settings: Settings, secret_key_bytes: int) -> ConfigReport:
         ("envelope_retention_days", str(settings.envelope_retention_days)),
         ("audit_retention_days", str(settings.audit_retention_days)),
         ("min_free_disk_mb", str(settings.min_free_disk_mb)),
+        ("hsts", str(settings.hsts).lower()),
+        ("db_maintenance_days", str(settings.db_maintenance_days)),
+        ("admin_alerts", "on" if settings.admin_ntfy_url else "off"),  # the topic URL itself is never printed
     ]
 
     if secret_key_bytes < MIN_SECRET_BYTES:

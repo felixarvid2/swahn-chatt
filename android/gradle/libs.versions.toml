@@ -30,6 +30,9 @@ exifinterface = "1.3.7"
 biometric = "1.1.0"
 androidxTestCore = "1.6.1"
 androidxTestExt = "1.2.1"
+androidxTestRunner = "1.6.2"
+androidxTestRules = "1.6.1"
+detekt = "1.23.8"
 
 [libraries]
 # Signal protocol: JVM build (tests, compileOnly in :core:crypto) and Android build (app)
@@ -90,6 +93,9 @@ androidx-test-core = { module = "androidx.test:core", version.ref = "androidxTes
 androidx-test-ext-junit = { module = "androidx.test.ext:junit", version.ref = "androidxTestExt" }
 androidx-exifinterface = { module = "androidx.exifinterface:exifinterface", version.ref = "exifinterface" }
 androidx-biometric = { module = "androidx.biometric:biometric", version.ref = "biometric" }
+androidx-test-runner = { module = "androidx.test:runner", version.ref = "androidxTestRunner" }
+androidx-test-rules = { module = "androidx.test:rules", version.ref = "androidxTestRules" }
+detekt-formatting = { module = "io.gitlab.arturbosch.detekt:detekt-formatting", version.ref = "detekt" }
 robolectric = { module = "org.robolectric:robolectric", version.ref = "robolectric" }
 
 junit = { module = "junit:junit", version.ref = "junit" }
@@ -103,3 +109,4 @@ kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "ko
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
 ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
 hilt = { id = "com.google.dagger.hilt.android", version.ref = "hilt" }
+detekt = { id = "io.gitlab.arturbosch.detekt", version.ref = "detekt" }
