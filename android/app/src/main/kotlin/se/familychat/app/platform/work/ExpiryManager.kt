@@ -2,8 +2,12 @@ package se.familychat.app.platform.work
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import se.familychat.app.di.ApplicationScope
 import se.familychat.app.media.AttachmentPreparer
 import se.familychat.core.client.FamilyChatEngine
@@ -27,12 +31,19 @@ class ExpiryManager @Inject constructor(
     private val clock: ExpiryClock,
 ) {
     private var timer: Job? = null
+    private val purging = Mutex()
 
     /** Removes what is due now (text, downloaded files, the copies of files you sent, search rows), then schedules the next. */
     suspend fun purgeAndSchedule() {
         if (engine.account.value == null) return
-        val removed = engine.purgeExpired()
-        for (m in removed) for (a in m.attachments) preparer.deleteOutgoingCopy(a.localPath)
+        // One purge at a time: the timer and the WorkManager job can be due together, and a caller must not return while
+        // another purge is still removing files. Not cancellable, so a new schedule cannot cut it off between message and file.
+        purging.withLock {
+            withContext(NonCancellable) {
+                val removed = engine.purgeExpired()
+                for (m in removed) for (a in m.attachments) preparer.deleteOutgoingCopy(a.localPath)
+            }
+        }
         scheduleNext()
     }
 
