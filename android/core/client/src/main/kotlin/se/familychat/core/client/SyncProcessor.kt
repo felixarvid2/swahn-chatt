@@ -19,7 +19,6 @@ import se.familychat.core.model.ParsedEvent
 import se.familychat.core.model.ReceiptData
 import se.familychat.core.model.parseEvent
 import se.familychat.core.network.ApiException
-import java.io.File
 import java.io.IOException
 
 /**
@@ -74,7 +73,7 @@ internal class SyncProcessor(private val ctx: EngineContext, private val directo
     private suspend fun applyEvent(e: ParsedEvent) {
         when (e) {
             is ParsedEvent.MessageReceived -> applyMessage(e.message)
-            is ParsedEvent.Receipt -> applyReceipt(e.receipt)
+            is ParsedEvent.Receipt -> applyReceipt(e.receipt, e.event.createdAt.takeIf { it > 0 })
             is ParsedEvent.ConversationUpdated -> {
                 directory.applyConversation(e.conversation)
                 ctx.emit(EngineEvent.ConversationChanged(e.conversation.id))
@@ -98,6 +97,9 @@ internal class SyncProcessor(private val ctx: EngineContext, private val directo
         when (m.kind) {
             MessageKind.MESSAGE -> {
                 if (ctx.store.getMessage(m.id) != null) return // replay
+                // "Delete for me" is remembered: a replayed or re-sent event must not bring the message back. (It was decrypted
+                // before it was deleted, so skipping it here cannot cost a ratchet step.)
+                if (ctx.store.isLocallyDeleted(m.id)) return
                 if (m.senderDeviceId == account.deviceId) return // our own echo; already stored as sent
                 ensureConversation(m.conversationId)
                 storeIncoming(m, account)
@@ -311,17 +313,10 @@ internal class SyncProcessor(private val ctx: EngineContext, private val directo
             true
         }
         // Downloaded copies of the deleted message's attachments go too.
-        wiped?.attachments?.forEach { deleteDownloaded(it) }
+        wiped?.attachments?.forEach { ctx.deleteDownloadedFile(it.localPath) }
     }
 
-    private fun deleteDownloaded(a: LocalAttachment) {
-        val p = a.localPath ?: return
-        val f = File(p)
-        // Only files the engine itself decrypted into its attachment dir; never an app-provided source file.
-        if (f.isFile && f.canonicalPath.startsWith(ctx.config.attachmentDir.canonicalPath)) f.delete()
-    }
-
-    private suspend fun applyReceipt(r: ReceiptData) {
+    private suspend fun applyReceipt(r: ReceiptData, at: Long?) {
         val account = ctx.requireAccount()
         val conversation = ctx.store.getConversation(r.conversationId)
         if (r.userId == account.userId) {
@@ -338,7 +333,10 @@ internal class SyncProcessor(private val ctx: EngineContext, private val directo
                 val updated = ctx.store.updateMessage(id) { m ->
                     if (!m.outgoing) m else refreshStatus(m.copy(deliveredTo = m.deliveredTo + r.userId), others)
                 }
-                if (updated != null) ctx.emit(EngineEvent.MessageChanged(r.conversationId, id))
+                if (updated != null) {
+                    if (updated.outgoing) ctx.store.recordReceipt(r.conversationId, id, r.userId, deliveredAt = at, readAt = null)
+                    ctx.emit(EngineEvent.MessageChanged(r.conversationId, id))
+                }
             }
             ReceiptData.READ -> {
                 val upTo = r.upToSeq ?: return
@@ -346,6 +344,7 @@ internal class SyncProcessor(private val ctx: EngineContext, private val directo
                     ctx.store.updateMessage(m.id) {
                         refreshStatus(it.copy(deliveredTo = it.deliveredTo + r.userId, readBy = it.readBy + r.userId), others)
                     }
+                    ctx.store.recordReceipt(r.conversationId, m.id, r.userId, deliveredAt = null, readAt = at)
                     ctx.emit(EngineEvent.MessageChanged(r.conversationId, m.id))
                 }
             }

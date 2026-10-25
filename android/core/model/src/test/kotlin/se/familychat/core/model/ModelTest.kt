@@ -106,6 +106,38 @@ class ContentTest {
     }
 }
 
+/**
+ * Older apps stay installed, so what a newer app sends must not break them. Pinned here: unknown JSON fields on a known type
+ * are ignored (additive fields are safe), an unknown content *type* is refused with an IllegalArgumentException, which the
+ * crypto layer turns into "could not decrypt" for that one message (see `MessageCrypto.decryptContent`): it is never applied
+ * and never crashes. A new content type therefore needs a note in the docs that older apps will show a placeholder for it.
+ */
+class ContentForwardCompatibilityTest {
+    private fun decodeJson(json: String) = ContentCodec.decode(Padding.pad(json.toByteArray()))
+
+    @Test
+    fun `unknown fields next to a known type are ignored`() {
+        val c = decodeJson("""{"v":2,"type":"text","text":"hej","conversation_id":"c","message_id":"m","future_field":{"a":[1,2]},"mentions":["u1"]}""")
+        assertEquals("hej", c.text)
+        assertEquals(ContentType.TEXT, c.type)
+    }
+
+    @Test
+    fun `an unknown content type is refused without crashing, whatever else it carries`() {
+        for (type in listOf("poll", "reaction", "pin", "location", "")) {
+            val e = assertFailsWith<IllegalArgumentException>(type) {
+                decodeJson("""{"v":2,"type":"$type","text":"x","conversation_id":"c","message_id":"m","target_message_id":"t","poll":{"q":"?"}}""")
+            }
+            assertTrue(e.message!!.contains("unknown content type"))
+        }
+    }
+
+    @Test
+    fun `a content version this app does not know is refused`() {
+        assertFailsWith<IllegalArgumentException> { decodeJson("""{"v":3,"type":"text","text":"x","conversation_id":"c","message_id":"m"}""") }
+    }
+}
+
 class DtoTest {
     @Test
     fun `auth response parses with unknown keys`() {

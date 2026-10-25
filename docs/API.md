@@ -284,7 +284,7 @@ receives events created after the device was registered (use `GET /conversations
 | `type` | `data` |
 |---|---|
 | `message` | `Message` with this device's envelope (also used for edits, deletes and reactions: see `data.kind`) |
-| `receipt` | `{"conversation_id", "user_id", "type": "delivered", "message_ids": [...]}` or `{"conversation_id", "user_id", "type": "read", "up_to_seq": 0}`. Receipts a device has not acknowledged yet are coalesced: per (conversation, user, type) the device has at most one queued `read` receipt (the highest `up_to_seq`) and one `delivered` receipt (all `message_ids`). The merged receipt gets a new, higher event `seq`, so a device that already fetched an older one receives it again on its next sync (process it idempotently, as always) |
+| `receipt` | `{"conversation_id", "user_id", "type": "delivered", "message_ids": [...]}` or `{"conversation_id", "user_id", "type": "read", "up_to_seq": 0}`. Receipts a device has not acknowledged yet are coalesced: per (conversation, user, type) the device has at most one queued `read` receipt (the highest `up_to_seq`) and one `delivered` receipt (all `message_ids`). The merged receipt gets a new, higher event `seq`, so a device that already fetched an older one receives it again on its next sync (process it idempotently, as always). Clients show the event's `created_at` as the delivered/read time, so a merged receipt carries the time of the merge |
 | `conversation_updated` | `Conversation` (created, renamed, avatar, members or roles changed) |
 | `conversation_removed` | `{"conversation_id"}` — the user left or was removed |
 | `devices_changed` | `{"user_id"}` — a user you share a conversation with added/removed a device or keys |

@@ -43,7 +43,10 @@ import androidx.navigation.navArgument
 import androidx.navigation.navDeepLink
 import se.familychat.app.data.SessionState
 import se.familychat.app.ui.components.InsecureBanner
+import se.familychat.app.ui.screens.AutoDownloadScreen
 import se.familychat.app.ui.screens.ContactScreen
+import se.familychat.app.ui.screens.MessageInfoScreen
+import se.familychat.app.ui.screens.StorageScreen
 import se.familychat.app.ui.screens.ConversationNav
 import se.familychat.app.ui.screens.ConversationScreen
 import se.familychat.app.ui.screens.ConversationsScreen
@@ -70,6 +73,9 @@ object Routes {
     const val SETTINGS = "settings"
     const val CONTACT = "contact/{userId}"
     const val MEDIA = "media/{messageId}/{attachmentId}"
+    const val MESSAGE_INFO = "message-info/{messageId}"
+    const val STORAGE = "storage"
+    const val AUTO_DOWNLOAD = "auto-download"
 
     /** [jump]: a message to scroll to on opening (from the search). */
     fun conversation(id: String, jump: String? = null) = if (jump == null) "conversation/$id" else "conversation/$id?jump=$jump"
@@ -77,6 +83,7 @@ object Routes {
     fun groupInfo(id: String) = "group/$id"
     fun contact(userId: String) = "contact/$userId"
     fun media(messageId: String, attachmentId: String) = "media/$messageId/$attachmentId"
+    fun messageInfo(messageId: String) = "message-info/$messageId"
 }
 
 /** The window: a persistent red strip on top while the connection is insecure, then the app. */
@@ -186,6 +193,7 @@ private fun AppNavHost(nav: androidx.navigation.NavHostController, signedIn: Boo
                     onOpenMedia = { m, a -> nav.navigate(Routes.media(m, a)) },
                     onOpenGroupInfo = { nav.navigate(Routes.groupInfo(it)) },
                     onOpenContact = { nav.navigate(Routes.contact(it)) },
+                    onOpenMessageInfo = { nav.navigate(Routes.messageInfo(it)) },
                 ),
             )
         }
@@ -210,7 +218,17 @@ private fun AppNavHost(nav: androidx.navigation.NavHostController, signedIn: Boo
             )
         }
         composable(Routes.SETTINGS) {
-            SettingsScreen(onBack = { nav.popBackStack() }, onOpenSafety = { nav.navigate(Routes.contact(it)) })
+            SettingsScreen(
+                onBack = { nav.popBackStack() },
+                onOpenSafety = { nav.navigate(Routes.contact(it)) },
+                onOpenStorage = { nav.navigate(Routes.STORAGE) },
+                onOpenAutoDownload = { nav.navigate(Routes.AUTO_DOWNLOAD) },
+            )
+        }
+        composable(Routes.STORAGE) { StorageScreen(onBack = { nav.popBackStack() }) }
+        composable(Routes.AUTO_DOWNLOAD) { AutoDownloadScreen(onBack = { nav.popBackStack() }) }
+        composable(Routes.MESSAGE_INFO, arguments = listOf(navArgument("messageId") { type = NavType.StringType })) {
+            MessageInfoScreen(onBack = { nav.popBackStack() })
         }
         composable(Routes.CONTACT, arguments = listOf(navArgument("userId") { type = NavType.StringType })) {
             ContactScreen(onBack = { nav.popBackStack() })

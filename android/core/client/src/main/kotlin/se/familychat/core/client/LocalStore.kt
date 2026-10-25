@@ -154,6 +154,14 @@ data class StoredMessage(
     val isSystem: Boolean get() = systemEvent != null
 }
 
+/**
+ * When [userId] acknowledged delivery of / read the outgoing message [messageId], as far as this device knows: the
+ * `created_at` of the receipt event (server time, milliseconds). Null where no receipt carried a time (messages from before
+ * the times were recorded, or a read receipt, which also implies delivery, that arrived without a delivered one).
+ * Receipts the server merged while this device was offline carry the time of the merge, so a time is "not before".
+ */
+data class ReceiptTimes(val messageId: String, val userId: String, val deliveredAt: Long?, val readAt: Long?)
+
 /** An attachment waiting to be uploaded as part of an outgoing message. */
 data class OutboxAttachment(
     val localPath: String,
@@ -277,6 +285,28 @@ interface LocalStore {
 
     /** Outgoing messages of the conversation with `seq <= upToSeq` not yet read by [userId]. */
     suspend fun outgoingNotReadBy(conversationId: String, userId: String, upToSeq: Long): List<StoredMessage>
+
+    /**
+     * Messages that have attachments (all of them, or only those of [conversationId]); for the storage screen and for
+     * clearing downloaded media.
+     */
+    suspend fun messagesWithAttachments(conversationId: String? = null): List<StoredMessage>
+
+    // --- receipt times and local deletions ----------------------------------------------------------------------------
+    /**
+     * Remembers when [userId] acknowledged ([deliveredAt]) or read ([readAt]) [messageId]. A time already stored is kept
+     * (the first receipt wins), null leaves the stored value alone.
+     */
+    suspend fun recordReceipt(conversationId: String, messageId: String, userId: String, deliveredAt: Long?, readAt: Long?)
+    suspend fun getReceipts(messageId: String): List<ReceiptTimes>
+
+    /**
+     * "Delete for me": removes the message (and its receipt times) from this device and remembers that it was removed, so a
+     * replayed event cannot bring it back ([isLocallyDeleted]). Returns the removed message, or null if there was none.
+     * Purely local; nothing is sent. The tombstone is removed with the conversation.
+     */
+    suspend fun deleteMessageLocally(id: String, conversationId: String, at: Long): StoredMessage?
+    suspend fun isLocallyDeleted(id: String): Boolean
 
     /** Messages whose `pendingEnvelopeBody` is set and whose sender is [userId] on [deviceId] (for retrying decryption). */
     suspend fun undecryptedFrom(userId: String, deviceId: String): List<StoredMessage>

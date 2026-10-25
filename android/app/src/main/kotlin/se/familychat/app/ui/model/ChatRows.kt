@@ -99,6 +99,8 @@ private fun StoredMessage.toUi(ctx: ChatRowContext, replyTarget: StoredMessage?)
         failed = outgoingMine && status == MessageStatus.FAILED,
         canEdit = outgoingMine && !deleted && status != MessageStatus.FAILED && !text.isNullOrBlank(),
         canDelete = outgoingMine && !deleted,
+        canDeleteForMe = !(outgoingMine && status == MessageStatus.PENDING),
+        canShowInfo = outgoingMine && !deleted && (status == MessageStatus.SENT || status == MessageStatus.DELIVERED || status == MessageStatus.READ),
         senderId = senderUserId,
         speaker = if (outgoingMine) null else name ?: ctx.unknownName,
     )

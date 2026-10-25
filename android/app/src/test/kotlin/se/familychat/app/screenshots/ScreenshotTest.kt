@@ -49,6 +49,14 @@ import se.familychat.app.ui.screens.NewConversationContent
 import se.familychat.app.ui.screens.NewConversationState
 import se.familychat.app.ui.screens.PendingKeyUi
 import se.familychat.app.ui.screens.RecordingUi
+import se.familychat.app.ui.screens.AutoDownloadContent
+import se.familychat.app.ui.screens.InvitationCreatedPreview
+import se.familychat.app.ui.screens.MessageInfoContent
+import se.familychat.app.ui.screens.MessageInfoState
+import se.familychat.app.ui.screens.RecipientInfo
+import se.familychat.app.ui.screens.StorageContent
+import se.familychat.app.ui.screens.StorageRowUi
+import se.familychat.app.ui.screens.StorageUiState
 import se.familychat.app.ui.screens.ServerSettingsContent
 import se.familychat.app.ui.screens.ServerSettingsUiState
 import se.familychat.app.ui.screens.LockContent
@@ -262,6 +270,72 @@ class ScreenshotTest {
     )
     @Test fun safetyChangedLight() = shot("13b_safety_identity_changed", false) { ContactContent(contactChanged, {}, { _, _ -> }, { _, _ -> }) }
     @Test fun safetyChangedDark() = shot("13b_safety_identity_changed", true) { ContactContent(contactChanged, {}, { _, _ -> }, { _, _ -> }) }
+
+    // --- QR codes, message info, storage and auto download --------------------------------------------------------------------
+
+    private val qrText = "fcsn1:" + java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(ByteArray(66) { (it * 7 + 3).toByte() })
+    private val contactQr = ContactUiState(
+        user = Fixtures.bob, loading = false,
+        devices = listOf(
+            DeviceSafetyUi("dv1", 1, "Pixel 7", digits, verified = false, pending = null, qr = qrText),
+            DeviceSafetyUi("dv3", 3, "Surfplatta", digits, verified = false, pending = PendingKeyUi(ByteArray(33), newDigits, qr = qrText)),
+        ),
+    )
+    @Test fun safetyQrLight() {
+        RuntimeEnvironment.setQualifiers("sv-w360dp-h1500dp-xhdpi")
+        shot("13c_safety_qr", false) { ContactContent(contactQr, {}, { _, _ -> }, { _, _ -> }, initiallyShowQr = true) }
+    }
+    @Test fun safetyQrDark() {
+        RuntimeEnvironment.setQualifiers("sv-w360dp-h1500dp-xhdpi")
+        shot("13c_safety_qr", true) { ContactContent(contactQr, {}, { _, _ -> }, { _, _ -> }, initiallyShowQr = true) }
+    }
+
+    private val inviteCode = "K7QXr93MD_-abcdEFGH"
+    private val inviteQr = se.familychat.app.qr.InviteQr.payload("https://hemma.tail1234.ts.net/api/v1/", inviteCode)
+    @Test fun invitationCreatedLight() = shot("18_invitation_created", false) { InvitationCreatedPreview(inviteCode, inviteQr) }
+    @Test fun invitationCreatedDark() = shot("18_invitation_created", true) { InvitationCreatedPreview(inviteCode, inviteQr) }
+
+    private val scannedInvite = se.familychat.app.qr.InviteLink("https://hemma.tail1234.ts.net", "hemma.tail1234.ts.net", inviteCode, suspiciousHost = false)
+    private val redeemScanned = LoginUiState(
+        mode = AuthMode.REDEEM, serverUrl = "https://annat.example.org", invite = scannedInvite, code = inviteCode, deviceName = "Google Pixel 8",
+    )
+    @Test fun loginScannedInviteLight() = shot("6b_login_invitation_scanned", false) { LoginContent(redeemScanned, LoginCallbacks()) }
+    @Test fun loginScannedInviteDark() = shot("6b_login_invitation_scanned", true) { LoginContent(redeemScanned, LoginCallbacks()) }
+    @Test fun loginScanRejectedLight() = shot("6c_login_scan_rejected", false) {
+        val rejected = redeem.copy(fieldErrors = emptySet(), error = null, scanRejection = se.familychat.app.qr.InviteRejection.INSECURE_SERVER)
+        LoginContent(rejected, LoginCallbacks())
+    }
+
+    private val messageInfoGroup = MessageInfoState(
+        loaded = true, isGroup = true, sentAt = Fixtures.at(10, 24, 14, 30), text = "Vi ses på söndag klockan fyra, ta med fika!",
+        recipients = listOf(
+            RecipientInfo(Fixtures.members[1], delivered = true, deliveredAt = Fixtures.at(10, 24, 14, 31), read = true, readAt = Fixtures.at(10, 24, 14, 40)),
+            RecipientInfo(Fixtures.members[2], delivered = true, deliveredAt = Fixtures.at(10, 24, 14, 31), read = false, readAt = null),
+            RecipientInfo(Fixtures.members[3], delivered = true, deliveredAt = null, read = true, readAt = null),
+        ),
+    )
+    @Test fun messageInfoLight() = shot("19_message_info", false) { MessageInfoContent(messageInfoGroup, {}) }
+    @Test fun messageInfoDark() = shot("19_message_info", true) { MessageInfoContent(messageInfoGroup, {}) }
+
+    private val storage = StorageUiState(
+        loading = false, mediaBytes = 412_000_000, otherBytes = 3_200_000, databaseBytes = 18_500_000, cacheBytes = 24_000_000,
+        rows = listOf(
+            StorageRowUi("g1", "Familjen Ek", AvatarUi("Familjen Ek"), 318_000_000, 142),
+            StorageRowUi("c2", "Bertil Ek", Fixtures.bob.avatar, 82_000_000, 31),
+            StorageRowUi("c3", "Emma Berg", Fixtures.emma.avatar, 12_000_000, 4),
+        ),
+    )
+    @Test fun storageLight() = shot("20_storage", false) { StorageContent(storage, {}, {}, {}) }
+    @Test fun storageDark() = shot("20_storage", true) { StorageContent(storage, {}, {}, {}) }
+
+    @Test fun autoDownloadLight() {
+        RuntimeEnvironment.setQualifiers("sv-w360dp-h1050dp-xhdpi")
+        shot("21_auto_download", false) { AutoDownloadContent(se.familychat.app.data.AutoDownloadSettings(), {}, { _, _ -> }) }
+    }
+    @Test fun autoDownloadDark() {
+        RuntimeEnvironment.setQualifiers("sv-w360dp-h1050dp-xhdpi")
+        shot("21_auto_download", true) { AutoDownloadContent(se.familychat.app.data.AutoDownloadSettings(), {}, { _, _ -> }) }
+    }
 
     @Test fun conversationsEnglish() {
         RuntimeEnvironment.setQualifiers("en-w360dp-h740dp-xhdpi")

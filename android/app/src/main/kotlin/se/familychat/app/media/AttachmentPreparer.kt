@@ -274,6 +274,12 @@ class AttachmentPreparer @Inject constructor(@ApplicationContext private val con
         File(context.cacheDir, "share").deleteRecursively()
     }
 
+    /** Deletes the copy of a sent attachment at [path] if it is one of ours (in [outgoingDir]); used when a message is deleted on this phone. */
+    fun deleteOutgoingCopy(path: String?) {
+        val f = File(path ?: return)
+        if (f.isFile && f.canonicalFile.parentFile == outgoingDir.canonicalFile) f.delete()
+    }
+
     /** Deletes files in [outgoingDir] that nothing refers to ([keep]) and that are older than a week. */
     fun cleanup(keep: Set<String>) {
         val cutoff = System.currentTimeMillis() - 7L * 24 * 60 * 60 * 1000

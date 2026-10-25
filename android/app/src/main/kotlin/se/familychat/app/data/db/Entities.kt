@@ -175,6 +175,31 @@ data class ConversationSettingsEntity(
     }
 }
 
+/**
+ * When a member acknowledged delivery of / read one of our messages (added in database version 4), from the `created_at`
+ * of the receipt event. Status itself stays in `messages.deliveredTo` / `readBy`; this table only adds the times, so rows
+ * from before version 4 simply have none. [conversationId] lets a removed conversation take its rows along.
+ */
+@Entity(tableName = "message_receipts", primaryKeys = ["messageId", "userId"], indices = [Index("conversationId")])
+data class MessageReceiptEntity(
+    val messageId: String,
+    val userId: String,
+    val conversationId: String,
+    val deliveredAt: Long?,
+    val readAt: Long?,
+)
+
+/**
+ * Tombstone of a message the user removed with "delete for me" (added in database version 4). The message row is gone; this
+ * row stops a later sync from storing it again. Purely local, never sent anywhere, removed with the conversation.
+ */
+@Entity(tableName = "local_deletions", indices = [Index("conversationId")])
+data class LocalDeletionEntity(
+    @PrimaryKey val messageId: String,
+    val conversationId: String,
+    val deletedAt: Long,
+)
+
 // --- libsignal state (ProtocolStorage) ---------------------------------------------------------------------------
 
 @Entity(tableName = "signal_identity")

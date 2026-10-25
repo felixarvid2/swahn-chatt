@@ -154,7 +154,7 @@ adb install -r app/build/outputs/apk/release/app-release.apk
 **Updating a phone that already has the app:** install the new APK over the old one (same signing key) and do not
 uninstall first: uninstalling deletes the keys and the whole local history (see section 7). The app's local database
 carries a schema version and upgrades itself on the first start of the new build, with a tested migration, without
-losing messages, keys or sessions. Version 2 added the table for unsent drafts; version 3 (app 0.2.0) added the full-text search index of the messages (built from the existing messages during the upgrade) and the local pin/mute/archive settings; the history is in
+losing messages, keys or sessions. Version 2 added the table for unsent drafts; version 3 (app 0.2.0) added the full-text search index of the messages (built from the existing messages during the upgrade) and the local pin/mute/archive settings; version 4 added the receipt times (message info) and the "delete for me" tombstones, two new tables; the history is in
 `AppDatabase.MIGRATIONS` and `app/schemas/`. Whoever raises `AppDatabase.VERSION` must add a `Migration` and a case in
 `MigrationTest` in the same change (a build that cannot open the old file would otherwise leave the phone without its
 data).
@@ -220,6 +220,12 @@ Accounts exist only through invitations; there is no sign-up form on the server.
 3. The new person installs the app, enters the server address, chooses the tab *Ny med inbjudan* and fills in the code,
    a display name, a username (a to z, 0 to 9, dot, underscore, hyphen) and a password of at least 10 characters. The
    device name is pre-filled with the phone's model; it is what the others see in "Anna lade till en ny enhet".
+   Instead of typing the server address and the code, tap *Skanna inbjudan* and point the camera at the QR code that
+   *Skapa inbjudan* shows next to the code. The scan only **pre-fills** the invitation form (server and code); the server's
+   host is shown in large type and nothing is sent until you press *Skapa konto*. Release builds accept only `https://`
+   servers in the QR code (debug builds also local `http://` addresses); any code with other parameters, another version,
+   or an oversized payload is refused with a message. The login tab is never pre-filled. The camera permission is asked for
+   when you tap the scan button, and not otherwise.
 4. Later logins use the *Logga in* tab.
 
 ## 6. Compare safety numbers (optional, but this is what makes it secure)
@@ -229,6 +235,10 @@ Open a conversation, tap the name at the top (or the menu, *Säkerhetsnummer*). 
 *Markera som verifierad*. If somebody's key later changes (new phone, reinstall) the app shows a red warning in the
 conversation, blocks messages to and from that device, and only continues after you press *Godkänn ny nyckel* and
 confirm. Do that after comparing the new number.
+
+Instead of reading digits you can compare QR codes: on each device card, *Visa QR-kod* shows your code and *Skanna QR-kod*
+scans the other person's. A match offers *Markera som verifierad*; a mismatch is a clear warning (do not trust the device
+until you have compared again). Only the camera permission is needed, no Google services.
 
 ## 7. New phone, reinstall, lost phone
 
@@ -294,3 +304,21 @@ the notification arrives (ntfy) and that the conversation opens with the message
 - **Pin / mute / archive**: long-press a conversation. Up to 5 pinned; mute for 1 hour, 8 hours, 1 week or always (no
   notification, unread count kept); archived conversations sit under *Arkiverade* and come back on a new message unless muted.
   All local to the phone, not synced between devices.
+
+## QR codes, swipe to reply, message info, storage (what to know when testing on a phone)
+
+- **Safety number QR / invitation QR**: see sections 5 and 6. The QR formats are `fcsn1:<base64url of libsignal's scannable
+  fingerprint>` and `familychat://invite?v=1&server=<https url>&code=<code>`. Nothing registers `familychat://invite` with
+  the system, so another app or a web page cannot open the app on an invitation; scanning happens inside the app.
+- **Swipe to reply**: swipe a message to the right (haptic tick at the threshold); long-press menu and TalkBack's actions
+  offer *Svara* as well. Vertical scrolling of the list is not affected.
+- **Message info**: long-press one of your own messages, *Meddelandeinfo*. Per recipient: delivered and read, with the time
+  of the receipt where this phone has seen one (messages from before version 4 show *Tid okänd*; a silent reader shows a dash).
+- **Radera för mig / Radera för alla**: *för mig* removes the message (and downloaded files) from this phone only and sends
+  nothing; a tombstone keeps later syncs, edits and receipts from bringing it back. *För alla* is the encrypted delete
+  everyone's phone verifies (own messages only). Both ask first.
+- **Inställningar > Data och lagring**: *Lagring* shows space used by downloaded media per conversation, the database and
+  the cache, and clears media (one conversation or all; the messages stay and the files can be fetched again while the
+  server has them) or the cache. *Automatisk nedladdning* sets Alltid / Endast Wi-Fi / Aldrig for photos, voice messages,
+  video and files (defaults: photos and voice always, video and files Wi-Fi only; "Wi-Fi only" means "not a metered
+  network"). Tapping an attachment always downloads it; very large files are never fetched automatically.

@@ -110,6 +110,26 @@ interface StoreDao {
     )
     suspend fun undecryptedFrom(userId: String, deviceId: String): List<MessageEntity>
 
+    @Query(
+        "SELECT * FROM messages WHERE attachments != '[]' AND (:conversationId IS NULL OR conversationId = :conversationId) " +
+            "ORDER BY COALESCE(seq, $MAX_LONG), clientTs, id",
+    )
+    suspend fun messagesWithAttachments(conversationId: String?): List<MessageEntity>
+
+    // --- receipt times and local deletions --------------------------------------------------------------------------
+    @Query("SELECT * FROM message_receipts WHERE messageId = :messageId AND userId = :userId")
+    suspend fun receipt(messageId: String, userId: String): MessageReceiptEntity?
+    @Query("SELECT * FROM message_receipts WHERE messageId = :messageId ORDER BY userId")
+    suspend fun receipts(messageId: String): List<MessageReceiptEntity>
+    @Upsert suspend fun putReceipt(r: MessageReceiptEntity)
+    @Query("DELETE FROM message_receipts WHERE messageId = :messageId") suspend fun deleteReceipts(messageId: String)
+    @Query("DELETE FROM message_receipts WHERE conversationId = :id") suspend fun deleteReceiptsOf(id: String)
+    @Query("DELETE FROM messages WHERE id = :id") suspend fun deleteMessage(id: String)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putLocalDeletion(d: LocalDeletionEntity)
+    @Query("SELECT COUNT(*) FROM local_deletions WHERE messageId = :id") suspend fun localDeletionCount(id: String): Int
+    @Query("DELETE FROM local_deletions WHERE conversationId = :id") suspend fun deleteLocalDeletionsOf(id: String)
+
     // --- outbox ---------------------------------------------------------------------------------------------------
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putOutbox(e: OutboxEntity)
     @Query("SELECT * FROM outbox ORDER BY createdAt, messageId") suspend fun outbox(): List<OutboxEntity>
@@ -205,6 +225,9 @@ data class SearchHitRow(
     val senderUserId: String,
 )
 
+/** The conversation and the attachment list (JSON, see `AttachmentJson`) of a message. */
+data class AttachmentRow(val conversationId: String, val attachments: String)
+
 /** Newest message of a conversation (id, who wrote it), for "stay at the bottom" decisions. */
 data class LatestMessageRow(val id: String, val outgoing: Boolean)
 
@@ -235,6 +258,9 @@ interface UiDao {
     @Query("SELECT * FROM account WHERE id = 1") fun observeAccount(): Flow<AccountEntity?>
 
     @Query("SELECT * FROM messages WHERE id = :id") fun observeMessage(id: String): Flow<MessageEntity?>
+
+    @Query("SELECT * FROM message_receipts WHERE messageId = :messageId ORDER BY userId")
+    fun observeReceipts(messageId: String): Flow<List<MessageReceiptEntity>>
 
     /** Newest [limit] messages of the conversation, oldest first. */
     @Query(
@@ -333,4 +359,8 @@ interface UiDao {
     /** The attachment lists of all messages that have attachments (to find files nobody refers to). */
     @Query("SELECT attachments FROM messages WHERE attachments != '[]'")
     suspend fun attachmentJsons(): List<String>
+
+    /** One row per message that has attachments, for the storage screen. */
+    @Query("SELECT conversationId, attachments FROM messages WHERE attachments != '[]'")
+    suspend fun attachmentRows(): List<AttachmentRow>
 }

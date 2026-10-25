@@ -15,6 +15,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.QrCode2
+import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -59,7 +61,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import se.familychat.app.R
 import se.familychat.app.data.ChatRepository
+import se.familychat.app.qr.SafetyQr
 import se.familychat.app.ui.components.Avatar
+import se.familychat.app.ui.components.QrImage
+import se.familychat.app.ui.components.QrScannerDialog
 import se.familychat.app.ui.model.UserUi
 import se.familychat.core.client.FamilyChatEngine
 import se.familychat.core.client.IdentityChange
@@ -69,7 +74,7 @@ import javax.inject.Inject
  * A key that is blocked until the user accepts it: a changed key of a known device, or ([newDevice]) the key of a device
  * that was added next to verified ones.
  */
-class PendingKeyUi(val newKey: ByteArray, val safetyGroups: List<String>, val newDevice: Boolean = false)
+class PendingKeyUi(val newKey: ByteArray, val safetyGroups: List<String>, val newDevice: Boolean = false, val qr: String? = null)
 
 data class DeviceSafetyUi(
     val deviceId: String,
@@ -79,7 +84,18 @@ data class DeviceSafetyUi(
     val groups: List<String>,
     val verified: Boolean,
     val pending: PendingKeyUi?,
+    /** The text of this number's QR code (`fcsn1:...`); null if no identity is pinned yet. */
+    val qr: String? = null,
 )
+
+/** What comparing a scanned QR code with a device's safety number found. */
+enum class ScanVerdict { MATCH, MISMATCH, NOT_A_SAFETY_CODE }
+
+/**
+ * The result of scanning the other person's QR code for the device [deviceId]. [pendingKey]: the code was compared with the
+ * number of a key that is still waiting for approval, so a match does not make it verified (that is a separate decision).
+ */
+data class ScanOutcomeUi(val deviceId: String, val deviceName: String, val verdict: ScanVerdict, val pendingKey: Boolean)
 
 data class ContactUiState(
     val user: UserUi? = null,
@@ -87,6 +103,7 @@ data class ContactUiState(
     val loading: Boolean = true,
     /** The last accept was refused because the key does not match what the server lists for the device. */
     val acceptRefused: Boolean = false,
+    val scan: ScanOutcomeUi? = null,
 )
 
 @HiltViewModel
@@ -99,25 +116,33 @@ class ContactViewModel @Inject constructor(
     private val refresh = MutableStateFlow(0)
     private val loading = MutableStateFlow(true)
     private val refused = MutableStateFlow(false)
+    private val scan = MutableStateFlow<ScanOutcomeUi?>(null)
 
-    val state: StateFlow<ContactUiState> = combine(repo.user(userId), repo.devicesOf(userId), refresh, loading, refused) { user, devices, _, l, r ->
+    private class Flags(val loading: Boolean, val refused: Boolean, val scan: ScanOutcomeUi?)
+
+    private val flags = combine(loading, refused, scan, ::Flags)
+
+    val state: StateFlow<ContactUiState> = combine(repo.user(userId), repo.devicesOf(userId), refresh, flags) { user, devices, _, f ->
         // CPU- and database-bound (5200 hash rounds per number, blocking reads of the pinned identity)
         val built = withContext(Dispatchers.Default) {
             val pending = engine.pendingIdentityChanges().filter { it.userId == userId }.associateBy { it.deviceId }
             val thisDevice = engine.account.value?.deviceId
             devices.filter { it.id != thisDevice && (it.identityKey != null || pending.containsKey(it.id)) }.map { d ->
                 val p = pending[d.id]
+                val number = engine.safetyNumber(userId, d.id)
                 DeviceSafetyUi(
                     deviceId = d.id, number = d.number, name = d.name,
-                    groups = engine.safetyNumber(userId, d.id)?.groups.orEmpty(),
+                    groups = number?.groups.orEmpty(),
                     verified = engine.isVerified(d.id),
                     pending = p?.newIdentityKey?.let { key ->
-                        PendingKeyUi(key, engine.safetyNumberFor(userId, d.id, key)?.groups.orEmpty(), p.kind == IdentityChange.Kind.NEW_DEVICE)
+                        val newNumber = engine.safetyNumberFor(userId, d.id, key)
+                        PendingKeyUi(key, newNumber?.groups.orEmpty(), p.kind == IdentityChange.Kind.NEW_DEVICE, newNumber?.let(SafetyQr::payload))
                     },
+                    qr = number?.let(SafetyQr::payload),
                 )
             }
         }
-        ContactUiState(user, built, l, r)
+        ContactUiState(user, built, f.loading, f.refused, f.scan)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ContactUiState())
 
     init {
@@ -132,6 +157,29 @@ class ContactViewModel @Inject constructor(
             withContext(Dispatchers.IO) { engine.setVerified(deviceId, verified) }
             refresh.value++
         }
+    }
+
+    /**
+     * Compares a QR code scanned from the other person's phone with this device's safety number (the new number, for a key
+     * that waits for approval). The scanned text is untrusted: anything that is not a safety number code is reported as such.
+     */
+    fun onScanned(deviceId: String, deviceName: String, text: String) {
+        viewModelScope.launch {
+            scan.value = withContext(Dispatchers.Default) {
+                val pending = engine.pendingIdentityChanges().firstOrNull { it.userId == userId && it.deviceId == deviceId }
+                val number = pending?.newIdentityKey?.let { engine.safetyNumberFor(userId, deviceId, it) } ?: engine.safetyNumber(userId, deviceId)
+                val verdict = when (number?.let { SafetyQr.compare(it, text) }) {
+                    SafetyQr.ScanResult.MATCH -> ScanVerdict.MATCH
+                    SafetyQr.ScanResult.MISMATCH, null -> ScanVerdict.MISMATCH
+                    SafetyQr.ScanResult.NOT_A_SAFETY_CODE -> ScanVerdict.NOT_A_SAFETY_CODE
+                }
+                ScanOutcomeUi(deviceId, deviceName, verdict, pendingKey = pending != null)
+            }
+        }
+    }
+
+    fun dismissScan() {
+        scan.value = null
     }
 
     fun accept(deviceId: String, key: ByteArray) {
@@ -149,7 +197,7 @@ class ContactViewModel @Inject constructor(
 @Composable
 fun ContactScreen(onBack: () -> Unit, vm: ContactViewModel = hiltViewModel()) {
     val state by vm.state.collectAsStateWithLifecycle()
-    ContactContent(state, onBack, vm::setVerified, vm::accept)
+    ContactContent(state, onBack, vm::setVerified, vm::accept, vm::onScanned, vm::dismissScan)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -159,9 +207,14 @@ fun ContactContent(
     onBack: () -> Unit,
     onVerified: (deviceId: String, verified: Boolean) -> Unit,
     onAccept: (deviceId: String, key: ByteArray) -> Unit,
+    onScanned: (deviceId: String, deviceName: String, text: String) -> Unit = { _, _, _ -> },
+    onDismissScan: () -> Unit = {},
     modifier: Modifier = Modifier,
+    /** The QR codes start out shown (screenshots; on the real screen a button shows them). */
+    initiallyShowQr: Boolean = false,
 ) {
     var confirm by remember { mutableStateOf<Pair<DeviceSafetyUi, PendingKeyUi>?>(null) }
+    var scanning by remember { mutableStateOf<DeviceSafetyUi?>(null) }
     Scaffold(
         modifier = modifier,
         topBar = { TopAppBar(title = { Text(stringResource(R.string.safety_number)) }, navigationIcon = { BackButton(onBack) }) },
@@ -195,10 +248,22 @@ fun ContactContent(
                 item(key = "none") { Text(stringResource(R.string.safety_no_devices), style = MaterialTheme.typography.bodyMedium) }
             }
             items(state.devices, key = { it.deviceId }) { d ->
-                DeviceCard(d, onVerified = { onVerified(d.deviceId, it) }, onAccept = { d.pending?.let { p -> confirm = d to p } })
+                DeviceCard(
+                    d, onVerified = { onVerified(d.deviceId, it) }, onAccept = { d.pending?.let { p -> confirm = d to p } },
+                    onScan = { scanning = d }, initiallyShowQr = initiallyShowQr,
+                )
             }
         }
     }
+    scanning?.let { device ->
+        QrScannerDialog(
+            title = stringResource(R.string.scan_safety_title),
+            hint = stringResource(R.string.scan_safety_hint, state.user?.name.orEmpty()),
+            onResult = { text -> scanning = null; onScanned(device.deviceId, device.name, text) },
+            onDismiss = { scanning = null },
+        )
+    }
+    state.scan?.let { outcome -> ScanResultDialog(outcome, onVerified = { onVerified(outcome.deviceId, true) }, onDismiss = onDismissScan) }
     confirm?.let { (device, pending) ->
         AlertDialog(
             onDismissRequest = { confirm = null },
@@ -212,8 +277,9 @@ fun ContactContent(
 }
 
 @Composable
-private fun DeviceCard(d: DeviceSafetyUi, onVerified: (Boolean) -> Unit, onAccept: () -> Unit) {
+private fun DeviceCard(d: DeviceSafetyUi, onVerified: (Boolean) -> Unit, onAccept: () -> Unit, onScan: () -> Unit, initiallyShowQr: Boolean) {
     val warning = d.pending != null
+    var showQr by remember { mutableStateOf(initiallyShowQr) }
     Card(
         colors = CardDefaults.cardColors(containerColor = if (warning) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.surfaceContainerLow),
         modifier = Modifier.fillMaxWidth(),
@@ -231,6 +297,10 @@ private fun DeviceCard(d: DeviceSafetyUi, onVerified: (Boolean) -> Unit, onAccep
                 if (d.pending.safetyGroups.isNotEmpty()) {
                     Text(stringResource(R.string.new_safety_number), style = MaterialTheme.typography.labelLarge)
                     SafetyDigits(d.pending.safetyGroups)
+                    OutlinedButton(onClick = onScan, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
+                        Icon(Icons.Filled.QrCodeScanner, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Text(stringResource(R.string.scan_qr), modifier = Modifier.padding(start = 8.dp))
+                    }
                 }
                 Button(
                     onClick = onAccept, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
@@ -244,6 +314,7 @@ private fun DeviceCard(d: DeviceSafetyUi, onVerified: (Boolean) -> Unit, onAccep
                 Text(stringResource(R.string.safety_not_yet), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             } else {
                 SafetyDigits(d.groups)
+                QrActions(d.qr, showQr, onToggle = { showQr = !showQr }, onScan = onScan)
                 if (d.verified) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Filled.CheckCircle, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
@@ -258,6 +329,80 @@ private fun DeviceCard(d: DeviceSafetyUi, onVerified: (Boolean) -> Unit, onAccep
             }
         }
     }
+}
+
+/** "Show my QR code" (the other person scans it) and "Scan their QR code", with the code below when it is shown. */
+@Composable
+private fun QrActions(qr: String?, showQr: Boolean, onToggle: () -> Unit, onScan: () -> Unit) {
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+        if (qr != null) {
+            OutlinedButton(onClick = onToggle, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) {
+                Icon(Icons.Filled.QrCode2, contentDescription = null, modifier = Modifier.size(18.dp))
+                Text(stringResource(if (showQr) R.string.hide_qr else R.string.show_qr), modifier = Modifier.padding(start = 8.dp))
+            }
+        }
+        OutlinedButton(onClick = onScan, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) {
+            Icon(Icons.Filled.QrCodeScanner, contentDescription = null, modifier = Modifier.size(18.dp))
+            Text(stringResource(R.string.scan_qr), modifier = Modifier.padding(start = 8.dp))
+        }
+    }
+    if (qr != null && showQr) {
+        Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            QrImage(qr, stringResource(R.string.safety_qr_description), Modifier.size(224.dp))
+            Text(stringResource(R.string.safety_qr_hint), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+/** The verdict of a scan: a match offers "mark as verified", a mismatch is a clear warning. */
+@Composable
+private fun ScanResultDialog(outcome: ScanOutcomeUi, onVerified: () -> Unit, onDismiss: () -> Unit) {
+    val ok = outcome.verdict == ScanVerdict.MATCH
+    val bad = outcome.verdict == ScanVerdict.MISMATCH
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = {
+            Icon(
+                if (ok) Icons.Filled.CheckCircle else Icons.Filled.Warning, contentDescription = null,
+                tint = if (ok) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+            )
+        },
+        title = {
+            Text(
+                stringResource(
+                    when (outcome.verdict) {
+                        ScanVerdict.MATCH -> R.string.scan_match_title
+                        ScanVerdict.MISMATCH -> R.string.scan_mismatch_title
+                        ScanVerdict.NOT_A_SAFETY_CODE -> R.string.scan_not_safety_title
+                    },
+                ),
+            )
+        },
+        text = {
+            Text(
+                stringResource(
+                    when {
+                        ok && outcome.pendingKey -> R.string.scan_match_pending_text
+                        ok -> R.string.scan_match_text
+                        bad -> R.string.scan_mismatch_text
+                        else -> R.string.scan_not_safety_text
+                    },
+                    outcome.deviceName,
+                ),
+                color = if (bad) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+            )
+        },
+        confirmButton = {
+            if (ok && !outcome.pendingKey) {
+                TextButton(onClick = { onVerified(); onDismiss() }, modifier = Modifier.heightIn(min = 48.dp)) { Text(stringResource(R.string.mark_verified)) }
+            } else {
+                TextButton(onClick = onDismiss, modifier = Modifier.heightIn(min = 48.dp)) { Text(stringResource(R.string.action_ok)) }
+            }
+        },
+        dismissButton = if (ok && !outcome.pendingKey) {
+            { TextButton(onClick = onDismiss, modifier = Modifier.heightIn(min = 48.dp)) { Text(stringResource(R.string.action_close)) } }
+        } else null,
+    )
 }
 
 /** The 12 groups of 5 digits, three groups per line so they are easy to read aloud. */

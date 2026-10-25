@@ -40,6 +40,8 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import se.familychat.app.data.AppPrefs
+import se.familychat.app.data.AutoDownloadPolicy
 import se.familychat.app.data.ChatRepository
 import se.familychat.app.data.ConnectionStatus
 import se.familychat.app.data.db.LatestMessageRow
@@ -54,6 +56,7 @@ import se.familychat.app.media.UnusableAttachmentException
 import se.familychat.app.media.VoicePlayer
 import se.familychat.app.media.VoiceRecorder
 import se.familychat.app.platform.ActiveConversation
+import se.familychat.app.platform.ConnectivityMonitor
 import se.familychat.app.platform.notify.Notifier
 import se.familychat.app.platform.work.WorkScheduler
 import se.familychat.app.ui.components.PlaybackUi
@@ -71,6 +74,7 @@ import se.familychat.app.ui.model.attachmentKindOf
 import se.familychat.core.client.DownloadState
 import se.familychat.core.client.FamilyChatEngine
 import se.familychat.core.client.LocalStore
+import se.familychat.core.client.MessageGoneException
 import se.familychat.core.client.OutgoingAttachment
 import se.familychat.core.client.StoredMessage
 import se.familychat.core.model.ConversationType
@@ -135,6 +139,8 @@ class ConversationViewModel @Inject constructor(
     private val active: ActiveConversation,
     private val notifier: Notifier,
     private val work: WorkScheduler,
+    private val prefs: AppPrefs,
+    private val connectivity: ConnectivityMonitor,
     connectionStatus: ConnectionStatus,
     @ApplicationScope private val appScope: CoroutineScope,
 ) : ViewModel() {
@@ -425,6 +431,25 @@ class ConversationViewModel @Inject constructor(
         }
     }
 
+    /**
+     * "Delete for me": the message disappears from this phone only (nothing is sent), together with its downloaded files and
+     * the copies of attachments you sent. It is remembered as deleted, so it does not come back with a later sync.
+     */
+    fun deleteForMe(messageId: String) {
+        viewModelScope.launch {
+            try {
+                val removed = engine.deleteMessageForMe(messageId)
+                removed?.attachments?.forEach { preparer.deleteOutgoingCopy(it.localPath) }
+                if (replyTo.value == messageId) replyTo.value = null
+                if (editing.value == messageId) cancelEdit()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _effects.tryEmit(ConversationEffect.Error(e.toUiError(), e.message))
+            }
+        }
+    }
+
     fun retry(messageId: String) {
         viewModelScope.launch {
             try {
@@ -548,6 +573,8 @@ class ConversationViewModel @Inject constructor(
                 }
             } catch (e: CancellationException) {
                 throw e
+            } catch (e: MessageGoneException) {
+                // deleted while it was downloading: nothing to tell
             } catch (e: Exception) {
                 _effects.tryEmit(ConversationEffect.Error(if (e is java.io.IOException) UiError.NETWORK else UiError.UNKNOWN, e.message))
             } finally {
@@ -588,7 +615,7 @@ class ConversationViewModel @Inject constructor(
                         gone += a.id
                     }
                 }
-            } else if (a.downloadState == DownloadState.NONE && (!m.outgoing || a.key != null) && autoRequested.add(a.id) && shouldAutoDownload(a.kind, a.size)) {
+            } else if (a.downloadState == DownloadState.NONE && (!m.outgoing || a.key != null) && shouldAutoDownload(a.kind, a.size) && autoRequested.add(a.id)) {
                 download(m.id, AttachmentUi(a.id, AttachmentKindUi.FILE, a.mime, a.name, a.size, null, null, null, null, se.familychat.app.ui.model.TransferUi.Remote))
             }
         }
@@ -616,11 +643,13 @@ class ConversationViewModel @Inject constructor(
         }
     }
 
-    private fun shouldAutoDownload(kind: String, size: Long) = when (kind) {
-        "image" -> size <= AUTO_IMAGE_BYTES
-        "voice" -> size <= AUTO_VOICE_BYTES
-        else -> false
-    }
+    /**
+     * Whether an attachment is fetched without a tap: the user's setting for its kind (Always / Wi-Fi only / Never) and the
+     * network as it is right now. A declined attachment is not remembered as requested, so it is looked at again when it comes
+     * into view later (on Wi-Fi, or after the setting changed); tapping it always downloads it.
+     */
+    private fun shouldAutoDownload(kind: String, size: Long) =
+        AutoDownloadPolicy.shouldDownload(prefs.autoDownload.value, kind, size, connectivity.isMetered())
 
     private companion object {
         const val PAGE_SIZE = 40
@@ -629,7 +658,5 @@ class ConversationViewModel @Inject constructor(
         const val DRAFT_SAVE_DELAY_MS = 500L
         const val PROGRESS_STEP = 0.02f
         const val MAX_ATTACHMENTS = 10
-        const val AUTO_IMAGE_BYTES = 20L * 1024 * 1024
-        const val AUTO_VOICE_BYTES = 8L * 1024 * 1024
     }
 }

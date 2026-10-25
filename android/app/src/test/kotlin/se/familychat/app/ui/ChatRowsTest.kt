@@ -164,4 +164,19 @@ class ChatRowsTest {
         val broken = attachment("b").copy(thumbnail = "%%%not base64%%%")
         assertNull(buildChatRows(listOf(m("q", "bob", attachments = listOf(broken))), ctx()).filterIsInstance<ChatRow.Message>().single().message.attachments.single().thumbnail)
     }
+
+    @Test fun `menu flags - delete for me for any stored message, delete for everyone and info only for own sent ones`() {
+        fun flags(from: String, status: MessageStatus? = null, deleted: Boolean = false): Triple<Boolean, Boolean, Boolean> {
+            val msg = m("x", from, status = status).copy(deleted = deleted)
+            val ui = buildChatRows(listOf(msg), ctx()).filterIsInstance<ChatRow.Message>().single().message
+            return Triple(ui.canDeleteForMe, ui.canDelete, ui.canShowInfo)
+        }
+        assertEquals(Triple(true, false, false), flags("bob"))
+        assertEquals(Triple(true, true, true), flags("me", MessageStatus.SENT))
+        assertEquals(Triple(true, true, true), flags("me", MessageStatus.READ))
+        assertEquals(Triple(false, true, false), flags("me", MessageStatus.PENDING), "a queued message is not on any other phone yet")
+        assertEquals(Triple(true, true, false), flags("me", MessageStatus.FAILED))
+        assertEquals(Triple(true, false, false), flags("me", MessageStatus.SENT, deleted = true), "a message deleted for everyone can still be removed here")
+        assertEquals(Triple(true, false, false), flags("bob", deleted = true))
+    }
 }

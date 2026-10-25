@@ -12,6 +12,7 @@ import se.familychat.core.client.LocalStore
 import se.familychat.core.client.MessageStatus
 import se.familychat.core.client.OutboxAttachment
 import se.familychat.core.client.OutboxEntry
+import se.familychat.core.client.ReceiptTimes
 import se.familychat.core.client.StoredMessage
 import se.familychat.core.client.SystemEvent
 import se.familychat.core.model.Conversation
@@ -335,5 +336,71 @@ abstract class LocalStoreContract {
             async(kotlinx.coroutines.Dispatchers.Default) { store.upsertMessage(msg("same", seq = 1, text = "v$i")) }
         }.awaitAll()
         assertEquals(1, store.getMessages("c1").size)
+    }
+
+    // --- receipt times, local deletions, messages with attachments ---------------------------------------------------------
+
+    @Test fun `receipt times keep the first value and fill in the missing one`() = runBlocking {
+        store.upsertMessage(msg("o1", seq = 1, outgoing = true))
+        assertTrue(store.getReceipts("o1").isEmpty())
+        store.recordReceipt("c1", "o1", "u2", deliveredAt = 10, readAt = null)
+        assertEquals(listOf(ReceiptTimes("o1", "u2", 10, null)), store.getReceipts("o1"))
+        store.recordReceipt("c1", "o1", "u2", deliveredAt = 99, readAt = 20) // delivered again later: the first time stays
+        store.recordReceipt("c1", "o1", "u3", deliveredAt = null, readAt = 30)
+        assertEquals(listOf(ReceiptTimes("o1", "u2", 10, 20), ReceiptTimes("o1", "u3", null, 30)), store.getReceipts("o1"))
+        store.recordReceipt("c1", "o1", "u2", deliveredAt = null, readAt = null) // nothing known: nothing changes
+        assertEquals(ReceiptTimes("o1", "u2", 10, 20), store.getReceipts("o1").first())
+    }
+
+    @Test fun `deleting a message locally removes it and its receipts and leaves a tombstone`() = runBlocking {
+        store.upsertConversation(conv("c1"))
+        store.upsertMessage(msg("a", seq = 1, outgoing = true))
+        store.upsertMessage(msg("b", seq = 2))
+        store.recordReceipt("c1", "a", "u2", 1, 2)
+        assertEquals(false, store.isLocallyDeleted("a"))
+
+        val removed = store.deleteMessageLocally("a", "c1", 5)
+        assertEquals("a", removed?.id)
+        assertNull(store.getMessage("a"))
+        assertTrue(store.getReceipts("a").isEmpty())
+        assertTrue(store.isLocallyDeleted("a"))
+        assertEquals(listOf("b"), store.getMessages("c1").map { it.id })
+        assertNull(store.updateMessage("a") { it.copy(text = "late edit") }) // a late change finds nothing to change
+        assertNull(store.getMessage("a"))
+
+        assertNull(store.deleteMessageLocally("a", "c1", 6)) // deleting again is harmless
+        assertNull(store.deleteMessageLocally("never-seen", "c1", 7)) // and a tombstone can precede the message
+        assertTrue(store.isLocallyDeleted("never-seen"))
+    }
+
+    @Test fun `removing a conversation removes its receipt times and tombstones`() = runBlocking {
+        store.upsertConversation(conv("c1")); store.upsertConversation(conv("c2"))
+        store.upsertMessage(msg("a", seq = 1, outgoing = true)); store.upsertMessage(msg("z", conv = "c2", seq = 1, outgoing = true))
+        store.recordReceipt("c1", "a", "u2", 1, null); store.recordReceipt("c2", "z", "u2", 1, null)
+        store.deleteMessageLocally("gone1", "c1", 1); store.deleteMessageLocally("gone2", "c2", 1)
+        store.removeConversation("c1")
+        assertTrue(store.getReceipts("a").isEmpty())
+        assertEquals(false, store.isLocallyDeleted("gone1"))
+        assertEquals(1, store.getReceipts("z").size)
+        assertTrue(store.isLocallyDeleted("gone2"))
+    }
+
+    @Test fun `clearAll removes receipt times and tombstones`() = runBlocking {
+        store.upsertMessage(msg("a", seq = 1, outgoing = true))
+        store.recordReceipt("c1", "a", "u2", 1, null)
+        store.deleteMessageLocally("gone", "c1", 1)
+        store.clearAll()
+        assertTrue(store.getReceipts("a").isEmpty())
+        assertEquals(false, store.isLocallyDeleted("gone"))
+    }
+
+    @Test fun `messages with attachments can be listed for one conversation or all`() = runBlocking {
+        fun att(id: String) = LocalAttachment(id, "k", "s", 10, "image/jpeg", "p.jpg", "image", null, null, null, null, "/x/$id", DownloadState.DONE)
+        store.upsertMessage(msg("plain", seq = 1))
+        store.upsertMessage(msg("p1", conv = "c1", seq = 2).copy(attachments = listOf(att("a1"))))
+        store.upsertMessage(msg("p2", conv = "c2", seq = 1).copy(attachments = listOf(att("a2"), att("a3"))))
+        assertEquals(listOf("p1"), store.messagesWithAttachments("c1").map { it.id })
+        assertEquals(setOf("p1", "p2"), store.messagesWithAttachments().map { it.id }.toSet())
+        assertEquals(listOf("a2", "a3"), store.messagesWithAttachments("c2").single().attachments.map { it.id })
     }
 }

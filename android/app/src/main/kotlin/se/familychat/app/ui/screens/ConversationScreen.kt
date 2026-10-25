@@ -154,6 +154,7 @@ class ConversationNav(
     val onOpenGroupInfo: (conversationId: String) -> Unit,
     val onOpenContact: (userId: String) -> Unit,
     val onSearch: (conversationId: String) -> Unit = {},
+    val onOpenMessageInfo: (messageId: String) -> Unit = {},
 )
 
 @Composable
@@ -171,6 +172,7 @@ fun ConversationScreen(
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     var confirmDelete by remember { mutableStateOf<String?>(null) }
+    var confirmDeleteForMe by remember { mutableStateOf<String?>(null) }
     var confirmLink by remember { mutableStateOf<String?>(null) }
     // a quoted message that was not loaded: the list restarts around it, then we scroll to it
     var pendingScroll by remember { mutableStateOf<String?>(null) }
@@ -232,6 +234,8 @@ fun ConversationScreen(
             onReply = vm::startReply,
             onEdit = vm::startEdit,
             onDelete = { confirmDelete = it },
+            onDeleteForMe = { confirmDeleteForMe = it },
+            onInfo = nav.onOpenMessageInfo,
             onCopy = { copyToClipboard(context, it); },
             onRetry = vm::retry,
             onOpenAttachment = { messageId, a ->
@@ -306,9 +310,21 @@ fun ConversationScreen(
             title = { Text(stringResource(R.string.delete_message_title)) },
             text = { Text(stringResource(R.string.delete_message_text)) },
             confirmButton = {
-                TextButton(onClick = { vm.delete(id); confirmDelete = null }) { Text(stringResource(R.string.action_delete)) }
+                TextButton(onClick = { vm.delete(id); confirmDelete = null }) { Text(stringResource(R.string.action_delete_for_everyone)) }
             },
             dismissButton = { TextButton(onClick = { confirmDelete = null }) { Text(stringResource(R.string.action_cancel)) } },
+        )
+    }
+
+    confirmDeleteForMe?.let { id ->
+        AlertDialog(
+            onDismissRequest = { confirmDeleteForMe = null },
+            title = { Text(stringResource(R.string.delete_for_me_title)) },
+            text = { Text(stringResource(R.string.delete_for_me_text)) },
+            confirmButton = {
+                TextButton(onClick = { vm.deleteForMe(id); confirmDeleteForMe = null }) { Text(stringResource(R.string.action_delete_for_me)) }
+            },
+            dismissButton = { TextButton(onClick = { confirmDeleteForMe = null }) { Text(stringResource(R.string.action_cancel)) } },
         )
     }
 

@@ -115,7 +115,12 @@ data class MessageUi(
     val undecryptable: UndecryptableUi?,
     val failed: Boolean,
     val canEdit: Boolean,
+    /** "Delete for everyone": your own message, not yet deleted. */
     val canDelete: Boolean,
+    /** "Delete for me": any message that has left the outbox; it is only removed from this phone. */
+    val canDeleteForMe: Boolean = false,
+    /** "Message info": your own message that the server has stored (who received and read it, and when). */
+    val canShowInfo: Boolean = false,
     /** Who wrote it (user id); consecutive messages of one sender form a run. */
     val senderId: String = "",
     /** The sender's display name for screen readers, also in direct conversations; null for own messages. */

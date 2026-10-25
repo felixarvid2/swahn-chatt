@@ -22,6 +22,7 @@ import se.familychat.app.ui.model.SafetyUi
 import se.familychat.app.ui.model.UserUi
 import se.familychat.app.ui.model.delivery
 import se.familychat.core.client.FamilyChatEngine
+import se.familychat.core.client.ReceiptTimes
 import se.familychat.core.client.StoredMessage
 import se.familychat.core.model.ConversationType
 import se.familychat.core.model.MemberRole
@@ -91,6 +92,13 @@ class ChatRepository @Inject constructor(
 
     /** The messages of a conversation, newest first, in pages (the conversation screen's list). */
     fun pagedMessages(conversationId: String): PagingSource<Int, MessageEntity> = ui.pagedMessages(conversationId)
+
+    /** One message, again whenever it changes (null: it does not exist, or was deleted on this phone). */
+    fun message(id: String): Flow<StoredMessage?> = ui.observeMessage(id).map { it?.toModel() }
+
+    /** When each member acknowledged / read one of our messages, as far as known. */
+    fun receipts(messageId: String): Flow<List<ReceiptTimes>> =
+        ui.observeReceipts(messageId).map { list -> list.map { ReceiptTimes(it.messageId, it.userId, it.deliveredAt, it.readAt) } }
 
     fun latestMessage(conversationId: String): Flow<LatestMessageRow?> = ui.observeLatest(conversationId).distinctUntilChanged()
 

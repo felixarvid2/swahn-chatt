@@ -154,7 +154,7 @@ class FakeServer {
     // --- internals ----------------------------------------------------------------------------------------------------
 
     private fun enqueue(deviceId: String, type: String, conversationId: String?, data: JsonElement): Event = synchronized(lock) {
-        val e = Event(seqCounter.incrementAndGet(), type, 0, conversationId, data)
+        val e = Event(seqCounter.incrementAndGet(), type, System.currentTimeMillis(), conversationId, data)
         queues.getValue(deviceId).add(e)
         realtimes.filter { it.deviceId == deviceId }.forEach { it.pushSync(e.seq) }
         e

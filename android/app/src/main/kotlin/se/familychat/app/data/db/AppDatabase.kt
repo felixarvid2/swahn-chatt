@@ -9,7 +9,8 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import androidx.sqlite.db.SupportSQLiteOpenHelper
 
 /**
- * The one database of the app. Version 3 (1: first release; 2: `drafts`; 3: `message_fts` search index, `conversation_settings`).
+ * The one database of the app. Version 4 (1: first release; 2: `drafts`; 3: `message_fts` search index, `conversation_settings`;
+ * 4: `message_receipts`, `local_deletions`).
  *
  * Schema changes: bump [version], add a `Migration` to [MIGRATIONS], and extend `MigrationTest` (the exported schema JSON
  * files in `app/schemas/` are the test fixtures: commit the new one).
@@ -21,6 +22,7 @@ import androidx.sqlite.db.SupportSQLiteOpenHelper
         AccountEntity::class, MetaEntity::class, TokenEntity::class, SyncStateEntity::class,
         UserEntity::class, DeviceEntity::class, ConversationEntity::class, MemberEntity::class,
         MessageEntity::class, OutboxEntity::class, DraftEntity::class, MessageFtsEntity::class, ConversationSettingsEntity::class,
+        MessageReceiptEntity::class, LocalDeletionEntity::class,
         SignalIdentityEntity::class, SignalPreKeyEntity::class, SignalSignedPreKeyEntity::class,
         SignalKyberPreKeyEntity::class, SignalLastResortUsedEntity::class, SignalSessionEntity::class,
         SignalRemoteIdentityEntity::class, SignalCounterEntity::class,
@@ -33,7 +35,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun uiDao(): UiDao
 
     companion object {
-        const val VERSION = 3
+        const val VERSION = 4
         const val FILE_NAME = "familychat.db"
 
         /** 1 -> 2: the unsent composer text per conversation. Nothing else changes, so no existing row is touched. */
@@ -60,8 +62,22 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * 3 -> 4: receipt times (item "message info") and the tombstones of "delete for me". Two new tables, no existing row is
+         * changed: messages from before keep their delivered/read status (in `messages`) and just have no times.
+         */
+        @Suppress("MaxLineLength") // SQL, copied from the exported 4.json
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS `message_receipts` (`messageId` TEXT NOT NULL, `userId` TEXT NOT NULL, `conversationId` TEXT NOT NULL, `deliveredAt` INTEGER, `readAt` INTEGER, PRIMARY KEY(`messageId`, `userId`))")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_message_receipts_conversationId` ON `message_receipts` (`conversationId`)")
+                db.execSQL("CREATE TABLE IF NOT EXISTS `local_deletions` (`messageId` TEXT NOT NULL, `conversationId` TEXT NOT NULL, `deletedAt` INTEGER NOT NULL, PRIMARY KEY(`messageId`))")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_local_deletions_conversationId` ON `local_deletions` (`conversationId`)")
+            }
+        }
+
         /** Migrations from older versions; every shipped version needs one (see `MigrationTest`). */
-        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3)
+        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
 
         /** Durable ratchet writes: a lost libsignal step cannot be recovered, so never trade `synchronous` for speed. */
         private val durability = object : Callback() {

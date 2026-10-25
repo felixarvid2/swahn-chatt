@@ -120,7 +120,8 @@ class ConversationUiTest {
         val asked = ArrayList<String>()
         content { MessageBubble(message("Titta https://example.com/x och ring 070-123 45 67"), BubbleActions(onOpenLink = { asked += it }), PlaybackUi()) }
         val node = compose.onNode(hasContentDescription("Bertil Ek", substring = true)).fetchSemanticsNode()
-        val actions = node.config[SemanticsActions.CustomActions]
+        // the bubble also offers "Svara" (the swipe's accessible twin); the links follow
+        val actions = node.config[SemanticsActions.CustomActions].filter { it.label.startsWith("Öppna länk") }
         assertEquals(listOf("Öppna länk: example.com", "Öppna länk: 0701234567"), actions.map { it.label })
         assertTrue(asked.isEmpty(), "nothing was asked or opened yet")
         actions[0].action()

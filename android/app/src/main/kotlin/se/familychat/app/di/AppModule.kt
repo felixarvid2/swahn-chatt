@@ -11,6 +11,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import se.familychat.app.BuildConfig
+import se.familychat.app.data.StorageDirs
 import se.familychat.app.data.db.AppDatabase
 import se.familychat.app.data.db.RoomLocalStore
 import se.familychat.app.data.db.RoomProtocolStorage
@@ -34,6 +35,15 @@ object AppModule {
     @Provides @Singleton
     fun database(@ApplicationContext context: Context): AppDatabase = DatabaseProvider.create(context)
 
+    /** Where the app keeps files; the engine writes there and the storage screen measures it. */
+    @Provides @Singleton
+    fun storageDirs(@ApplicationContext context: Context): StorageDirs = StorageDirs(
+        attachments = File(context.filesDir, "attachments"),
+        transfer = File(context.filesDir, "transfer"),
+        cache = context.cacheDir,
+        database = context.getDatabasePath(AppDatabase.FILE_NAME),
+    )
+
     @Provides @Singleton
     fun localStore(db: AppDatabase): LocalStore = RoomLocalStore(db)
 
@@ -50,7 +60,7 @@ object AppModule {
      */
     @Provides @Singleton
     fun engine(
-        @ApplicationContext context: Context,
+        dirs: StorageDirs,
         store: LocalStore,
         protocol: ProtocolStorage,
         tokens: TokenProvider,
@@ -61,8 +71,8 @@ object AppModule {
         tokens = tokens,
         config = EngineConfig(
             deviceName = defaultDeviceName(),
-            attachmentDir = File(context.filesDir, "attachments"),
-            tempDir = File(context.filesDir, "transfer"),
+            attachmentDir = dirs.attachments,
+            tempDir = dirs.transfer,
             allowInsecureLan = BuildConfig.ALLOW_INSECURE_LAN,
         ),
         scope = scope,
