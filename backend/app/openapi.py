@@ -16,7 +16,7 @@ PUBLIC_OPERATIONS = {
 }
 
 DESCRIPTION = (
-    "FamilyChat backend: an end-to-end encrypted message mailbox. The server stores ciphertext and routing "
+    "Swahn Chat backend: an end-to-end encrypted message mailbox. The server stores ciphertext and routing "
     'metadata only. Every error response is `{"code", "message", "request_id"?}`; the contract with the '
     "clients is `docs/API.md`."
 )

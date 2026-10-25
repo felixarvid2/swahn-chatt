@@ -20,9 +20,9 @@ STRONG = "k" * 48
 def cli_env(monkeypatch, tmp_path):
     """Isolated environment for in-process CLI runs."""
     for name in list(__import__("os").environ):
-        if name.startswith("FAMILYCHAT_"):
+        if name.startswith("SWAHNCHAT_"):
             monkeypatch.delenv(name)
-    monkeypatch.setenv("FAMILYCHAT_DATA_DIR", str(tmp_path / "cli-data"))
+    monkeypatch.setenv("SWAHNCHAT_DATA_DIR", str(tmp_path / "cli-data"))
     return monkeypatch
 
 
@@ -31,10 +31,10 @@ def rebuild(src, dst, mutate_db=None, mutate_manifest=None, extra=()):
     with tarfile.open(src) as tin:
         files = {m.name: tin.extractfile(m).read() for m in tin}
     if mutate_db:
-        files["familychat.db"] = mutate_db(files["familychat.db"])
+        files["swahnchat.db"] = mutate_db(files["swahnchat.db"])
     manifest = json.loads(files["manifest.json"])
-    manifest["database"]["sha256"] = hashlib.sha256(files["familychat.db"]).hexdigest()
-    manifest["database"]["size"] = len(files["familychat.db"])
+    manifest["database"]["sha256"] = hashlib.sha256(files["swahnchat.db"]).hexdigest()
+    manifest["database"]["size"] = len(files["swahnchat.db"])
     if mutate_manifest:
         mutate_manifest(manifest)
     files["manifest.json"] = json.dumps(manifest).encode()
@@ -182,7 +182,7 @@ def _sized(name, size):
 # ------------------------------------------------------------------------------------------- check-config
 def run_check(cli_env, capsys, **env):
     for key, value in env.items():
-        cli_env.setenv("FAMILYCHAT_" + key.upper(), str(value))
+        cli_env.setenv("SWAHNCHAT_" + key.upper(), str(value))
     code = cli_main(["check-config"])
     out = capsys.readouterr()
     return code, out.out, out.err
@@ -211,28 +211,28 @@ def test_secrets_are_never_printed(cli_env, capsys):
         cli_env,
         capsys,
         **{**GOOD_PROD, "secret_key": secret},
-        database_url="postgresql+psycopg://fc:hunter2pw@db.example/familychat",
+        database_url="postgresql+psycopg://fc:hunter2pw@db.example/swahnchat",
     )
     assert code == 0, out
     assert secret not in out + err and "hunter2pw" not in out + err
-    assert "postgresql+psycopg://fc:***@db.example/familychat" in out
+    assert "postgresql+psycopg://fc:***@db.example/swahnchat" in out
 
 
 def test_production_without_a_secret_key_is_an_error(cli_env, capsys):
     code, out, _ = run_check(cli_env, capsys, env="production")
     assert (
         code == 1
-        and "ERROR: FAMILYCHAT_SECRET_KEY is not set" in out
+        and "ERROR: SWAHNCHAT_SECRET_KEY is not set" in out
         and "1 error(s)" in out.splitlines()[-1]
         or code == 1
     )
     code, out, _ = run_check(cli_env, capsys, env="production", secret_key="too-short")
-    assert code == 1 and "ERROR: FAMILYCHAT_SECRET_KEY is only 9 bytes" in out
+    assert code == 1 and "ERROR: SWAHNCHAT_SECRET_KEY is only 9 bytes" in out
 
 
 def test_development_with_a_short_key_only_warns(cli_env, capsys):
     code, out, _ = run_check(cli_env, capsys, env="development", secret_key="short")
-    assert code == 0 and "WARNING: FAMILYCHAT_SECRET_KEY is only 5 bytes" in out
+    assert code == 0 and "WARNING: SWAHNCHAT_SECRET_KEY is only 5 bytes" in out
 
 
 def test_warnings_for_risky_production_settings(cli_env, capsys):
@@ -250,7 +250,7 @@ def test_warnings_for_risky_production_settings(cli_env, capsys):
     assert code == 0  # warnings do not fail the check
     for fragment in (
         "PUSH_ALLOWED_HOSTS",
-        "FAMILYCHAT_BEHIND_PROXY is set but FAMILYCHAT_TRUSTED_PROXIES is empty",
+        "SWAHNCHAT_BEHIND_PROXY is set but SWAHNCHAT_TRUSTED_PROXIES is empty",
         "EXPOSE_DOCS is true in production",
         "PUSH_ALLOW_HTTP is true in production",
         "rate limiting is disabled",
@@ -271,7 +271,7 @@ def test_low_disk_warning(cli_env, capsys):
 
 def test_invalid_trusted_proxies_is_an_error(cli_env, capsys):
     code, out, _ = run_check(cli_env, capsys, **{**GOOD_PROD, "trusted_proxies": "not-a-cidr"})
-    assert code == 1 and "ERROR: FAMILYCHAT_TRUSTED_PROXIES" in out
+    assert code == 1 and "ERROR: SWAHNCHAT_TRUSTED_PROXIES" in out
 
 
 def test_trusting_everything_is_a_warning(cli_env, capsys):
@@ -291,7 +291,7 @@ def test_data_dir_that_cannot_exist_is_an_error(cli_env, capsys, tmp_path):
 
 
 def test_invalid_setting_values_exit_1_with_a_message(cli_env, capsys):
-    cli_env.setenv("FAMILYCHAT_ENV", "staging")
+    cli_env.setenv("SWAHNCHAT_ENV", "staging")
     assert cli_main(["check-config"]) == 1
     assert "error:" in capsys.readouterr().err
 

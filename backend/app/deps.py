@@ -18,7 +18,7 @@ from app.ratelimit import RateLimiter, client_ip, rate_key
 from app.security import AccessClaims, decode_access_token
 from app.services.alerts import AdminAlerts
 
-log = logging.getLogger("familychat.deps")
+log = logging.getLogger("swahnchat.deps")
 
 LAST_SEEN_GRANULARITY_MS = 60_000
 

@@ -1,7 +1,8 @@
-"""Settings from FAMILYCHAT_* environment variables."""
+"""Settings from SWAHNCHAT_* environment variables."""
 
 import ipaddress
 import logging
+import os
 import secrets
 from functools import lru_cache
 from pathlib import Path
@@ -11,7 +12,21 @@ from urllib.parse import urlsplit
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-log = logging.getLogger("familychat.config")
+log = logging.getLogger("swahnchat.config")
+
+LEGACY_ENV_PREFIX = "FAMILYCHAT_"  # the variable prefix before the rename to Swahn Chat (never read as values)
+
+
+def legacy_env_vars() -> list[str]:
+    """Names (never values) of leftover FAMILYCHAT_* environment variables."""
+    return sorted(k for k in os.environ if k.upper().startswith(LEGACY_ENV_PREFIX))
+
+
+def legacy_env_message(names: list[str]) -> str:
+    return (
+        f"the old FAMILYCHAT_* variables are set ({', '.join(names)}) but are no longer read: "
+        "rename them to SWAHNCHAT_* (see docs/DRIFTHANDBOK.md, 'Byte från FamilyChat till Swahn Chat')"
+    )
 
 
 class ConfigError(RuntimeError):
@@ -26,7 +41,7 @@ def _check_ice_urls(name: str, urls: list[str], schemes: tuple[str, ...]) -> Non
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="FAMILYCHAT_", extra="ignore")
+    model_config = SettingsConfigDict(env_prefix="SWAHNCHAT_", extra="ignore")
 
     env: Literal["development", "production"] = "production"
     secret_key: str = ""
@@ -86,39 +101,45 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _finish(self) -> "Settings":
+        legacy = legacy_env_vars()
+        if legacy:
+            log.error(legacy_env_message(legacy))
         if len(self.secret_key.encode()) < 32:
+            if self.env == "production" and "FAMILYCHAT_SECRET_KEY" in legacy:
+                # Never start with an ephemeral key because the operator forgot to rename the variable.
+                raise ConfigError(
+                    "SWAHNCHAT_SECRET_KEY is not set but FAMILYCHAT_SECRET_KEY is: " + legacy_env_message(legacy)
+                )
             if self.env == "production":
                 raise ConfigError(
-                    "FAMILYCHAT_SECRET_KEY must be set to at least 32 bytes in production "
+                    "SWAHNCHAT_SECRET_KEY must be set to at least 32 bytes in production "
                     "(generate one with: openssl rand -base64 48)"
                 )
             if self.secret_key:
-                log.warning("FAMILYCHAT_SECRET_KEY is shorter than 32 bytes; using an ephemeral key")
+                log.warning("SWAHNCHAT_SECRET_KEY is shorter than 32 bytes; using an ephemeral key")
             else:
-                log.warning("FAMILYCHAT_SECRET_KEY not set: using an ephemeral key (tokens die on restart)")
+                log.warning("SWAHNCHAT_SECRET_KEY not set: using an ephemeral key (tokens die on restart)")
             self.secret_key = secrets.token_urlsafe(48)
         if self.admin_ntfy_url:
             parts = urlsplit(self.admin_ntfy_url.strip())
             # The topic URL is a secret of sorts: never put it into the message.
             if not parts.hostname or parts.scheme not in ("https", "http"):
                 raise ConfigError(
-                    "FAMILYCHAT_ADMIN_NTFY_URL must be a full topic URL such as https://ntfy.example.org/topic"
+                    "SWAHNCHAT_ADMIN_NTFY_URL must be a full topic URL such as https://ntfy.example.org/topic"
                 )
             if parts.scheme == "http" and self.env != "development":
-                raise ConfigError(
-                    "FAMILYCHAT_ADMIN_NTFY_URL must use https (plain http is only allowed in development)"
-                )
+                raise ConfigError("SWAHNCHAT_ADMIN_NTFY_URL must use https (plain http is only allowed in development)")
             self.admin_ntfy_url = self.admin_ntfy_url.strip()
         if self.turn_urls.strip():
             if len(self.turn_secret.encode()) < 32:
                 raise ConfigError(
-                    "FAMILYCHAT_TURN_SECRET must be at least 32 bytes when FAMILYCHAT_TURN_URLS is set "
+                    "SWAHNCHAT_TURN_SECRET must be at least 32 bytes when SWAHNCHAT_TURN_URLS is set "
                     "(generate one with: openssl rand -base64 48)"
                 )
-            _check_ice_urls("FAMILYCHAT_TURN_URLS", self.turn_url_list, ("turn", "turns"))
-        _check_ice_urls("FAMILYCHAT_STUN_URLS", self.stun_url_list, ("stun", "stuns"))
+            _check_ice_urls("SWAHNCHAT_TURN_URLS", self.turn_url_list, ("turn", "turns"))
+        _check_ice_urls("SWAHNCHAT_STUN_URLS", self.stun_url_list, ("stun", "stuns"))
         if not self.database_url:
-            self.database_url = f"sqlite:///{(self.data_dir / 'familychat.db').resolve()}"
+            self.database_url = f"sqlite:///{(self.data_dir / 'swahnchat.db').resolve()}"
         if self.attachments_dir is None:
             self.attachments_dir = self.data_dir / "attachments"
         return self

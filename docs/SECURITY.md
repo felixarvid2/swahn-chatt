@@ -1,4 +1,4 @@
-# FamilyChat security design
+# Swahn Chat security design
 
 ## What is protected, from whom
 
@@ -27,7 +27,7 @@ We do not design cryptography. Candidates evaluated:
 
 Risks of libsignal that we accept and mitigate:
 - **License: AGPL-3.0.** Anyone who distributes the app or runs a modified version for others must provide
-  the source. For a private family deployment this is fine; FamilyChat is therefore licensed AGPL-3.0 as a
+  the source. For a private family deployment this is fine; Swahn Chat is therefore licensed AGPL-3.0 as a
   whole. Do not combine it with proprietary code.
 - **No API stability promise.** Signal states libsignal is built for Signal's own apps; the Java API changes
   between releases. The version is pinned in `android/gradle/libs.versions.toml` and all use goes through one
@@ -137,11 +137,11 @@ Risks of libsignal that we accept and mitigate:
 
 ## QR codes, local deletion and unknown content
 
-- **QR codes are untrusted input.** An invitation QR (`familychat://invite?v=1&server=…&code=…`) is parsed
+- **QR codes are untrusted input.** An invitation QR (`swahnchat://invite?v=1&server=…&code=…`) is parsed
   strictly. It may only pre-fill the invitation form and shows the server host prominently, with a warning for
   punycode hosts. It never submits, never touches the login form or the saved server address, and accepts https
   only in release builds. No intent filter is registered for invitation links, so no other app or web page can open
-  FamilyChat with an invitation. Safety-number QR codes carry the libsignal scannable fingerprint and are compared with
+  Swahn Chat with an invitation. Safety-number QR codes carry the libsignal scannable fingerprint and are compared with
   `matchesScanned`.
 - **"Radera för mig"** deletes the message, its receipts and its downloaded files on this phone only, and writes a
   local tombstone so a later sync, edit or receipt cannot bring it back. Nothing is sent. "Radera för alla" is the
@@ -156,7 +156,7 @@ Risks of libsignal that we accept and mitigate:
   a client never deletes local history because the server says so. Expiry starts when the message is first shown
   on the device and removes the text, files and search index rows. The search index is then merged and the
   database overwrites deleted pages (`secure_delete`), so purged words do not linger.
-- **Share target:** FamilyChat accepts `ACTION_SEND`/`ACTION_SEND_MULTIPLE` from other apps. Shared items are
+- **Share target:** Swahn Chat accepts `ACTION_SEND`/`ACTION_SEND_MULTIPLE` from other apps. Shared items are
   untrusted: only `content://` URIs are read (never `file://` or the app's own provider, also with a `0@` user prefix), copies are size-limited
   and never read past the limit, names are sanitised, and the app lock must be unlocked before conversations are
   shown.
@@ -225,12 +225,12 @@ Risks of libsignal that we accept and mitigate:
   also written to `login_failures` (an HMAC of the username keyed with the server secret, plus a timestamp: unknown
   names are not stored) and replayed at startup, so restarting the server does not hand a guesser a fresh
   budget. Nothing is written for successful logins or other requests; rows older than a day are pruned. (Without a
-  fixed `FAMILYCHAT_SECRET_KEY`, i.e. development, the key changes per start and the replay finds nothing.)
+  fixed `SWAHNCHAT_SECRET_KEY`, i.e. development, the key changes per start and the replay finds nothing.)
 - **Prekey draining:** `GET /keys/{user}` is limited per caller *user* (120/min), and each caller user gets only
   10 bundles per target device and hour that include a one-time prekey. Beyond that the bundle still contains the
   signed prekey and the last-resort Kyber key but no one-time keys, and none are deleted, so a (logged-in) user
   cannot use up someone's one-time prekeys by logging in again to get fresh devices. Each account can have at
-  most 10 active devices (`FAMILYCHAT_MAX_DEVICES_PER_USER`); logging in on another one fails with
+  most 10 active devices (`SWAHNCHAT_MAX_DEVICES_PER_USER`); logging in on another one fails with
   `409 device_limit` until a device is removed.
 - Request bodies: 8 MiB for everything except `POST /api/v1/attachments`, which streams to disk with its own
   limit; the reverse proxy caps bodies too (Caddy: 9 MB, uploads `CADDY_MAX_UPLOAD`, default 110 MB), and
@@ -238,7 +238,7 @@ Risks of libsignal that we accept and mitigate:
 - **WebSocket:** at most 256 queued outgoing messages per connection (a client that stops reading is closed with
   1008; nothing is lost, events live in the database), inbound frames are rate limited per connection (flooding
   closes with 1008, extra typing frames and pings are dropped) and typing membership lookups are cached for 15 s.
-  The session is re-checked right after the socket registers and then every `FAMILYCHAT_WS_REVALIDATE_SECONDS`
+  The session is re-checked right after the socket registers and then every `SWAHNCHAT_WS_REVALIDATE_SECONDS`
   (60 s) with a database lookup, so a device revoked by another process (the `cli` commands, which cannot kick
   sockets of the running server) loses its socket within that time; revocations through the API close it at once.
 - Access tokens in the WebSocket query string (`?access_token=`, used by clients that cannot set headers) are
@@ -280,7 +280,7 @@ Risks of libsignal that we accept and mitigate:
   tokens or token hashes; for a failed login on a username that does not exist the log says only `unknown user`
   (the name that was typed is not kept), for an existing account it records the account. Only administrators can
   read it (`GET /admin/audit`, or `python -m app.cli audit` on the server). Rows older than
-  `FAMILYCHAT_AUDIT_RETENTION_DAYS` (default 180) are deleted by the hourly maintenance job. The log lives in the
+  `SWAHNCHAT_AUDIT_RETENTION_DAYS` (default 180) are deleted by the hourly maintenance job. The log lives in the
   server's database: whoever controls the server can alter it, so it is a record for the family, not tamper-proof
   evidence.
 - **Password reset by an administrator:** the administrator (API) or whoever has the server shell (CLI) gets a
@@ -302,7 +302,7 @@ Risks of libsignal that we accept and mitigate:
   not in a request; VACUUM briefly blocks writers, so it waits for a quiet minute and for enough free disk. Backups
   are unaffected (they use the SQLite online backup API).
 - **Retention:** the hourly maintenance job deletes message envelopes (the ciphertext copies) that were delivered
-  more than `FAMILYCHAT_ENVELOPE_RETENTION_DAYS` (default 30) days ago; once a device has fetched its copy the
+  more than `SWAHNCHAT_ENVELOPE_RETENTION_DAYS` (default 30) days ago; once a device has fetched its copy the
   server has no use for it. Undelivered envelopes of active devices are kept for as long as the device is
   active, and revoking a device deletes its queued ones at once. Expired sessions, invitations
   and password reset codes are pruned as before, expired disappearing messages are deleted (see above) and avatars
@@ -315,10 +315,10 @@ Risks of libsignal that we accept and mitigate:
   manifest, checksums, SQLite integrity check on a temporary copy, attachment paths); `check-config` prints the
   effective non-secret settings and warns about risky ones (production without a push allow-list, an unset or short
   secret, public API docs, trusted proxies missing behind a proxy, low disk).
-- The JWT secret comes from the environment (`FAMILYCHAT_SECRET_KEY`, at least 32 bytes); the server refuses
+- The JWT secret comes from the environment (`SWAHNCHAT_SECRET_KEY`, at least 32 bytes); the server refuses
   to start in production without it. Nothing secret is committed.
 - Push notifications (UnifiedPush) carry no content at all — only "something new, please sync". The server
-  only POSTs to https endpoints, and `FAMILYCHAT_PUSH_ALLOWED_HOSTS` limits them to your ntfy host so a
+  only POSTs to https endpoints, and `SWAHNCHAT_PUSH_ALLOWED_HOSTS` limits them to your ntfy host so a
   logged-in user cannot make the server call arbitrary URLs (SSRF). The list is **required in production**: while
   it is empty, push registration is refused (`409 push_not_configured`), a warning is logged at startup and no
   push is sent. IP-literal hosts (incl. forms like `2130706433` or `0x7f.1`) are refused unless listed explicitly.
@@ -326,13 +326,13 @@ Risks of libsignal that we accept and mitigate:
   `X-Frame-Options: DENY`, a minimal `Permissions-Policy` (camera, microphone, geolocation, payment, usb off),
   `Cross-Origin-Resource-Policy: same-site`, `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'` and
   `Cache-Control: no-store` (a route may set its own, e.g. attachment downloads). Only the Swagger UI page
-  (`/api/v1/docs`, off in production unless `FAMILYCHAT_EXPOSE_DOCS=true`) gets a relaxed CSP: it allows scripts and
+  (`/api/v1/docs`, off in production unless `SWAHNCHAT_EXPOSE_DOCS=true`) gets a relaxed CSP: it allows scripts and
   styles from `cdn.jsdelivr.net`, the favicon from `fastapi.tiangolo.com` and inline script/style, which Swagger UI
   needs, so do not expose the docs on a server you do not control. `Strict-Transport-Security` (`max-age=31536000`, no
-  `includeSubDomains`) is sent only with `FAMILYCHAT_HSTS=true`; turn it on only when every client reaches the server
+  `includeSubDomains`) is sent only with `SWAHNCHAT_HSTS=true`; turn it on only when every client reaches the server
   over HTTPS (Caddy or `tailscale serve`), because browsers then refuse plain http for that host for a year.
-- Operator alerts (optional): `FAMILYCHAT_ADMIN_NTFY_URL` (the full topic URL, `https` only except in development) and
-  `FAMILYCHAT_ADMIN_NTFY_TOKEN` make the server post a short fixed plain-text message to that ntfy topic when disk
+- Operator alerts (optional): `SWAHNCHAT_ADMIN_NTFY_URL` (the full topic URL, `https` only except in development) and
+  `SWAHNCHAT_ADMIN_NTFY_TOKEN` make the server post a short fixed plain-text message to that ntfy topic when disk
   space is low (once per 6 h), the hourly or database maintenance fails (once per 6 h), a login lockout was triggered
   (it says only that, not for whom, once per 30 min), a refresh token was reused (once per 10 min) and a new
   administrator was granted (once per minute); at most 20 alerts per hour in all. Alerts contain no user names,
@@ -358,14 +358,14 @@ many, and that a push marked urgent was sent.
 
 - `call` messages: direct conversations only, full device-set envelopes, no attachments or targets, no effect on
   `last_message_*`, unread counts or history, 60 per minute per sender, and **deleted with their envelopes 10
-  minutes after sending** (`FAMILYCHAT_CALL_RETENTION_SECONDS`), delivered or not.
+  minutes after sending** (`SWAHNCHAT_CALL_RETENTION_SECONDS`), delivered or not.
 - The push for a `call` message is content-free like all pushes (`{"t":"sync"}`); it only adds `Priority: 5` and
   `Urgency: high` headers so the phone is woken at once. A `{"t":"call"}` body was rejected on purpose: the header
   already tells the push server (your own ntfy) "urgent", and nothing more should leak to a third-party distributor.
 - TURN credentials (`GET /calls/turn`) follow the TURN REST API: username `<expiry>:<user_id>`, credential
   `base64(HMAC-SHA1(secret, username))`, valid one hour, handed only to authenticated users (30 requests per minute).
   HMAC-SHA1 is what coturn defines; it is a keyed MAC here, not a hash used for collision resistance. The shared
-  secret (`FAMILYCHAT_TURN_SECRET`, at least 32 bytes) is never logged or printed by `check-config`; a leaked credential
+  secret (`SWAHNCHAT_TURN_SECRET`, at least 32 bytes) is never logged or printed by `check-config`; a leaked credential
   works for at most its lifetime. coturn limits allocations per user (10) and in total (40), restricts relays to UDP
   ports 49160-49200, and has no CLI or web admin.
 - **TURN sees IP addresses**, and the peers see each other's unless the app forces relay-only candidates. In a direct

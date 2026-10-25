@@ -234,7 +234,7 @@ def test_download_refuses_tampered_storage_paths(alice, app, tmp_path):
     other = str(uuid.uuid4())
     for bad in (
         "../outside.txt",
-        "../familychat.db",
+        "../swahnchat.db",
         str(secret),  # absolute
         f"{att['id'][:2]}/../../outside.txt",
         f"{other[:2]}/{other}",  # well formed, but not this attachment's own file
@@ -255,7 +255,7 @@ def test_download_refuses_tampered_storage_paths(alice, app, tmp_path):
 
 
 def test_garbage_collection_never_deletes_outside_the_attachments_dir(alice, app):
-    db_file = app.state.settings.data_dir / "familychat.db"  # (a stand-in file on PostgreSQL)
+    db_file = app.state.settings.data_dir / "swahnchat.db"  # (a stand-in file on PostgreSQL)
     db_file.touch()
     victim = app.state.settings.data_dir / "outside.txt"
     victim.write_bytes(b"keep me")
@@ -264,7 +264,7 @@ def test_garbage_collection_never_deletes_outside_the_attachments_dir(alice, app
     with app.state.session_factory() as db:
         a = db.get(Attachment, att["id"])
         a.created_at = clock.now_ms() - 3 * 24 * 3600 * 1000
-        a.storage_path = "../../familychat.db"
+        a.storage_path = "../../swahnchat.db"
         db.commit()
         collect_garbage(db, app.state.settings)
         a.storage_path = "../outside.txt"
@@ -285,7 +285,7 @@ def test_restore_rejects_a_database_with_tampered_storage_paths(factory, alice, 
     target = tmp_path / "restored"
     with pytest.raises(BackupError, match="invalid storage path"):
         restore_backup(make_settings(target), archive)
-    assert not (target / "familychat.db").exists()
+    assert not (target / "swahnchat.db").exists()
 
 
 # --- avatar garbage collection (previous avatars after a change)

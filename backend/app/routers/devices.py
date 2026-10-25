@@ -39,7 +39,7 @@ def set_push(
     hosts = parse_hosts(settings.push_allowed_hosts)
     if settings.push_requires_allowlist and not hosts:
         raise conflict(
-            "push is not configured on this server: the administrator must set FAMILYCHAT_PUSH_ALLOWED_HOSTS",
+            "push is not configured on this server: the administrator must set SWAHNCHAT_PUSH_ALLOWED_HOSTS",
             "push_not_configured",
         )
     if not endpoint_allowed(body.endpoint, settings.push_allow_http, hosts, settings.push_requires_allowlist):

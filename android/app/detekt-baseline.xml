@@ -40,7 +40,7 @@
     <ID>MaxLineLength:ConversationSettingsTest.kt$ConversationSettingsTest$for (i in 1..7) store.upsertConversation(Conversation(id = "c$i", type = "direct", name = null, createdBy = "me", createdAt = 1, updatedAt = i.toLong()))</ID>
     <ID>MaxLineLength:ConversationSettingsTest.kt$ConversationSettingsTest$val s = arrangeConversations(listOf(item("a"), item("b", pinned = true), item("c", archived = true, unread = 2), item("d"), item("e", pinned = true), item("f", archived = true, unread = 1)))</ID>
     <ID>MaxLineLength:ConversationViewModel.kt$ConversationViewModel$cur.copy(attachments = cur.attachments.map { x -&gt; if (x.id == a.id) x.copy(downloadState = DownloadState.NONE, localPath = null) else x })</ID>
-    <ID>MaxLineLength:ConversationViewModel.kt$ConversationViewModel$download(m.id, AttachmentUi(a.id, AttachmentKindUi.FILE, a.mime, a.name, a.size, null, null, null, null, se.familychat.app.ui.model.TransferUi.Remote))</ID>
+    <ID>MaxLineLength:ConversationViewModel.kt$ConversationViewModel$download(m.id, AttachmentUi(a.id, AttachmentKindUi.FILE, a.mime, a.name, a.size, null, null, null, null, se.swahnchat.app.ui.model.TransferUi.Remote))</ID>
     <ID>MaxLineLength:ConversationViewModel.kt$ConversationViewModel$private</ID>
     <ID>MaxLineLength:ConversationViewModel.kt$ConversationViewModel$}</ID>
     <ID>MaxLineLength:ConversationsScreen.kt$fontStyle = if (item.typing || item.previewKind == PreviewKind.DELETED || item.previewKind == PreviewKind.UNDECRYPTABLE) FontStyle.Italic else FontStyle.Normal</ID>
@@ -54,7 +54,7 @@
     <ID>MaxLineLength:Fixtures.kt$Fixtures$msg("8", cia, null, at(10, 24, 12, 3), attachments = listOf(AttachmentUi("f1", AttachmentKindUi.FILE, "application/pdf", "boende-kroatien.pdf", 482_000, null, null, null, null, TransferUi.Remote)))</ID>
     <ID>MaxLineLength:Fixtures.kt$Fixtures$msg("c", null, null, at(10, 24, 14, 33), group = false, delivery = DeliveryUi.SENT, attachments = listOf(photo("p2", TransferUi.Downloading(0.4f))))</ID>
     <ID>MaxLineLength:Fixtures.kt$Fixtures$msg("d", bob, "Fint foto! Vilken utsikt. Mer här: https://exempel.se/utsikt eller ring 070-123 45 67", at(10, 24, 14, 40), group = false, undecryptable = null)</ID>
-    <ID>MaxLineLength:Fixtures.kt$Fixtures$se.familychat.app.ui.model.SearchHitUi(id, conversation, time, sender, se.familychat.app.data.Snippets.of(text, se.familychat.app.data.SearchQuery.terms(terms)))</ID>
+    <ID>MaxLineLength:Fixtures.kt$Fixtures$se.swahnchat.app.ui.model.SearchHitUi(id, conversation, time, sender, se.swahnchat.app.data.Snippets.of(text, se.swahnchat.app.data.SearchQuery.terms(terms)))</ID>
     <ID>MaxLineLength:Fixtures.kt$Fixtures$val</ID>
     <ID>MaxLineLength:GroupInfoScreen.kt$Modifier.fillMaxWidth().heightIn(min = 64.dp).clickable(enabled = !member.isMe) { cb.onOpenMember(member.userId) }.padding(start = 16.dp, end = 4.dp, top = 6.dp, bottom = 6.dp)</ID>
     <ID>MaxLineLength:GroupInfoScreen.kt$Text(stringResource(R.string.leave_group), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(start = 16.dp))</ID>
@@ -121,8 +121,8 @@
     <ID>MaxLineLength:SettingsScreen.kt$onAuthenticate = { done -&gt; if (activity != null) Authenticator.prompt(activity, promptTitle, null) { ok -&gt; if (ok) done() } }</ID>
     <ID>MaxLineLength:SettingsScreen.kt$private</ID>
     <ID>MaxLineLength:SettingsScreen.kt$visualTransformation = PasswordVisualTransformation()</ID>
-    <ID>MaxLineLength:UiQueriesTest.kt$UiQueriesTest$db.protocolDao().putRemoteIdentity(se.familychat.app.data.db.SignalRemoteIdentityEntity("dev-1", "bob", byteArrayOf(1, 2), verified = true, approved = true))</ID>
-    <ID>MaxLineLength:UiQueriesTest.kt$UiQueriesTest$db.protocolDao().putRemoteIdentity(se.familychat.app.data.db.SignalRemoteIdentityEntity("dev-2", "bob", byteArrayOf(3), verified = false, approved = false))</ID>
+    <ID>MaxLineLength:UiQueriesTest.kt$UiQueriesTest$db.protocolDao().putRemoteIdentity(se.swahnchat.app.data.db.SignalRemoteIdentityEntity("dev-1", "bob", byteArrayOf(1, 2), verified = true, approved = true))</ID>
+    <ID>MaxLineLength:UiQueriesTest.kt$UiQueriesTest$db.protocolDao().putRemoteIdentity(se.swahnchat.app.data.db.SignalRemoteIdentityEntity("dev-2", "bob", byteArrayOf(3), verified = false, approved = false))</ID>
     <ID>MaxLineLength:UiQueriesTest.kt$UiQueriesTest$for (m in listOf(msg("a", 1), msg("b", 2), msg("c", 3), msg("d", 4, deleted = true), msg("e", 5, system = "member_added"), msg("f", 6, outgoing = true), msg("g", 7))) dao.putMessage(m)</ID>
     <ID>MaxLineLength:UiQueriesTest.kt$UiQueriesTest$private</ID>
     <ID>NestedBlockDepth:AttachmentPreparer.kt$AttachmentPreparer$private fun copyToOutgoing(uri: Uri, prefix: String, ext: String): File</ID>
@@ -131,18 +131,18 @@
     <ID>NoConsecutiveBlankLines:AppNav.kt$ </ID>
     <ID>NoConsecutiveBlankLines:ConversationsScreen.kt$ </ID>
     <ID>NoMultipleSpaces:LinksTest.kt$LinksTest$ </ID>
-    <ID>NoUnusedImports:ChatRepository.kt$se.familychat.app.data.ChatRepository.kt</ID>
-    <ID>NoUnusedImports:ConversationScreen.kt$se.familychat.app.ui.screens.ConversationScreen.kt</ID>
-    <ID>NoUnusedImports:ConversationUiTest.kt$se.familychat.app.ui.ConversationUiTest.kt</ID>
-    <ID>NoUnusedImports:ConversationViewModel.kt$se.familychat.app.ui.screens.ConversationViewModel.kt</ID>
-    <ID>NoUnusedImports:ConversationsScreen.kt$se.familychat.app.ui.screens.ConversationsScreen.kt</ID>
-    <ID>NoUnusedImports:GroupInfoScreen.kt$se.familychat.app.ui.screens.GroupInfoScreen.kt</ID>
-    <ID>NoUnusedImports:MediaViewerScreen.kt$se.familychat.app.ui.screens.MediaViewerScreen.kt</ID>
-    <ID>NoUnusedImports:Notifier.kt$se.familychat.app.platform.notify.Notifier.kt</ID>
-    <ID>NoUnusedImports:PeopleScreens.kt$se.familychat.app.ui.screens.PeopleScreens.kt</ID>
-    <ID>NoUnusedImports:RoomEngineE2ETest.kt$se.familychat.app.data.RoomEngineE2ETest.kt</ID>
-    <ID>NoUnusedImports:ScreenshotTest.kt$se.familychat.app.screenshots.ScreenshotTest.kt</ID>
-    <ID>NoUnusedImports:SettingsScreen.kt$se.familychat.app.ui.screens.SettingsScreen.kt</ID>
+    <ID>NoUnusedImports:ChatRepository.kt$se.swahnchat.app.data.ChatRepository.kt</ID>
+    <ID>NoUnusedImports:ConversationScreen.kt$se.swahnchat.app.ui.screens.ConversationScreen.kt</ID>
+    <ID>NoUnusedImports:ConversationUiTest.kt$se.swahnchat.app.ui.ConversationUiTest.kt</ID>
+    <ID>NoUnusedImports:ConversationViewModel.kt$se.swahnchat.app.ui.screens.ConversationViewModel.kt</ID>
+    <ID>NoUnusedImports:ConversationsScreen.kt$se.swahnchat.app.ui.screens.ConversationsScreen.kt</ID>
+    <ID>NoUnusedImports:GroupInfoScreen.kt$se.swahnchat.app.ui.screens.GroupInfoScreen.kt</ID>
+    <ID>NoUnusedImports:MediaViewerScreen.kt$se.swahnchat.app.ui.screens.MediaViewerScreen.kt</ID>
+    <ID>NoUnusedImports:Notifier.kt$se.swahnchat.app.platform.notify.Notifier.kt</ID>
+    <ID>NoUnusedImports:PeopleScreens.kt$se.swahnchat.app.ui.screens.PeopleScreens.kt</ID>
+    <ID>NoUnusedImports:RoomEngineE2ETest.kt$se.swahnchat.app.data.RoomEngineE2ETest.kt</ID>
+    <ID>NoUnusedImports:ScreenshotTest.kt$se.swahnchat.app.screenshots.ScreenshotTest.kt</ID>
+    <ID>NoUnusedImports:SettingsScreen.kt$se.swahnchat.app.ui.screens.SettingsScreen.kt</ID>
     <ID>ReturnCount:AttachmentPreparer.kt$AttachmentPreparer$internal fun decodeUpright(uri: Uri, maxEdge: Int): Bitmap?</ID>
     <ID>SpacingAroundComma:Common.kt$,</ID>
     <ID>StringTemplate:MessagePagingTest.kt$MessagePagingTest$${worst}</ID>

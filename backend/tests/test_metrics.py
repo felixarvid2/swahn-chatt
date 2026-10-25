@@ -35,7 +35,7 @@ def test_loopback_without_forwarding_may_scrape(local):
     r = local.get("/metrics")
     assert r.status_code == 200
     assert r.headers["content-type"].startswith("text/plain; version=0.0.4")
-    assert "# TYPE familychat_http_requests_total counter" in r.text
+    assert "# TYPE swahnchat_http_requests_total counter" in r.text
     assert samples(r.text)  # every line is valid exposition format
 
 
@@ -70,7 +70,7 @@ def test_remote_needs_an_administrator_token(client, admin, alice):
     assert client.get("/metrics", headers={"Authorization": "Bearer nonsense"}).status_code == 404
     assert client.get("/metrics", headers=alice.headers).status_code == 404  # signed in, but not an admin
     r = client.get("/metrics", headers=admin.headers)
-    assert r.status_code == 200 and "familychat_uptime_seconds" in r.text
+    assert r.status_code == 200 and "swahnchat_uptime_seconds" in r.text
     assert client.get("/metrics").json()["code"] == "not_found"
 
 
@@ -87,17 +87,17 @@ def test_request_counts_and_latency_use_route_templates(client, local, admin, al
     assert client.get("/api/v1/nothing/here/123").status_code == 404
     text = local.get("/metrics").text
     route = "/api/v1/users/{user_id}/devices"
-    assert value(text, "familychat_http_requests_total", method="GET", route=route, status="200") == 3
-    assert value(text, "familychat_http_requests_total", method="GET", route=route, status="404") == 1
-    assert value(text, "familychat_http_requests_total", route="unmatched", status="404") == 1
-    count = value(text, "familychat_http_request_duration_seconds_count", route=route, status="200")
+    assert value(text, "swahnchat_http_requests_total", method="GET", route=route, status="200") == 3
+    assert value(text, "swahnchat_http_requests_total", method="GET", route=route, status="404") == 1
+    assert value(text, "swahnchat_http_requests_total", route="unmatched", status="404") == 1
+    count = value(text, "swahnchat_http_request_duration_seconds_count", route=route, status="200")
     assert count == 3
-    assert value(text, "familychat_http_request_duration_seconds_bucket", route=route, status="200", le="+Inf") == 3
-    assert value(text, "familychat_http_request_duration_seconds_sum", route=route, status="200") > 0
+    assert value(text, "swahnchat_http_request_duration_seconds_bucket", route=route, status="200", le="+Inf") == 3
+    assert value(text, "swahnchat_http_request_duration_seconds_sum", route=route, status="200") > 0
     buckets = [
         float(v)
         for n, lab, v in samples(text)
-        if n == "familychat_http_request_duration_seconds_bucket"
+        if n == "swahnchat_http_request_duration_seconds_bucket"
         and lab.get("route") == route
         and lab["status"] == "200"
     ]
@@ -116,20 +116,20 @@ def test_no_ids_or_names_leak_into_labels(local, admin, alice, bob):
 def test_gauges(local, app, client, alice, bob, factory):
     cid = factory.direct(alice, bob)
     alice.send(cid, "queued")  # an unacknowledged event for bob's device
-    before = value(local.get("/metrics").text, "familychat_event_queue_depth")
+    before = value(local.get("/metrics").text, "swahnchat_event_queue_depth")
     assert before >= 1
     with client.websocket_connect("/api/v1/ws", headers=bob.headers) as ws:
         ws.receive_json()
         text = local.get("/metrics").text
-        assert value(text, "familychat_websocket_connections") == 1
-    assert value(local.get("/metrics").text, "familychat_websocket_connections") == 0
+        assert value(text, "swahnchat_websocket_connections") == 1
+    assert value(local.get("/metrics").text, "swahnchat_websocket_connections") == 0
     text = local.get("/metrics").text
-    assert value(text, "familychat_disk_free_bytes") > 0
-    assert value(text, "familychat_push_queue_depth") >= 0
-    assert value(text, "familychat_database_size_bytes") > 0
-    assert 'familychat_build_info{version="' in text
+    assert value(text, "swahnchat_disk_free_bytes") > 0
+    assert value(text, "swahnchat_push_queue_depth") >= 0
+    assert value(text, "swahnchat_database_size_bytes") > 0
+    assert 'swahnchat_build_info{version="' in text
     bob.ack(bob.sync()["next_cursor"])
-    assert value(local.get("/metrics").text, "familychat_event_queue_depth") < before
+    assert value(local.get("/metrics").text, "swahnchat_event_queue_depth") < before
 
 
 def test_metrics_is_not_part_of_the_api_document(app):
@@ -145,8 +145,8 @@ def test_made_up_methods_and_urls_do_not_multiply_the_series(app, local):
         method = "".join(rnd.choices(string.ascii_uppercase, k=rnd.randint(3, 12)))
         local.request(method, f"/api/v1/nothing-{i}/{rnd.random()}")
     text = local.get("/metrics").text
-    series = [lab for n, lab, _ in samples(text) if n == "familychat_http_requests_total"]
+    series = [lab for n, lab, _ in samples(text) if n == "swahnchat_http_requests_total"]
     assert len(series) <= 10
     assert {lab["method"] for lab in series} <= {"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "OTHER"}
     assert {lab["route"] for lab in series if lab["method"] == "OTHER"} == {"unmatched"}
-    assert value(text, "familychat_http_requests_total", method="OTHER", route="unmatched", status="404") >= 900
+    assert value(text, "swahnchat_http_requests_total", method="OTHER", route="unmatched", status="404") >= 900

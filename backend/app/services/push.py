@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 from app import clock
 from app.models import Device
 
-log = logging.getLogger("familychat.push")
+log = logging.getLogger("swahnchat.push")
 
 PUSH_PAYLOAD = {"t": "sync"}
 # Call signalling (kind "call") pushes carry the same content-free payload but ask for immediate delivery: ntfy reads

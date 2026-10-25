@@ -1,6 +1,6 @@
 """Test fixtures: every test gets its own temp data dir, migrated database and app instance.
 
-The database is SQLite by default. Set FAMILYCHAT_TEST_DATABASE_URL (postgresql+psycopg://user:pw@host:port/postgres,
+The database is SQLite by default. Set SWAHNCHAT_TEST_DATABASE_URL (postgresql+psycopg://user:pw@host:port/postgres,
 a role that may CREATE DATABASE) to run the suite against PostgreSQL instead: the migrations run once into a
 template database, and every test gets its own copy of it. Tests marked `sqlite_only` (they open the SQLite file
 directly, test SQLite locking, or the SQLite-only backup) are skipped there.
@@ -26,7 +26,7 @@ from app.main import create_app
 from app.migrate import upgrade
 from app.routers.admin import create_invitation
 
-PG_ADMIN_URL = os.environ.get("FAMILYCHAT_TEST_DATABASE_URL") or None
+PG_ADMIN_URL = os.environ.get("SWAHNCHAT_TEST_DATABASE_URL") or None
 SECRET = "test-secret-key-0123456789-abcdefghijklmnopqrstuvwxyz"
 PASSWORD = "correct horse battery"
 
@@ -52,17 +52,17 @@ def make_settings(data_dir: Path, **overrides) -> Settings:
 
 def pytest_configure(config):
     config.addinivalue_line("markers", "sqlite_only: needs the SQLite database file itself; skipped on PostgreSQL")
-    config.addinivalue_line("markers", "pg_only: needs PostgreSQL (FAMILYCHAT_TEST_DATABASE_URL); skipped otherwise")
+    config.addinivalue_line("markers", "pg_only: needs PostgreSQL (SWAHNCHAT_TEST_DATABASE_URL); skipped otherwise")
 
 
 def pytest_collection_modifyitems(config, items):
     if not PG_ADMIN_URL:
-        skip_pg = pytest.mark.skip(reason="needs PostgreSQL (set FAMILYCHAT_TEST_DATABASE_URL)")
+        skip_pg = pytest.mark.skip(reason="needs PostgreSQL (set SWAHNCHAT_TEST_DATABASE_URL)")
         for item in items:
             if "pg_only" in item.keywords:
                 item.add_marker(skip_pg)
     if PG_ADMIN_URL:
-        skip = pytest.mark.skip(reason="SQLite only (FAMILYCHAT_TEST_DATABASE_URL is set)")
+        skip = pytest.mark.skip(reason="SQLite only (SWAHNCHAT_TEST_DATABASE_URL is set)")
         for item in items:
             if "sqlite_only" in item.keywords:
                 item.add_marker(skip)
@@ -94,7 +94,7 @@ def template_db(tmp_path_factory) -> Iterator[Path | str]:
         return
     d = tmp_path_factory.mktemp("template")
     upgrade(make_settings(d))
-    yield d / "familychat.db"
+    yield d / "swahnchat.db"
 
 
 @pytest.fixture
@@ -111,7 +111,7 @@ def new_settings(template_db):
             pg_databases.append(name)
             overrides.setdefault("database_url", _pg_url(name))
         else:
-            shutil.copy(template_db, data / "familychat.db")
+            shutil.copy(template_db, data / "swahnchat.db")
         return make_settings(data, **overrides)
 
     yield build

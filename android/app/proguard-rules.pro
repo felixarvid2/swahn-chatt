@@ -32,17 +32,17 @@
 -dontnote kotlinx.serialization.**
 -keepclassmembers class kotlinx.serialization.json.** { *** Companion; }
 -keepclasseswithmembers class kotlinx.serialization.json.** { kotlinx.serialization.KSerializer serializer(...); }
--keep,includedescriptorclasses class se.familychat.core.model.**$$serializer { *; }
--keepclassmembers class se.familychat.core.model.** { *** Companion; }
--keepclasseswithmembers class se.familychat.core.model.** { kotlinx.serialization.KSerializer serializer(...); }
--keep,includedescriptorclasses class se.familychat.app.**$$serializer { *; }
--keepclassmembers class se.familychat.app.** { *** Companion; }
--keepclasseswithmembers class se.familychat.app.** { kotlinx.serialization.KSerializer serializer(...); }
+-keep,includedescriptorclasses class se.swahnchat.core.model.**$$serializer { *; }
+-keepclassmembers class se.swahnchat.core.model.** { *** Companion; }
+-keepclasseswithmembers class se.swahnchat.core.model.** { kotlinx.serialization.KSerializer serializer(...); }
+-keep,includedescriptorclasses class se.swahnchat.app.**$$serializer { *; }
+-keepclassmembers class se.swahnchat.app.** { *** Companion; }
+-keepclasseswithmembers class se.swahnchat.app.** { kotlinx.serialization.KSerializer serializer(...); }
 
 # --- Retrofit --------------------------------------------------------------------------------------------------------------
 # The API interface is implemented with a dynamic proxy and read through its annotations and generic signatures, including
 # the Continuation parameter of suspend functions.
--keep interface se.familychat.core.network.RawApi { *; }
+-keep interface se.swahnchat.core.network.RawApi { *; }
 -keepclassmembers,allowshrinking,allowobfuscation interface * {
     @retrofit2.http.* <methods>;
 }
@@ -57,7 +57,7 @@
 # --- UnifiedPush -------------------------------------------------------------------------------------------------------------
 # The distributor binds to the push service by its class name from the manifest, and the connector parcels these classes.
 -keep class org.unifiedpush.android.connector.** { *; }
--keep class se.familychat.app.platform.push.FamilyChatPushService { *; }
+-keep class se.swahnchat.app.platform.push.SwahnChatPushService { *; }
 
 # --- crash reports -------------------------------------------------------------------------------------------------------------
 -keepattributes SourceFile, LineNumberTable

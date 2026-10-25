@@ -1,9 +1,9 @@
-# FamilyChat: guide för dig som använder appen
+# Swahn Chat: guide för dig som använder appen
 
-Den här guiden är till dig i familjen som ska använda FamilyChat på din Android-telefon. Du behöver inte kunna något
+Den här guiden är till dig i familjen som ska använda Swahn Chat på din Android-telefon. Du behöver inte kunna något
 om datorer. Har du kört fast: fråga den som sköter servern (administratören). Det är aldrig dumt att fråga.
 
-**Kort om vad FamilyChat är:** en privat chatt för familjen. Meddelandena, bilderna och röstmeddelandena är
+**Kort om vad Swahn Chat är:** en privat chatt för familjen. Meddelandena, bilderna och röstmeddelandena är
 krypterade på telefonerna och ligger på familjens egen liten dator hemma. Ingen utanför familjen kan läsa dem, inte
 ens den som sköter servern.
 
@@ -96,18 +96,18 @@ Nästa gång du öppnar appen använder du fliken **Logga in** med användarnamn
 
 ## 6. Aviseringar med ntfy och batterisparläge
 
-FamilyChat använder inte Googles tjänster. För att telefonen ska pinga när det kommer ett meddelande använder
+Swahn Chat använder inte Googles tjänster. För att telefonen ska pinga när det kommer ett meddelande använder
 familjen appen **ntfy**. Pinget innehåller ingen text, bara "det finns något nytt". Utan ntfy får du meddelanden
 först när du öppnar appen, eller med upp till 15 minuters fördröjning.
 
 1. Installera appen **ntfy** (F-Droid eller Play Butik) och öppna den en gång.
 2. I ntfy: *Inställningar*, *Standardserver*. Skriv in ntfy-adressen som administratören har gett dig.
-3. I FamilyChat: **Inställningar**, **Pushnotiser (UnifiedPush)**, välj **ntfy**. Efter några sekunder står det
+3. I Swahn Chat: **Inställningar**, **Pushnotiser (UnifiedPush)**, välj **ntfy**. Efter några sekunder står det
    **Aktiv via ntfy**.
 4. Svara **Tillåt** om Android frågar om appen får visa aviseringar.
 
 **Batterisparläget är den vanligaste orsaken till att aviseringar uteblir.** Android stänger gärna ner appar som
-ligger i bakgrunden. Gör så här för *både* ntfy och FamilyChat:
+ligger i bakgrunden. Gör så här för *både* ntfy och Swahn Chat:
 
 - Håll fingret på appens ikon, tryck på *Appinfo* (ett i), välj *Batteri* och sedan **Obegränsad** (eller
   "Ingen optimering"). Namnen skiljer lite mellan märken.
@@ -182,7 +182,7 @@ rätt person.
 **Så gör du när du får en varning:**
 
 1. Tryck på **Granska**.
-2. **Ring personen** (ett vanligt telefonsamtal, inte ett meddelande i FamilyChat) och fråga: "Har du bytt telefon
+2. **Ring personen** (ett vanligt telefonsamtal, inte ett meddelande i Swahn Chat) och fråga: "Har du bytt telefon
    eller installerat om appen?"
 3. Svarar hon ja: läs upp varandras *Säkerhetsnummer* (60 siffror) för varandra. Stämmer de, tryck **Godkänn ny
    nyckel** och bekräfta. Tryck gärna också *Markera som verifierad*.
@@ -225,7 +225,7 @@ raderar meddelanden och nycklar från den telefonen.
 
 1. **Ta det lugnt.** Meddelandena på telefonen skyddas av skärmlåset och av kryptering. Har telefonen en PIN-kod
    eller ett mönster är risken liten.
-2. Har du en annan telefon eller surfplatta med FamilyChat: öppna **Inställningar**, **Enheter**, tryck på papperskorgen
+2. Har du en annan telefon eller surfplatta med Swahn Chat: öppna **Inställningar**, **Enheter**, tryck på papperskorgen
    vid den borttappade telefonen (*Återkalla*). Den loggas ut direkt och får inga fler meddelanden.
 3. Byt sedan lösenordet: **Inställningar**, **Byt lösenord**. Alla andra enheter loggas ut.
 4. Har du ingen annan enhet: **kontakta administratören** så snart du kan. Hen kan stänga av telefonen från servern.
@@ -250,7 +250,7 @@ Nej. Meddelandena krypteras på din telefon och kan bara läsas på mottagarens 
 man har konton, och vem som skrev till vem och när, men aldrig vad som stod.
 
 **Varför kommer inga aviseringar?**
-Nästan alltid batterisparläget. Gå igenom avsnitt 6 för både ntfy och FamilyChat. Kontrollera också att
+Nästan alltid batterisparläget. Gå igenom avsnitt 6 för både ntfy och Swahn Chat. Kontrollera också att
 *Inställningar → Pushnotiser* visar "Aktiv via ntfy", och att Tailscale är på om ni använder det.
 
 **Appen säger "Servern svarar inte".**

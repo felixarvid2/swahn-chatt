@@ -1,22 +1,22 @@
-# FamilyChat on a Raspberry Pi (or any Docker host).
-#   cp .env.example .env && edit .env       # at least FAMILYCHAT_SECRET_KEY
+# Swahn Chat on a Raspberry Pi (or any Docker host).
+#   cp .env.example .env && edit .env       # at least SWAHNCHAT_SECRET_KEY
 #   docker compose up -d --build            # backend only, listens on 127.0.0.1:8000
 #   docker compose --profile caddy up -d    # + public HTTPS reverse proxy (ports 80/443)
 #   docker compose --profile ntfy up -d     # + self-hosted UnifiedPush server (ntfy)
 #   docker compose --profile tailscale up -d  # + Tailscale sidecar: HTTPS on your tailnet, no host-level tailscale
-#   docker compose --profile turn up -d     # + coturn relay for audio/video calls (needs FAMILYCHAT_TURN_* in .env)
+#   docker compose --profile turn up -d     # + coturn relay for audio/video calls (needs SWAHNCHAT_TURN_* in .env)
 # Profiles can be made permanent with COMPOSE_PROFILES=caddy,ntfy,turn in .env (install-pi.sh does that).
 # See ../docs/RASPBERRY_PI_SETUP.md.
-name: familychat
+name: swahnchat
 
 services:
   backend:
     build:
       context: ../backend
-    image: familychat-backend:latest
+    image: swahnchat-backend:latest
     env_file: .env
     volumes:
-      - familychat-data:/data
+      - swahnchat-data:/data
     # Hardening: the process runs as an unprivileged user, writes only to /data and /tmp.
     read_only: true
     tmpfs:
@@ -49,7 +49,7 @@ services:
       backend:
         condition: service_healthy
     environment:
-      FAMILYCHAT_DOMAIN: ${FAMILYCHAT_DOMAIN:-localhost}
+      SWAHNCHAT_DOMAIN: ${SWAHNCHAT_DOMAIN:-localhost}
       NTFY_DOMAIN: ${NTFY_DOMAIN:-ntfy.localhost}
       CADDY_MAX_UPLOAD: ${CADDY_MAX_UPLOAD:-110MB}
     security_opt:
@@ -111,14 +111,14 @@ services:
   tailscale:
     profiles: ["tailscale"]
     image: tailscale/tailscale:v1.98.10   # pinned; bump deliberately, then `docker compose pull`
-    hostname: ${TS_HOSTNAME:-familychat}
+    hostname: ${TS_HOSTNAME:-swahnchat}
     restart: unless-stopped
     depends_on:
       backend:
         condition: service_healthy
     environment:
       TS_AUTHKEY: ${TS_AUTHKEY:-}
-      TS_HOSTNAME: ${TS_HOSTNAME:-familychat}
+      TS_HOSTNAME: ${TS_HOSTNAME:-swahnchat}
       TS_STATE_DIR: /var/lib/tailscale
       TS_USERSPACE: "true"
       TS_SERVE_CONFIG: /config/serve.json
@@ -146,8 +146,8 @@ services:
     entrypoint: ["/bin/bash", "/etc/coturn/turn-start.sh"]
     command: []
     environment:
-      TURN_SECRET: ${FAMILYCHAT_TURN_SECRET:-}
-      TURN_REALM: ${TURN_REALM:-familychat}
+      TURN_SECRET: ${SWAHNCHAT_TURN_SECRET:-}
+      TURN_REALM: ${TURN_REALM:-swahnchat}
       TURN_EXTERNAL_IP: ${TURN_EXTERNAL_IP:-}
       TURN_ALLOW_TAILNET_PEERS: ${TURN_ALLOW_TAILNET_PEERS:-false}
     volumes:
@@ -175,7 +175,7 @@ services:
         max-file: "5"
 
 volumes:
-  familychat-data:
+  swahnchat-data:
   caddy-data:
   caddy-config:
   ntfy-cache:

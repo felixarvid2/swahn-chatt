@@ -1,4 +1,6 @@
-# FamilyChat
+# Swahn Chat
+
+> Formerly FamilyChat; renamed to Swahn Chat in v0.5.0. Upgrading an existing install: see "Byte från FamilyChat till Swahn Chat" in [docs/DRIFTHANDBOK.md](docs/DRIFTHANDBOK.md).
 
 A private, self-hosted messenger for a family (5–15 people). The server is a Raspberry Pi; the client is an Android
 app. Messages, edits and attachments are **end-to-end encrypted on the phones with the Signal protocol (libsignal)**.
@@ -8,7 +10,7 @@ Status: **feature complete, not yet production-ready.** Every automated test pas
 a real phone or on a Raspberry Pi yet. See [HANDOVER.md](HANDOVER.md) for exactly what is verified and what is not.
 
 ```
-familychat/
+swahn-chatt/
 ├── android/      Kotlin app: :app (Compose UI) + :core:{model,network,crypto,client}
 ├── backend/      FastAPI server, Alembic migrations, pytest suite, Dockerfile
 ├── deployment/   docker-compose.yml (+ Caddy and ntfy profiles), .env.example, backup/restore scripts
@@ -34,11 +36,11 @@ Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/SECURITY.md](docs/S
 
 ```bash
 # Backend: Python 3.12
-cd familychat/backend
+cd backend
 python3.12 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
 scripts/dev-server.sh                      # migrations + server on http://0.0.0.0:8000
-FAMILYCHAT_ENV=development FAMILYCHAT_DATA_DIR=data-dev .venv/bin/python -m app.cli create-invite --admin
-FAMILYCHAT_ENV=development FAMILYCHAT_DATA_DIR=data-dev .venv/bin/python -m app.cli seed-dev   # alice, bob, carol
+SWAHNCHAT_ENV=development SWAHNCHAT_DATA_DIR=data-dev .venv/bin/python -m app.cli create-invite --admin
+SWAHNCHAT_ENV=development SWAHNCHAT_DATA_DIR=data-dev .venv/bin/python -m app.cli seed-dev   # alice, bob, carol
 .venv/bin/python -m pytest                 # backend tests
 
 # Android: JDK 17+, Android SDK 35 (+ NDK for stripped release builds)
@@ -49,7 +51,7 @@ cd ../android
 ```
 
 `make help` lists shortcuts for all of this (`make dev`, `make test-backend`, `make lint`, `make e2e`, `make apk`, `make up`,
-`make backup`, `make invite`, ...). CI runs in `.github/workflows/familychat-*.yml`.
+`make backup`, `make invite`, ...). CI runs in `.github/workflows/*.yml`.
 
 A debug build may talk plain `http://` to a LAN or localhost address. It then shows a red "Osäker anslutning
 (endast utveckling)" banner. Release builds accept HTTPS only.
@@ -57,8 +59,8 @@ A debug build may talk plain `http://` to a LAN or localhost address. It then sh
 ## Production on a Raspberry Pi
 
 ```bash
-cd familychat/deployment
-cp .env.example .env        # set FAMILYCHAT_SECRET_KEY=$(openssl rand -base64 48)
+cd deployment
+cp .env.example .env        # set SWAHNCHAT_SECRET_KEY=$(openssl rand -base64 48)
 docker compose up -d --build
 docker compose exec backend python -m app.cli create-invite --admin   # first account
 ```

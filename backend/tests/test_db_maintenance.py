@@ -45,7 +45,7 @@ def test_run_records_the_result_and_admin_stats_shows_it(app, admin):
 @pytest.mark.sqlite_only
 def test_sqlite_steps_checkpoint_truncates_the_wal(app, alice, bob, factory):
     factory.direct(alice, bob)
-    wal = app.state.settings.sqlite_path.with_name("familychat.db-wal")
+    wal = app.state.settings.sqlite_path.with_name("swahnchat.db-wal")
     assert wal.exists() and wal.stat().st_size > 0
     body = dbmaint._sqlite(app.state.settings, lambda: True)  # before the result row is written (that grows the WAL)
     assert body["steps"] == ["optimize", "analyze", "wal_checkpoint"]

@@ -1,22 +1,22 @@
-name: FamilyChat backend
+name: Swahn Chat backend
 
 on:
   push:
     paths:
-      - "familychat/backend/**"
-      - "familychat/deployment/**"
-      - ".github/workflows/familychat-backend.yml"
+      - "backend/**"
+      - "deployment/**"
+      - ".github/workflows/backend.yml"
   pull_request:
     paths:
-      - "familychat/backend/**"
-      - "familychat/deployment/**"
-      - ".github/workflows/familychat-backend.yml"
+      - "backend/**"
+      - "deployment/**"
+      - ".github/workflows/backend.yml"
 
 permissions:
   contents: read
 
 concurrency:
-  group: familychat-backend-${{ github.ref }}
+  group: swahnchat-backend-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -25,7 +25,7 @@ jobs:
     timeout-minutes: 20
     defaults:
       run:
-        working-directory: familychat/backend
+        working-directory: backend
     steps:
       - uses: actions/checkout@v4
 
@@ -34,8 +34,8 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: |
-            familychat/backend/requirements.txt
-            familychat/backend/requirements-dev.txt
+            backend/requirements.txt
+            backend/requirements-dev.txt
 
       - name: Install dependencies
         run: pip install -r requirements-dev.txt
@@ -64,10 +64,10 @@ jobs:
       - name: Build backend image
         uses: docker/build-push-action@v6
         with:
-          context: familychat/backend
+          context: backend
           platforms: linux/amd64
           load: true
-          tags: familychat-backend:ci
+          tags: swahnchat-backend:ci
           cache-from: type=gha,scope=backend-amd64
           cache-to: type=gha,mode=max,scope=backend-amd64
 
@@ -75,7 +75,7 @@ jobs:
       - name: Trivy report (HIGH and CRITICAL)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: familychat-backend:ci
+          image-ref: swahnchat-backend:ci
           scanners: vuln
           vuln-type: os,library
           severity: HIGH,CRITICAL
@@ -85,7 +85,7 @@ jobs:
       - name: Trivy SARIF
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: familychat-backend:ci
+          image-ref: swahnchat-backend:ci
           scanners: vuln
           vuln-type: os,library
           severity: HIGH,CRITICAL
@@ -108,7 +108,7 @@ jobs:
       - name: Trivy gate (fixable CRITICAL)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: familychat-backend:ci
+          image-ref: swahnchat-backend:ci
           scanners: vuln
           vuln-type: os,library
           severity: CRITICAL
@@ -122,9 +122,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
-      IMAGE: familychat-backend:ci-arm64
+      IMAGE: swahnchat-backend:ci-arm64
       # Throwaway key for the smoke test only (the server needs >= 32 bytes in production mode).
-      FAMILYCHAT_SECRET_KEY: arm64-smoke-test-key-not-a-secret-0123456789abcdef
+      SWAHNCHAT_SECRET_KEY: arm64-smoke-test-key-not-a-secret-0123456789abcdef
     steps:
       - uses: actions/checkout@v4
 
@@ -137,7 +137,7 @@ jobs:
       - name: Build backend image (linux/arm64)
         uses: docker/build-push-action@v6
         with:
-          context: familychat/backend
+          context: backend
           platforms: linux/arm64
           load: true
           push: false
@@ -147,20 +147,20 @@ jobs:
 
       - name: Smoke test, import
         run: |
-          docker run --rm --platform linux/arm64 -e FAMILYCHAT_SECRET_KEY --entrypoint python "$IMAGE" \
+          docker run --rm --platform linux/arm64 -e SWAHNCHAT_SECRET_KEY --entrypoint python "$IMAGE" \
             -c "import platform, app.main; print('imported on', platform.machine())"
 
       - name: Smoke test, migrations on an empty volume
         run: |
           docker volume create fc-smoke-data
-          docker run --rm --platform linux/arm64 -e FAMILYCHAT_SECRET_KEY -v fc-smoke-data:/data \
+          docker run --rm --platform linux/arm64 -e SWAHNCHAT_SECRET_KEY -v fc-smoke-data:/data \
             --entrypoint alembic "$IMAGE" upgrade head
-          docker run --rm --platform linux/arm64 -e FAMILYCHAT_SECRET_KEY -v fc-smoke-data:/data \
+          docker run --rm --platform linux/arm64 -e SWAHNCHAT_SECRET_KEY -v fc-smoke-data:/data \
             --entrypoint alembic "$IMAGE" current
 
       - name: Smoke test, server answers /healthz and /readyz
         run: |
-          docker run -d --name fc-smoke --platform linux/arm64 -e FAMILYCHAT_SECRET_KEY \
+          docker run -d --name fc-smoke --platform linux/arm64 -e SWAHNCHAT_SECRET_KEY \
             -v fc-smoke-data:/data -p 127.0.0.1:8000:8000 "$IMAGE"
           ok=0
           for _ in $(seq 1 60); do # QEMU is slow: allow up to two minutes
@@ -189,10 +189,10 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Shell scripts (shellcheck)
-        run: shellcheck --severity=warning familychat/deployment/*.sh familychat/backend/scripts/*.sh familychat/android/scripts/*.sh
+        run: shellcheck --severity=warning deployment/*.sh backend/scripts/*.sh android/scripts/*.sh
 
       - name: Compose file parses with every profile
-        working-directory: familychat/deployment
+        working-directory: deployment
         run: |
           cp .env.example .env
           docker compose --profile caddy --profile ntfy --profile tailscale --profile turn config --quiet

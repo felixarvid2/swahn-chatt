@@ -1,22 +1,22 @@
-name: FamilyChat Android
+name: Swahn Chat Android
 
 on:
   push:
     paths:
-      - "familychat/android/**"
-      - "familychat/backend/**" # the end-to-end test runs against the real backend
-      - ".github/workflows/familychat-android.yml"
+      - "android/**"
+      - "backend/**" # the end-to-end test runs against the real backend
+      - ".github/workflows/android.yml"
   pull_request:
     paths:
-      - "familychat/android/**"
-      - "familychat/backend/**"
-      - ".github/workflows/familychat-android.yml"
+      - "android/**"
+      - "backend/**"
+      - ".github/workflows/android.yml"
 
 permissions:
   contents: read
 
 concurrency:
-  group: familychat-android-${{ github.ref }}
+  group: swahnchat-android-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -25,7 +25,7 @@ jobs:
     timeout-minutes: 30
     defaults:
       run:
-        working-directory: familychat/android
+        working-directory: android
     steps:
       - uses: actions/checkout@v4
 
@@ -51,8 +51,8 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: familychat-detekt-reports
-          path: familychat/android/**/build/reports/detekt/
+          name: swahnchat-detekt-reports
+          path: android/**/build/reports/detekt/
           if-no-files-found: ignore
           retention-days: 14
 
@@ -66,7 +66,7 @@ jobs:
         api-level: [30, 34]
     defaults:
       run:
-        working-directory: familychat/android
+        working-directory: android
     steps:
       - uses: actions/checkout@v4
 
@@ -129,19 +129,19 @@ jobs:
           # (input) were up, and the runner's unlock key event failed before any test ran.
           emulator-options: -no-snapshot -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: true
-          working-directory: familychat/android
+          working-directory: android
           script: ./scripts/run-instrumented.sh
 
       - name: Upload instrumented test reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: familychat-instrumented-reports-api${{ matrix.api-level }}
+          name: swahnchat-instrumented-reports-api${{ matrix.api-level }}
           path: |
-            familychat/android/app/build/reports/androidTests/
-            familychat/android/app/build/outputs/androidTest-results/
-            familychat/android/app/build/outputs/mapping/qa/
-            familychat/android/app/build/logcat.txt
+            android/app/build/reports/androidTests/
+            android/app/build/outputs/androidTest-results/
+            android/app/build/outputs/mapping/qa/
+            android/app/build/logcat.txt
           if-no-files-found: ignore
           retention-days: 14
 
@@ -150,7 +150,7 @@ jobs:
     timeout-minutes: 60
     defaults:
       run:
-        working-directory: familychat/android
+        working-directory: android
     steps:
       - uses: actions/checkout@v4
 
@@ -178,10 +178,10 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: familychat/backend/requirements.txt
+          cache-dependency-path: backend/requirements.txt
 
       - name: Backend virtualenv for the end-to-end test
-        working-directory: familychat/backend
+        working-directory: backend
         run: |
           python -m venv .venv
           .venv/bin/pip install -r requirements.txt
@@ -193,17 +193,17 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: familychat-debug-apk
-          path: familychat/android/app/build/outputs/apk/debug/*.apk
+          name: swahnchat-debug-apk
+          path: android/app/build/outputs/apk/debug/*.apk
           if-no-files-found: warn
 
       - name: Upload test and lint reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: familychat-android-reports
+          name: swahnchat-android-reports
           path: |
-            familychat/android/**/build/reports/
-            familychat/android/**/build/test-results/
+            android/**/build/reports/
+            android/**/build/test-results/
           if-no-files-found: ignore
           retention-days: 14

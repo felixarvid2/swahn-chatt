@@ -62,24 +62,22 @@ class HttpMetrics:
             counts = dict(self._counts)
             hist = {k: list(v) for k, v in self._hist.items()}
         out = [
-            "# HELP familychat_http_requests_total HTTP requests by route template and status.",
-            "# TYPE familychat_http_requests_total counter",
+            "# HELP swahnchat_http_requests_total HTTP requests by route template and status.",
+            "# TYPE swahnchat_http_requests_total counter",
         ]
         for (method, route, status), n in sorted(counts.items()):
-            out.append(f"familychat_http_requests_total{_labels(method=method, route=route, status=status)} {n}")
+            out.append(f"swahnchat_http_requests_total{_labels(method=method, route=route, status=status)} {n}")
         out += [
-            "# HELP familychat_http_request_duration_seconds Request latency until the response was produced.",
-            "# TYPE familychat_http_request_duration_seconds histogram",
+            "# HELP swahnchat_http_request_duration_seconds Request latency until the response was produced.",
+            "# TYPE swahnchat_http_request_duration_seconds histogram",
         ]
         for (method, route, status), h in sorted(hist.items()):
             base = {"method": method, "route": route, "status": status}
             for bound, n in zip(BUCKETS, h, strict=False):
-                out.append(
-                    f"familychat_http_request_duration_seconds_bucket{_labels(**base, le=_num(bound))} {_num(n)}"
-                )
-            out.append(f"familychat_http_request_duration_seconds_bucket{_labels(**base, le='+Inf')} {_num(h[-2])}")
-            out.append(f"familychat_http_request_duration_seconds_sum{_labels(**base)} {h[-1]!r}")
-            out.append(f"familychat_http_request_duration_seconds_count{_labels(**base)} {_num(h[-2])}")
+                out.append(f"swahnchat_http_request_duration_seconds_bucket{_labels(**base, le=_num(bound))} {_num(n)}")
+            out.append(f"swahnchat_http_request_duration_seconds_bucket{_labels(**base, le='+Inf')} {_num(h[-2])}")
+            out.append(f"swahnchat_http_request_duration_seconds_sum{_labels(**base)} {h[-1]!r}")
+            out.append(f"swahnchat_http_request_duration_seconds_count{_labels(**base)} {_num(h[-2])}")
         return out
 
 
@@ -159,15 +157,15 @@ def _allowed(request: Request) -> bool:
 def gauges(app) -> list[str]:
     settings = app.state.settings
     values: list[tuple[str, str, str, float | None]] = [
-        ("familychat_websocket_connections", "gauge", "Open WebSocket connections.", app.state.hub.connected_count()),
+        ("swahnchat_websocket_connections", "gauge", "Open WebSocket connections.", app.state.hub.connected_count()),
         (
-            "familychat_push_queue_depth",
+            "swahnchat_push_queue_depth",
             "gauge",
             "Push notifications waiting to be sent.",
             app.state.push.pending_count(),
         ),
         (
-            "familychat_uptime_seconds",
+            "swahnchat_uptime_seconds",
             "gauge",
             "Seconds since the server started.",
             time.monotonic() - app.state.started_at,
@@ -176,7 +174,7 @@ def gauges(app) -> list[str]:
     with app.state.read_session_factory() as db:
         values.append(
             (
-                "familychat_event_queue_depth",
+                "swahnchat_event_queue_depth",
                 "gauge",
                 "Unacknowledged sync events over all devices.",
                 db.scalar(select(func.count()).select_from(Event)) or 0,
@@ -186,22 +184,22 @@ def gauges(app) -> list[str]:
         if db_bytes is None and db.bind.dialect.name == "postgresql":
             db_bytes = db.scalar(text("SELECT pg_database_size(current_database())"))
     values.append(
-        ("familychat_database_size_bytes", "gauge", "Database size (SQLite file with WAL, or PostgreSQL).", db_bytes)
+        ("swahnchat_database_size_bytes", "gauge", "Database size (SQLite file with WAL, or PostgreSQL).", db_bytes)
     )
     try:
         free = stats.free_disk_bytes(settings.data_dir)
     except OSError:
         free = None
-    values.append(("familychat_disk_free_bytes", "gauge", "Free space on the data volume.", free))
+    values.append(("swahnchat_disk_free_bytes", "gauge", "Free space on the data volume.", free))
     out = []
     for name, kind, help_, value in values:
         if value is None:
             continue
         out += [f"# HELP {name} {help_}", f"# TYPE {name} {kind}", f"{name} {_num(value)}"]
     out += [
-        "# HELP familychat_build_info Server version.",
-        "# TYPE familychat_build_info gauge",
-        f"familychat_build_info{_labels(version=__version__)} 1",
+        "# HELP swahnchat_build_info Server version.",
+        "# TYPE swahnchat_build_info gauge",
+        f"swahnchat_build_info{_labels(version=__version__)} 1",
     ]
     return out
 

@@ -54,7 +54,7 @@ def test_stored_database_holds_envelope_bytes_verbatim_and_no_plaintext(factory,
     # no plaintext anywhere in the files on disk (main db, WAL), neither raw nor as base64
     path = app.state.settings.sqlite_path
     app.state.engine.dispose()
-    blobs = b"".join(p.read_bytes() for p in path.parent.glob("familychat.db*"))
+    blobs = b"".join(p.read_bytes() for p in path.parent.glob("swahnchat.db*"))
     assert SECRET_TEXT.encode() not in blobs
     assert b64(SECRET_TEXT.encode()).encode() not in blobs
     for blob in list(sent.values())[:3]:

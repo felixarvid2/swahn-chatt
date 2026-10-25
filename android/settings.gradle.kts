@@ -20,6 +20,6 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "familychat"
+rootProject.name = "swahnchat"
 
 include(":core:model", ":core:network", ":core:crypto", ":core:client", ":app")

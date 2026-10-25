@@ -6,16 +6,16 @@
     <ID>LoopWithTooManyJumpStatements:FakeServer.kt$FakeServer.Api$for</ID>
     <ID>LoopWithTooManyJumpStatements:SyncProcessor.kt$SyncProcessor$for</ID>
     <ID>LoopWithTooManyJumpStatements:SyncProcessor.kt$SyncProcessor$while</ID>
-    <ID>MaxLineLength:EngineTest.kt$EngineTest$e.copy(data = se.familychat.core.model.FamilyChatJson.encodeToJsonElement(se.familychat.core.model.Message.serializer(), m.copy(envelope = tampered)))</ID>
+    <ID>MaxLineLength:EngineTest.kt$EngineTest$e.copy(data = se.swahnchat.core.model.SwahnChatJson.encodeToJsonElement(se.swahnchat.core.model.Message.serializer(), m.copy(envelope = tampered)))</ID>
     <ID>MaxLineLength:FakeServer.kt$FakeServer$fun</ID>
-    <ID>MaxLineLength:FakeServer.kt$FakeServer.Api$for (d in activeDevices(userId)) enqueue(d.id, EventType.CONVERSATION_REMOVED, id, FamilyChatJson.encodeToJsonElement(ConversationRemovedData(id)))</ID>
+    <ID>MaxLineLength:FakeServer.kt$FakeServer.Api$for (d in activeDevices(userId)) enqueue(d.id, EventType.CONVERSATION_REMOVED, id, SwahnChatJson.encodeToJsonElement(ConversationRemovedData(id)))</ID>
     <ID>MaxLineLength:TwoUserEndToEndTest.kt$TwoUserEndToEndTest$eventually(timeout, "delivery receipts for all") { alice.engine.sync(); ids.all { alice.store.getMessage(it)!!.status.ordinal &gt;= MessageStatus.DELIVERED.ordinal } }</ID>
     <ID>NoBlankLineBeforeRbrace:ServerAttackTest.kt$ServerAttackTest$ </ID>
-    <ID>NoUnusedImports:EngineTest.kt$se.familychat.core.client.EngineTest.kt</ID>
-    <ID>NoUnusedImports:FamilyChatEngine.kt$se.familychat.core.client.FamilyChatEngine.kt</ID>
+    <ID>NoUnusedImports:EngineTest.kt$se.swahnchat.core.client.EngineTest.kt</ID>
+    <ID>NoUnusedImports:SwahnChatEngine.kt$se.swahnchat.core.client.SwahnChatEngine.kt</ID>
     <ID>ReturnCount:SendPipeline.kt$SendPipeline$private suspend fun sendEntry(initial: OutboxEntry): SendOutcome</ID>
     <ID>ThrowsCount:FakeServer.kt$FakeServer.Api$private fun doSend(r: SendMessageRequest): SendMessageResponse</ID>
     <ID>UnusedParameter:TwoUserEndToEndTest.kt$TwoUserEndToEndTest$conversationId: String</ID>
-    <ID>UnusedPrivateProperty:FamilyChatEngine.kt$FamilyChatEngine$r</ID>
+    <ID>UnusedPrivateProperty:SwahnChatEngine.kt$SwahnChatEngine$r</ID>
   </CurrentIssues>
 </SmellBaseline>

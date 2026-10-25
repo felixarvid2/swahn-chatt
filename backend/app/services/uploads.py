@@ -17,7 +17,7 @@ from app.errors import ApiError, not_found
 from app.models import UploadSession, User
 from app.services.attachments import tmp_dir
 
-log = logging.getLogger("familychat.uploads")
+log = logging.getLogger("swahnchat.uploads")
 
 CHUNK_MAX_BYTES = 8 * 1024 * 1024
 SESSION_TTL_MS = 24 * 3600 * 1000

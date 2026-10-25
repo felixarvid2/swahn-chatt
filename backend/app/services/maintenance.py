@@ -14,7 +14,7 @@ from app.services import lockout
 from app.services.attachments import collect_garbage
 from app.services.uploads import collect_expired as collect_expired_uploads
 
-log = logging.getLogger("familychat.maintenance")
+log = logging.getLogger("swahnchat.maintenance")
 
 DAY_MS = 86_400_000
 

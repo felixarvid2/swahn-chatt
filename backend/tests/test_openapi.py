@@ -30,7 +30,7 @@ def ref_name(response) -> str | None:
 def test_schema_is_a_valid_openapi_document(spec):
     validate(spec)
     assert spec["openapi"].startswith("3.")
-    assert spec["info"]["title"] == "FamilyChat" and spec["info"]["description"]
+    assert spec["info"]["title"] == "Swahn Chat" and spec["info"]["description"]
 
 
 def test_served_document_is_the_same_valid_document(client, spec):

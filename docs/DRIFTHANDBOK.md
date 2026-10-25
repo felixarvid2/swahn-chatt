@@ -1,10 +1,10 @@
-# FamilyChat: driftshandbok för administratören
+# Swahn Chat: driftshandbok för administratören
 
-Den här handboken är till dig som sköter familjens FamilyChat-server (Raspberry Pi med Docker). Den innehåller bara
+Den här handboken är till dig som sköter familjens Swahn Chat-server (Raspberry Pi med Docker). Den innehåller bara
 kommandon och adresser som finns på riktigt: se [RASPBERRY_PI_SETUP.md](RASPBERRY_PI_SETUP.md) för installationen
 och [API.md](API.md) för alla adresser. Användarna har en egen guide: [ANVANDARGUIDE.md](ANVANDARGUIDE.md).
 
-Om inget annat står körs kommandona på Pi:n, i mappen `~/familychat/deployment` (där `docker-compose.yml` ligger).
+Om inget annat står körs kommandona på Pi:n, i mappen `~/deployment` (där `docker-compose.yml` ligger).
 
 ## Innehåll
 
@@ -25,6 +25,7 @@ Om inget annat står körs kommandona på Pi:n, i mappen `~/familychat/deploymen
 15. [Larm till din telefon (ntfy)](#15-larm-till-din-telefon-ntfy)
 16. [Databasunderhåll och HTTPS-skydd](#16-databasunderhåll-och-https-skydd)
 17. [Röst- och videosamtal (TURN)](#17-röst--och-videosamtal-turn)
+18. [Byte från FamilyChat till Swahn Chat](#18-byte-från-familychat-till-swahn-chat)
 
 ## 1. Rutiner: dagligen, veckovis, månadsvis
 
@@ -57,12 +58,12 @@ utrymme. Svarar den `503` står orsaken i `code`: `database_unavailable`, `migra
 - Finns senaste säkerhetskopian, och är den ny?
 
   ```bash
-  ls -lh ~/familychat-backups | tail -n 3        # mappen du angav i familychat-backup.service
-  systemctl list-timers 'familychat-*'
+  ls -lh ~/swahnchat-backups | tail -n 3        # mappen du angav i swahnchat-backup.service
+  systemctl list-timers 'swahnchat-*'
   systemctl --failed                              # ska vara tomt
   ```
 
-**Varje månad (automatiskt).** Timern `familychat-verify-backup` kontrollerar att den senaste säkerhetskopian går att
+**Varje månad (automatiskt).** Timern `swahnchat-verify-backup` kontrollerar att den senaste säkerhetskopian går att
 återställa (checksummor, SQLites `integrity_check`, bilagornas sökvägar), utan att röra någon data. Misslyckas den
 visas den som failed i `systemctl --failed`. Installation finns i avsnitt 7. Gör också ett riktigt
 återställningsprov på en annan maskin någon gång per år (avsnitt 8).
@@ -180,7 +181,7 @@ direkt och öppna anslutningar stängs inom ungefär en minut. Den enda administ
 
 ## 7. Vad innehåller en säkerhetskopia?
 
-En `.tar.gz`-fil med tre delar: `familychat.db` (databasen), alla bilagor och `manifest.json` med antal och
+En `.tar.gz`-fil med tre delar: `swahnchat.db` (databasen), alla bilagor och `manifest.json` med antal och
 SHA-256-checksummor.
 
 - **Med:** konton, **lösenordshashar**, publika nycklar, vilka som är med i vilka samtal, meddelandemetadata (vem,
@@ -191,25 +192,25 @@ SHA-256-checksummor.
   och kopiera den helst krypterad (rclone `crypt`) om du lägger den utanför Pi:n.
 - Telefonernas egna nycklar och historik finns inte i den. En tappad telefon kan alltså inte "återställas" genom servern.
 
-**Schema:** `familychat-backup.timer` tar en kopia varje natt (kl 03:15) och sparar de 14 senaste
-(`FAMILYCHAT_BACKUP_KEEP`). Se RASPBERRY_PI_SETUP.md, avsnitt 9.
+**Schema:** `swahnchat-backup.timer` tar en kopia varje natt (kl 03:15) och sparar de 14 senaste
+(`SWAHNCHAT_BACKUP_KEEP`). Se RASPBERRY_PI_SETUP.md, avsnitt 9.
 
 **Automatisk månadskontroll.** Installera (ändra `User=`, `WorkingDirectory=` och sökvägarna så att de stämmer med
-`familychat-backup.service`):
+`swahnchat-backup.service`):
 
 ```bash
-sudo cp systemd/familychat-verify-backup.{service,timer} /etc/systemd/system/
-sudo systemctl daemon-reload && sudo systemctl enable --now familychat-verify-backup.timer
-sudo systemctl start familychat-verify-backup.service      # prova en gång
-journalctl -u familychat-verify-backup -n 20               # "backup OK: ..."
-systemctl list-timers familychat-verify-backup.timer
+sudo cp systemd/swahnchat-verify-backup.{service,timer} /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now swahnchat-verify-backup.timer
+sudo systemctl start swahnchat-verify-backup.service      # prova en gång
+journalctl -u swahnchat-verify-backup -n 20               # "backup OK: ..."
+systemctl list-timers swahnchat-verify-backup.timer
 ```
 
 Det är samma sak som `./backup.sh --verify-latest <mapp>`: den senaste arkivfilen i mappen kontrolleras inne i
 backend-containern. Misslyckas kontrollen (skadad fil, ingen fil, eller en fil som är äldre än
-`FAMILYCHAT_BACKUP_MAX_AGE_DAYS`, standard 3 dagar, vilket betyder att nattbackupen har slutat fungera) hamnar
+`SWAHNCHAT_BACKUP_MAX_AGE_DAYS`, standard 3 dagar, vilket betyder att nattbackupen har slutat fungera) hamnar
 tjänsten i `failed`-läge och syns i `systemctl --failed`. Vill du få ett meddelande: se
-`familychat-notify-failure@.service` (valfri OnFailure-krok som skickar ett meddelande till ett ntfy-ämne bara du
+`swahnchat-notify-failure@.service` (valfri OnFailure-krok som skickar ett meddelande till ett ntfy-ämne bara du
 prenumererar på; instruktionerna står överst i filen).
 
 Kopiera gärna också en backup till en annan maskin och kontrollera den där:
@@ -220,23 +221,23 @@ Kopiera gärna också en backup till en annan maskin och kontrollera den där:
 Gäller till exempel ett trasigt SD-kort eller en ny Pi.
 
 1. **Ny Pi:** gör installationen i RASPBERRY_PI_SETUP.md till och med steg 4 (`docker compose up -d --build`), och
-   sätt samma `FAMILYCHAT_SECRET_KEY` som förut om du har den kvar (annars loggas alla ut: "token utgången"-loop,
+   sätt samma `SWAHNCHAT_SECRET_KEY` som förut om du har den kvar (annars loggas alla ut: "token utgången"-loop,
    alla får logga in igen). Samma Tailscale-namn eller domän gör att telefonerna hittar servern utan ändringar.
-2. Hämta arkivet, till exempel från fjärrlagringen: `rclone copy familychat-crypt:familychat-backups ~/familychat-backups`.
+2. Hämta arkivet, till exempel från fjärrlagringen: `rclone copy swahnchat-crypt:swahnchat-backups ~/swahnchat-backups`.
 3. Kontrollera det **innan** du ersätter något. Arkivet ligger på värden, kommandot körs i containern, så strömma
    in filen (så som `backup.sh --verify-latest` gör):
 
    ```bash
    docker compose exec -T backend sh -c \
      'f=/data/.verify-upload.tar.gz; trap "rm -f $f" EXIT; cat > $f && python -m app.cli verify-backup $f' \
-     < ~/familychat-backups/familychat-backup-20260101-031500.tar.gz
+     < ~/swahnchat-backups/swahnchat-backup-20260101-031500.tar.gz
    ```
 
    Utskriften ska börja med `backup OK` och slutstatus vara 0. Annars: ta nästa äldre arkiv.
 4. Återställ:
 
    ```bash
-   ./restore.sh ~/familychat-backups/familychat-backup-20260101-031500.tar.gz
+   ./restore.sh ~/swahnchat-backups/swahnchat-backup-20260101-031500.tar.gz
    ```
 
    Skriptet frågar först (`-y` hoppar över frågan), stoppar backend, kontrollerar alla checksummor, flyttar befintlig
@@ -256,7 +257,7 @@ Gick något fel: den gamla datan finns kvar i `/data/pre-restore-*`.
 ## 9. Uppgradera
 
 ```bash
-cd ~/familychat/deployment
+cd ~/deployment
 ./backup.sh                          # alltid först
 git pull
 docker compose up -d --build         # bygger om; databasmigreringar körs automatiskt vid start
@@ -273,7 +274,7 @@ migreringar går bara framåt. Uppdatera appen på telefonerna genom att install
 
 ## 10. Disken är full
 
-Tecken: `/readyz` svarar `503 low_disk` (mindre än `FAMILYCHAT_MIN_FREE_DISK_MB`, standard 200 MB), eller
+Tecken: `/readyz` svarar `503 low_disk` (mindre än `SWAHNCHAT_MIN_FREE_DISK_MB`, standard 200 MB), eller
 `disk_free_bytes` i `/admin/stats` är nära noll. Gör något **innan** SQLite inte kan skriva längre.
 
 ```bash
@@ -283,18 +284,18 @@ docker compose exec backend du -sh /data       # datavolymen
 ```
 
 1. Rensa det som är säkert: `docker image prune -f` och `docker builder prune -f` (gamla avbilder och byggcache).
-2. Gamla säkerhetskopior: sänk `FAMILYCHAT_BACKUP_KEEP` i `.env` och kör `./backup.sh --prune ~/familychat-backups`.
+2. Gamla säkerhetskopior: sänk `SWAHNCHAT_BACKUP_KEEP` i `.env` och kör `./backup.sh --prune ~/swahnchat-backups`.
    (Flytta inte bort den senaste.)
 3. Kvarlämnade filer från återställning: `docker compose exec backend sh -c 'rm -rf /data/pre-restore-*'` (om du har
    kontrollerat att den återställda datan är bra).
 4. Loggarna roterar redan (10 MB x 5 per tjänst) och är sällan problemet.
 5. Bilagor är oftast det som växer. `GET /admin/users` visar `attachment_bytes` per person. Prata med den som laddar
-   upp mest, eller sänk `FAMILYCHAT_USER_QUOTA_MB` / `FAMILYCHAT_MAX_ATTACHMENT_MB` i `.env` (gäller nya uppladdningar;
+   upp mest, eller sänk `SWAHNCHAT_USER_QUOTA_MB` / `SWAHNCHAT_MAX_ATTACHMENT_MB` i `.env` (gäller nya uppladdningar;
    kör `docker compose up -d` för att läsa in det och `check-config` för att kontrollera).
 6. Räcker det inte: större disk eller SSD. Stoppa backend, `./backup.sh` först (om det finns plats), flytta Docker-datan eller
    återställ på ny disk enligt avsnitt 8.
 
-Meddelanden som levererats raderas från servern efter `FAMILYCHAT_ENVELOPE_RETENTION_DAYS` (30) dagar av en
+Meddelanden som levererats raderas från servern efter `SWAHNCHAT_ENVELOPE_RETENTION_DAYS` (30) dagar av en
 timjobb. Meddelanden som väntar på telefoner som aldrig kommer online (se `undelivered_envelopes`) tar plats tills
 dess. En enhet som är död bör återkallas (avsnitt 4).
 
@@ -303,7 +304,7 @@ dess. En enhet som är död bör återkallas (avsnitt 4).
 Symtom i appen: "Servern har inget giltigt certifikat" eller "Servern svarar inte".
 
 **Börja alltid så här:** funkar servern lokalt? `curl -s http://127.0.0.1:8000/readyz` på Pi:n. Gör den det ligger
-felet i vägen dit (Tailscale/Caddy/nät), inte i FamilyChat. Gör den det inte: avsnitt 14.
+felet i vägen dit (Tailscale/Caddy/nät), inte i Swahn Chat. Gör den det inte: avsnitt 14.
 
 **Tailscale på värden:**
 
@@ -351,12 +352,12 @@ Utan push kommer meddelandena ändå fram, men först när appen är öppen elle
    docker compose exec backend python -m app.cli check-config
    ```
 
-   Kontrollera `FAMILYCHAT_PUSH_ALLOWED_HOSTS` (ntfy-värdens namn måste finnas med i produktion) och att
-   `FAMILYCHAT_PUSH_ALLOW_HTTP=false` med en `https://`-adress.
+   Kontrollera `SWAHNCHAT_PUSH_ALLOWED_HOSTS` (ntfy-värdens namn måste finnas med i produktion) och att
+   `SWAHNCHAT_PUSH_ALLOW_HTTP=false` med en `https://`-adress.
 3. **Syns försök i loggen?** `docker compose logs --since 1h backend | grep -i push`.
-4. **Telefonen:** ntfy-appens *Standardserver* ska vara er `NTFY_BASE_URL`; i FamilyChat ska *Inställningar →
+4. **Telefonen:** ntfy-appens *Standardserver* ska vara er `NTFY_BASE_URL`; i Swahn Chat ska *Inställningar →
    Pushnotiser* visa "Aktiv via ntfy"; och **batterioptimering** ska vara avstängd ("Obegränsad") för både ntfy och
-   FamilyChat. Det är den vanligaste orsaken, särskilt på Samsung, Xiaomi, Huawei och OnePlus (https://dontkillmyapp.com).
+   Swahn Chat. Det är den vanligaste orsaken, särskilt på Samsung, Xiaomi, Huawei och OnePlus (https://dontkillmyapp.com).
 5. **Hur gick det senaste försöket?** Som administratör ser du per enhet hur den senaste pushen gick:
    `GET /admin/users` (avsnitt 2) har under varje konto en lista `devices` med `push_registered`, `last_push_at`,
    `last_push_status` (HTTP-svaret från ntfy; `0` betyder inget svar alls, alltså nätverksfel eller timeout) och
@@ -366,7 +367,7 @@ Utan push kommer meddelandena ändå fram, men först när appen är öppen elle
    ntfy har glömt prenumerationen (servern rensar då adressen).
 6. **Testa en enda telefon.** Personen kan trigga `POST /devices/me/push/test` (en testpush, högst 3 per 10 minuter);
    resultatet står i `last_push_at` och `last_push_status` på `GET /devices/me` en stund senare. `409 push_not_configured`
-   betyder att telefonen inte har registrerat någon push-adress eller att `FAMILYCHAT_PUSH_ALLOWED_HOSTS` är tom.
+   betyder att telefonen inte har registrerat någon push-adress eller att `SWAHNCHAT_PUSH_ALLOWED_HOSTS` är tom.
 7. Om bara *en* person saknar aviseringar ligger felet nästan alltid i den telefonen (punkt 4). Om *ingen* får dem
    ligger det på servern (punkt 1 till 3 och 5).
 
@@ -378,7 +379,7 @@ docker compose exec backend python -m app.cli audit --limit 1000 | grep -E 'logi
 ```
 
 Via API: `GET /admin/audit?limit=200` (nyast först; `before_id=<minsta id>` ger nästa sida). Loggen sparas i 180 dagar
-(`FAMILYCHAT_AUDIT_RETENTION_DAYS`).
+(`SWAHNCHAT_AUDIT_RETENTION_DAYS`).
 
 Vad du letar efter:
 
@@ -400,11 +401,11 @@ kan ändra den, så den är en anteckning till familjen och inte bevis.
 
 | Symptom | Titta på |
 |---|---|
-| Containern startar om hela tiden | `docker compose logs backend`: oftast saknad eller för kort `FAMILYCHAT_SECRET_KEY` (minst 32 byte). `check-config` visar felet |
-| "Token utgången" i en slinga | Telefonens klocka går fel, eller `FAMILYCHAT_SECRET_KEY` har ändrats (alla loggar in igen) |
+| Containern startar om hela tiden | `docker compose logs backend`: oftast saknad eller för kort `SWAHNCHAT_SECRET_KEY` (minst 32 byte). `check-config` visar felet |
+| "Token utgången" i en slinga | Telefonens klocka går fel, eller `SWAHNCHAT_SECRET_KEY` har ändrats (alla loggar in igen) |
 | `429 rate_limited` | För många försök. Vänta `Retry-After` sekunder. Räknarna ligger i minnet: en omstart av backend nollställer dem |
 | `409 device_limit` vid inloggning | Kontot har redan så många enheter som tillåts (standard 10). Ta bort en gammal enhet (avsnitt 4) |
-| En återkallad enhet verkar ändå ansluten | Anslutningarna stängs inom `FAMILYCHAT_WS_REVALIDATE_SECONDS` (60 s) |
+| En återkallad enhet verkar ändå ansluten | Anslutningarna stängs inom `SWAHNCHAT_WS_REVALIDATE_SECONDS` (60 s) |
 | `/readyz` ger `migration_mismatch` | Databasen och programversionen stämmer inte: avsnitt 9 |
 | Inga aviseringar | Avsnitt 12 |
 | Inga larm till telefonen | Avsnitt 15 |
@@ -420,8 +421,8 @@ Servern kan skicka ett kort larm till ett ntfy-ämne som bara du prenumererar p�
 Skapa ett ämne med ett långt slumpmässigt namn (alla som känner till adressen kan läsa larmen) och lägg i `.env`:
 
 ```bash
-FAMILYCHAT_ADMIN_NTFY_URL=https://ntfy.example.org/familychat-admin-x7k2q9w4m1    # hela ämnesadressen, https
-FAMILYCHAT_ADMIN_NTFY_TOKEN=                                                      # bara om ntfy kräver inloggning
+SWAHNCHAT_ADMIN_NTFY_URL=https://ntfy.example.org/swahnchat-admin-x7k2q9w4m1    # hela ämnesadressen, https
+SWAHNCHAT_ADMIN_NTFY_TOKEN=                                                      # bara om ntfy kräver inloggning
 ```
 
 Starta om med `docker compose up -d`. Servern vägrar starta om adressen inte är `https://` i produktion. Larmen är fasta
@@ -429,7 +430,7 @@ korta texter utan användarnamn, adresser, meddelanden eller hemligheter:
 
 | Larm | När | Som tätast |
 |---|---|---|
-| Low disk space | Disken har mindre än `FAMILYCHAT_MIN_FREE_DISK_MB` ledigt (`/readyz` eller timjobbet) | var 6:e timme |
+| Low disk space | Disken har mindre än `SWAHNCHAT_MIN_FREE_DISK_MB` ledigt (`/readyz` eller timjobbet) | var 6:e timme |
 | Server maintenance failed | Timjobbet eller veckans databasunderhåll misslyckades (se loggen) | var 6:e timme |
 | A login lockout was triggered | Ett användarnamn har blivit utelåst efter för många felaktiga lösenord, även vid byte av lösenord eller radering av konto i appen (säger inte vilket) | var 30:e minut |
 | A refresh token was reused | En gammal inloggningsnyckel kom tillbaka: sessionen återkallades. Kontrollera säkerhetsloggen (avsnitt 13) | var 10:e minut |
@@ -437,13 +438,13 @@ korta texter utan användarnamn, adresser, meddelanden eller hemligheter:
 
 Högst 20 larm per timme totalt. Larmet skickas i bakgrunden: är ntfy nere märks det bara som en varning i loggen
 (`docker compose logs backend | grep -i alert`), aldrig som ett fel för användarna. Servern ser **inte** om
-nattbackupen misslyckas (den körs utanför servern): använd `familychat-notify-failure@.service` (avsnitt 7).
+nattbackupen misslyckas (den körs utanför servern): använd `swahnchat-notify-failure@.service` (avsnitt 7).
 Larm för en ny administratör som skapas direkt med kommandoraden (`create-invite --admin`) kommer när inbjudan
 löses in.
 
 ## 16. Databasunderhåll och HTTPS-skydd
 
-**Veckojobbet.** Backend kör en gång i veckan (`FAMILYCHAT_DB_MAINTENANCE_DAYS`, standard 7, `0` stänger av) ett
+**Veckojobbet.** Backend kör en gång i veckan (`SWAHNCHAT_DB_MAINTENANCE_DAYS`, standard 7, `0` stänger av) ett
 underhåll av databasen, i bakgrunden och inte i någon begäran. SQLite: `PRAGMA optimize`, `ANALYZE`, tömning av
 WAL-filen och `VACUUM` bara om mer än 20 % av databasfilen är tomma sidor och disken har gott om plats (1,25 gånger
 databasens storlek). `VACUUM` skriver om hela filen och stoppar skrivningar medan den pågår (sekunder för en
@@ -453,25 +454,25 @@ och står i `db_maintenance` i `GET /admin/stats`: `vacuum` är `done`, `not_nee
 frigör plats enligt avsnitt 10), `busy` (väntar på ett lugnt ögonblick) eller `n/a`. Ett misslyckat underhåll provas om
 vid nästa timkörning och ger larmet "Server maintenance failed" (avsnitt 15).
 
-**HTTPS-skydd (HSTS).** Sätt `FAMILYCHAT_HSTS=true` i `.env` först när *alla* når servern via HTTPS (Caddy eller
+**HTTPS-skydd (HSTS).** Sätt `SWAHNCHAT_HSTS=true` i `.env` först när *alla* når servern via HTTPS (Caddy eller
 `tailscale serve`): webbläsare vägrar då vanlig http mot adressen i ett år. Är du osäker, låt den vara av. Övriga
 säkerhetshuvuden (`nosniff`, `X-Frame-Options`, CSP m.fl.) skickas alltid och kräver ingen inställning. Sidan
-`/api/v1/docs` (bara om du slagit på `FAMILYCHAT_EXPOSE_DOCS`) hämtar sin kod från `cdn.jsdelivr.net` och har därför en
+`/api/v1/docs` (bara om du slagit på `SWAHNCHAT_EXPOSE_DOCS`) hämtar sin kod från `cdn.jsdelivr.net` och har därför en
 något lösare policy.
 
 ## 17. Röst- och videosamtal (TURN)
 
 Samtal går direkt mellan telefonerna (WebRTC, krypterat från ände till ände). Servern skickar bara krypterade
-signalmeddelanden (typ `call`, sparas högst `FAMILYCHAT_CALL_RETENTION_SECONDS`, standard 600 s, och syns aldrig i
+signalmeddelanden (typ `call`, sparas högst `SWAHNCHAT_CALL_RETENTION_SECONDS`, standard 600 s, och syns aldrig i
 historiken) och delar ut tillfälliga reläuppgifter via `GET /api/v1/calls/turn`. Hela installationen finns i
 [RASPBERRY_PI_SETUP.md](RASPBERRY_PI_SETUP.md), avsnitt 12.
 
-**Behövs ett relä?** Är alla telefoner på samma Tailscale-nät går samtalen oftast direkt: lämna `FAMILYCHAT_TURN_URLS`
+**Behövs ett relä?** Är alla telefoner på samma Tailscale-nät går samtalen oftast direkt: lämna `SWAHNCHAT_TURN_URLS`
 tomt. Kör reläet (coturn) om samtal saknar ljud/bild på mobilnät eller om någon inte är på tailnätet.
 
 ```bash
-openssl rand -base64 48        # lägg värdet i FAMILYCHAT_TURN_SECRET i .env (minst 32 byte, loggas aldrig)
-# .env: FAMILYCHAT_TURN_URLS=turn:pi.ditt-nat.ts.net:3478?transport=udp,turn:pi.ditt-nat.ts.net:3478?transport=tcp
+openssl rand -base64 48        # lägg värdet i SWAHNCHAT_TURN_SECRET i .env (minst 32 byte, loggas aldrig)
+# .env: SWAHNCHAT_TURN_URLS=turn:pi.ditt-nat.ts.net:3478?transport=udp,turn:pi.ditt-nat.ts.net:3478?transport=tcp
 docker compose --profile turn up -d && docker compose up -d      # relä + backend läser de nya värdena
 docker compose ps                                                # turn ska vara "healthy"
 docker compose logs turn | tail
@@ -488,9 +489,70 @@ docker compose logs turn | tail
   parterna varandras IP-adresser, om inte appen använder "bara relä". Push för inkommande samtal är en vanlig
   innehållsfri push med hög prioritet; ntfy-servern ser bara "brådskande".
 - **Felsökning:** `docker compose logs turn` (felrad om hemligheten är för kort eller saknas), `docker compose logs backend`
-  (backend vägrar starta om `FAMILYCHAT_TURN_URLS` är satt utan hemlighet på minst 32 byte), och
+  (backend vägrar starta om `SWAHNCHAT_TURN_URLS` är satt utan hemlighet på minst 32 byte), och
   `python -m app.cli check-config` visar `turn: N url(s)` utan att skriva ut hemligheten. Byt hemlighet genom att ändra
-  `FAMILYCHAT_TURN_SECRET` och köra `docker compose --profile turn up -d --force-recreate` samt `docker compose up -d`;
+  `SWAHNCHAT_TURN_SECRET` och köra `docker compose --profile turn up -d --force-recreate` samt `docker compose up -d`;
   pågående samtal klarar sig tills deras uppgifter går ut (en timme).
 - **Uppgradering:** bilden är fastlåst (`coturn/coturn:4.18.0`); byt version medvetet i `docker-compose.yml`, läs
   releaseanteckningarna och kör `docker compose --profile turn pull`.
+
+## 18. Byte från FamilyChat till Swahn Chat
+
+Appen och servern heter nu Swahn Chat (version 0.5.0). Namnet ändrades överallt, även i inställningsnamn och filnamn,
+så en befintlig installation måste flyttas över en gång. Servern hjälper till: den döper själv om `familychat.db`
+till `swahnchat.db` vid första starten, den läser inte längre `FAMILYCHAT_*`-variabler (den loggar ett fel som
+nämner dem, och i produktion vägrar den starta om bara `FAMILYCHAT_SECRET_KEY` är satt, så att den aldrig startar
+med en tillfällig nyckel), och `restore.sh`/`verify-backup` godtar gamla `familychat-backup-*`-arkiv.
+
+Gör så här på Pi:n:
+
+```bash
+# 1. Stoppa stacken och ta en säkerhetskopia först (med det gamla repot, som fortfarande heter familychat)
+cd ~/familychat/deployment            # den gamla klonen; justera sökvägen om din ligger någon annanstans
+./backup.sh ~/familychat-backups      # ger familychat-backup-*.tar.gz; kopiera den gärna också bort från Pi:n
+docker compose down                   # volymerna finns kvar (ingen -v!)
+
+# 2. Hämta den nya koden och flytta över .env; byt variabelprefix med ETT kommando
+git clone https://github.com/felixarvid2/swahn-chatt.git ~/swahn-chat
+cp ~/familychat/deployment/.env ~/swahn-chat/deployment/.env && chmod 600 ~/swahn-chat/deployment/.env
+sed -i 's/FAMILYCHAT_/SWAHNCHAT_/g' ~/swahn-chat/deployment/.env
+grep -n 'FAMILYCHAT\|TS_HOSTNAME' ~/swahn-chat/deployment/.env   # inga FAMILYCHAT_ kvar; behåll TS_HOSTNAME=familychat om telefonerna ska nå samma Tailscale-namn
+
+# 3. Flytta datat från de gamla Docker-volymerna (projektet hette familychat, nu swahnchat).
+#    Volymernas riktiga namn är <projekt>_<volym>: familychat_familychat-data blir swahnchat_swahnchat-data.
+#    Databasfilen familychat.db i volymen döps om till swahnchat.db av servern vid första starten.
+for v in familychat-data caddy-data caddy-config ntfy-cache tailscale-state; do
+  old="familychat_$v"; new="swahnchat_${v/familychat/swahnchat}"
+  docker volume inspect "$old" >/dev/null 2>&1 || continue          # volymen används inte i din installation
+  docker volume create --label com.docker.compose.project=swahnchat \
+    --label "com.docker.compose.volume=${v/familychat/swahnchat}" "$new" >/dev/null
+  docker run --rm -v "$old":/from -v "$new":/to alpine cp -a /from/. /to/
+done
+# Samma sak i korthet för den viktigaste volymen:
+#   docker run --rm -v familychat_familychat-data:/from -v swahnchat_swahnchat-data:/to alpine cp -a /from/. /to/
+
+# 4. Byt namn på systemd-enheterna och säkerhetskopiemappen
+sudo systemctl disable --now familychat-backup.timer familychat-verify-backup.timer
+sudo rm /etc/systemd/system/familychat-*.service /etc/systemd/system/familychat-*.timer
+mv ~/familychat-backups ~/swahnchat-backups
+[ -d /etc/familychat ] && sudo mv /etc/familychat /etc/swahnchat      # admin-ntfy.env för larmen
+sudo cp ~/swahn-chat/deployment/systemd/swahnchat-* /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now swahnchat-backup.timer swahnchat-verify-backup.timer
+
+# 5. Starta och kontrollera
+cd ~/swahn-chat/deployment
+docker compose up -d --build
+docker compose ps && curl -s http://127.0.0.1:8000/readyz
+docker compose exec backend python -m app.cli check-config      # ska sluta med "configuration OK"
+docker compose exec backend ls /data                            # swahnchat.db ska finnas, familychat.db inte
+./backup.sh ~/swahnchat-backups && ./backup.sh --verify-latest ~/swahnchat-backups
+```
+
+**Telefonerna.** Swahn Chat har ett nytt app-id (`se.swahnchat.app`), så det är en ny app: varje telefon måste
+avinstallera FamilyChat och installera Swahn Chat, och logga in på nytt. Den lokala historiken försvinner med den gamla
+appen om den inte exporteras först: öppna **Inställningar**, **Exportera historik** i FamilyChat *innan* du
+avinstallerar, och importera filen i Swahn Chat (den nya appen läser gamla exportfiler).
+
+**Städa efter en vecka** när allt fungerat: `docker volume rm familychat_familychat-data` (och övriga `familychat_*`),
+`rm -r ~/familychat` och de gamla säkerhetskopiorna när du har färska nya.

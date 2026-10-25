@@ -16,6 +16,7 @@ from app.config import Settings, get_settings
 from app.db import make_engine, make_read_session_factory, make_session_factory
 from app.errors import ApiError, error_body, install_error_handlers
 from app.hub import Hub
+from app.legacy import adopt_legacy_database
 from app.logging_setup import configure_logging
 from app.openapi import install_openapi
 from app.ratelimit import RateLimiter, client_ip
@@ -42,7 +43,7 @@ from app.services.presence import Presence
 from app.services.push import PushService, parse_hosts
 from app.services.stats import free_disk_bytes
 
-log = logging.getLogger("familychat")
+log = logging.getLogger("swahnchat")
 
 JSON_BODY_LIMIT = 8 * 1024 * 1024
 MAINTENANCE_INTERVAL_S = 3600
@@ -162,6 +163,7 @@ def create_app(settings: Settings | None = None, push_transport=None, alert_tran
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     settings.attachments_dir.mkdir(parents=True, exist_ok=True)
 
+    adopt_legacy_database(settings)
     engine = make_engine(settings.database_url)
     hub = Hub()
     limiter = RateLimiter(enabled=settings.rate_limit_enabled)
@@ -178,7 +180,7 @@ def create_app(settings: Settings | None = None, push_transport=None, alert_tran
     )
     if settings.push_requires_allowlist and not parse_hosts(settings.push_allowed_hosts):
         log.warning(
-            "FAMILYCHAT_PUSH_ALLOWED_HOSTS is empty: push (UnifiedPush) registration is refused until it lists "
+            "SWAHNCHAT_PUSH_ALLOWED_HOSTS is empty: push (UnifiedPush) registration is refused until it lists "
             "the push server's host name"
         )
     alerts = AdminAlerts(settings.admin_ntfy_url, settings.admin_ntfy_token, transport=alert_transport)
@@ -191,7 +193,7 @@ def create_app(settings: Settings | None = None, push_transport=None, alert_tran
         alerts.start()
         stop = asyncio.Event()
         task = asyncio.create_task(_maintenance_loop(app, stop)) if settings.background_tasks else None
-        log.info("familychat started env=%s", settings.env)
+        log.info("swahnchat started env=%s", settings.env)
         try:
             yield
         finally:
@@ -217,7 +219,7 @@ def create_app(settings: Settings | None = None, push_transport=None, alert_tran
 
     docs = settings.docs_enabled
     app = FastAPI(
-        title="FamilyChat",
+        title="Swahn Chat",
         version=__version__,
         lifespan=lifespan,
         docs_url="/api/v1/docs" if docs else None,

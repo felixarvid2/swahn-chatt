@@ -29,7 +29,7 @@ dependencies {
 tasks.test {
     maxHeapSize = "1g"
     // The end-to-end test reads these; pass them through only when set.
-    listOf("FAMILYCHAT_TEST_URL", "FAMILYCHAT_TEST_ADMIN_INVITE", "FAMILYCHAT_TEST_DB").forEach { name ->
+    listOf("SWAHNCHAT_TEST_URL", "SWAHNCHAT_TEST_ADMIN_INVITE", "SWAHNCHAT_TEST_DB").forEach { name ->
         System.getenv(name)?.let { environment(name, it) }
     }
     testLogging { events("failed", "skipped"); showStandardStreams = false }

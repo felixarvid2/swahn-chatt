@@ -11,7 +11,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 HEADER = "X-Request-ID"
 VALID_RE = re.compile(r"^[A-Za-z0-9._-]{8,64}$")
 
-_current: ContextVar[str | None] = ContextVar("familychat_request_id", default=None)
+_current: ContextVar[str | None] = ContextVar("swahnchat_request_id", default=None)
 
 
 def current_request_id() -> str | None:

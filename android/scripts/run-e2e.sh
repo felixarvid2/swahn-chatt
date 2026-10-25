@@ -6,7 +6,7 @@
 #   KEEP=1 android/scripts/run-e2e.sh     # keep the data dir and log for inspection
 #
 # What it does: migrates a temp SQLite database, starts ONE uvicorn worker on a free port in development mode, creates
-# an admin invitation with the CLI, exports FAMILYCHAT_TEST_URL / _ADMIN_INVITE / _DB and runs the Gradle tests:
+# an admin invitation with the CLI, exports SWAHNCHAT_TEST_URL / _ADMIN_INVITE / _DB and runs the Gradle tests:
 # core:client TwoUserEndToEndTest (in-memory stores) and app RoomEngineE2ETest (one phone on the app's Room stores).
 set -euo pipefail
 
@@ -20,7 +20,7 @@ else
   exit 2
 fi
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/familychat-e2e.XXXXXX")"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/swahnchat-e2e.XXXXXX")"
 SERVER_PID=""
 cleanup() {
   if [ -n "$SERVER_PID" ] && kill -0 "$SERVER_PID" 2>/dev/null; then
@@ -31,14 +31,14 @@ cleanup() {
 }
 trap cleanup EXIT
 
-export FAMILYCHAT_ENV=development
-export FAMILYCHAT_DATA_DIR="$WORK/data"
-export FAMILYCHAT_LOG_LEVEL="${FAMILYCHAT_LOG_LEVEL:-WARNING}"
+export SWAHNCHAT_ENV=development
+export SWAHNCHAT_DATA_DIR="$WORK/data"
+export SWAHNCHAT_LOG_LEVEL="${SWAHNCHAT_LOG_LEVEL:-WARNING}"
 # Cheaper password hashing keeps the test fast; everything else stays at production behaviour (rate limits on).
-export FAMILYCHAT_ARGON2_TIME_COST="${FAMILYCHAT_ARGON2_TIME_COST:-1}"
-export FAMILYCHAT_ARGON2_MEMORY_KB="${FAMILYCHAT_ARGON2_MEMORY_KB:-8192}"
-export FAMILYCHAT_ARGON2_PARALLELISM="${FAMILYCHAT_ARGON2_PARALLELISM:-1}"
-mkdir -p "$FAMILYCHAT_DATA_DIR"
+export SWAHNCHAT_ARGON2_TIME_COST="${SWAHNCHAT_ARGON2_TIME_COST:-1}"
+export SWAHNCHAT_ARGON2_MEMORY_KB="${SWAHNCHAT_ARGON2_MEMORY_KB:-8192}"
+export SWAHNCHAT_ARGON2_PARALLELISM="${SWAHNCHAT_ARGON2_PARALLELISM:-1}"
+mkdir -p "$SWAHNCHAT_DATA_DIR"
 
 cd "$BACKEND_DIR"
 "$PY" -m alembic upgrade head >"$WORK/alembic.log" 2>&1 || { cat "$WORK/alembic.log" >&2; exit 1; }
@@ -71,10 +71,10 @@ INVITE="$("$PY" -m app.cli create-invite --admin --note e2e 2>/dev/null | tail -
 APP_INVITE="$("$PY" -m app.cli create-invite --admin --note e2e-app 2>/dev/null | tail -n 1)"
 [ -n "$APP_INVITE" ] || { echo "could not create the second admin invitation" >&2; exit 1; }
 
-export FAMILYCHAT_TEST_URL="$URL"
-export FAMILYCHAT_TEST_ADMIN_INVITE="$INVITE"
-export FAMILYCHAT_TEST_APP_ADMIN_INVITE="$APP_INVITE"
-export FAMILYCHAT_TEST_DB="$FAMILYCHAT_DATA_DIR/familychat.db"
+export SWAHNCHAT_TEST_URL="$URL"
+export SWAHNCHAT_TEST_ADMIN_INVITE="$INVITE"
+export SWAHNCHAT_TEST_APP_ADMIN_INVITE="$APP_INVITE"
+export SWAHNCHAT_TEST_DB="$SWAHNCHAT_DATA_DIR/swahnchat.db"
 
 cd "$ANDROID_DIR"
 set +e

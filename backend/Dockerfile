@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# FamilyChat backend. Multi-arch (linux/amd64, linux/arm64): every dependency ships a manylinux wheel,
+# Swahn Chat backend. Multi-arch (linux/amd64, linux/arm64): every dependency ships a manylinux wheel,
 # so no compiler is needed and none ends up in the final image.
 
 FROM python:3.12-slim AS builder
@@ -15,12 +15,12 @@ FROM python:3.12-slim
 ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    FAMILYCHAT_ENV=production \
-    FAMILYCHAT_DATA_DIR=/data
-RUN groupadd --system --gid 10001 familychat \
- && useradd --system --uid 10001 --gid familychat --home-dir /app --shell /usr/sbin/nologin familychat \
+    SWAHNCHAT_ENV=production \
+    SWAHNCHAT_DATA_DIR=/data
+RUN groupadd --system --gid 10001 swahnchat \
+ && useradd --system --uid 10001 --gid swahnchat --home-dir /app --shell /usr/sbin/nologin swahnchat \
  && mkdir -p /data /app \
- && chown familychat:familychat /data
+ && chown swahnchat:swahnchat /data
 COPY --from=builder /opt/venv /opt/venv
 WORKDIR /app
 COPY --chown=root:root app ./app
@@ -28,7 +28,7 @@ COPY --chown=root:root migrations ./migrations
 COPY --chown=root:root alembic.ini uvicorn_log.json ./
 COPY --chown=root:root docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod 0755 /usr/local/bin/docker-entrypoint.sh
-USER familychat
+USER swahnchat
 VOLUME /data
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \

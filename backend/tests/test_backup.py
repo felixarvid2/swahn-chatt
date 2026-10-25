@@ -16,7 +16,7 @@ from tests.conftest import make_settings
 
 pytestmark = pytest.mark.sqlite_only  # backups are SQLite only (PostgreSQL: pg_dump)
 
-NAME_RE = re.compile(r"^familychat-backup-\d{8}-\d{6}(-\d+)?\.tar\.gz$")
+NAME_RE = re.compile(r"^swahnchat-backup-\d{8}-\d{6}(-\d+)?\.tar\.gz$")
 
 
 def populate(factory, alice, bob):
@@ -67,7 +67,7 @@ def test_backup_contents_and_manifest(factory, alice, bob, app, tmp_path):
     with tarfile.open(archive) as tar:
         names = tar.getnames()
         manifest = json.load(tar.extractfile("manifest.json"))
-    assert set(names) == {"manifest.json", "familychat.db", f"attachments/{att['id'][:2]}/{att['id']}"}
+    assert set(names) == {"manifest.json", "swahnchat.db", f"attachments/{att['id'][:2]}/{att['id']}"}
     assert manifest["counts"] == {
         "users": 2,
         "devices": 2,
@@ -93,7 +93,7 @@ def test_backup_and_restore_roundtrip(factory, alice, bob, app, tmp_path, make_a
     result = restore_backup(new_settings, archive)
     assert result["previous_data"] is None and result["counts"]["messages"] == 2
     # rows, ciphertext bytes and attachment bytes are identical
-    assert db_rows(target / "familychat.db") == before
+    assert db_rows(target / "swahnchat.db") == before
     restored_att = target / "attachments" / att["id"][:2] / att["id"]
     assert restored_att.read_bytes() == att_bytes
     assert [p for p in target.iterdir() if p.name.startswith(".restore-")] == []
@@ -139,7 +139,7 @@ def test_restore_with_force_keeps_previous_data_aside(factory, alice, bob, app, 
     con.commit()
     con.close()
     result = restore_backup(s, archive, force=True)
-    assert result["previous_data"] and (target / result["previous_data"].split("/")[-1] / "familychat.db").exists()
+    assert result["previous_data"] and (target / result["previous_data"].split("/")[-1] / "swahnchat.db").exists()
     assert len(db_rows(s.sqlite_path)["messages"]) == 2
 
 
@@ -158,7 +158,7 @@ def corrupt_cases(tmp_path, archive):
     p.write_bytes(b"this is not an archive")
     out["garbage"] = p
     p = tmp_path / "tampered-db.tar.gz"
-    rewrite_archive(archive, p, lambda n, d: d + b"x" if n == "familychat.db" else d)
+    rewrite_archive(archive, p, lambda n, d: d + b"x" if n == "swahnchat.db" else d)
     out["tampered db"] = p
     p = tmp_path / "tampered-att.tar.gz"
     rewrite_archive(archive, p, lambda n, d: b"evil" if n.startswith("attachments/") else d)
@@ -195,7 +195,7 @@ def test_corrupted_archives_are_rejected_and_change_nothing(factory, alice, bob,
         target = tmp_path / f"t-{label.replace(' ', '-')}"
         with pytest.raises(BackupError):
             restore_backup(make_settings(target), bad)
-        assert not (target / "familychat.db").exists(), label
+        assert not (target / "swahnchat.db").exists(), label
         assert not (target / "attachments").exists() or not any((target / "attachments").iterdir()), label
         assert not (tmp_path / "escape").exists()
     # and a forced restore of a bad archive leaves existing data alone
@@ -224,7 +224,7 @@ def test_backup_is_consistent_while_writing(factory, alice, bob, app, tmp_path):
         t.join()
     target = tmp_path / "t"
     restore_backup(make_settings(target), archive)
-    con = sqlite3.connect(target / "familychat.db")
+    con = sqlite3.connect(target / "swahnchat.db")
     assert con.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
     msgs = con.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
     envs = con.execute("SELECT COUNT(*) FROM message_envelopes").fetchone()[0]
@@ -235,16 +235,16 @@ def test_backup_is_consistent_while_writing(factory, alice, bob, app, tmp_path):
 def test_backup_cli_prints_only_the_archive_path_last(factory, alice, bob, app, tmp_path, monkeypatch, capsys):
     populate(factory, alice, bob)
     s = app.state.settings
-    monkeypatch.setenv("FAMILYCHAT_ENV", "development")
-    monkeypatch.setenv("FAMILYCHAT_DATA_DIR", str(s.data_dir))
+    monkeypatch.setenv("SWAHNCHAT_ENV", "development")
+    monkeypatch.setenv("SWAHNCHAT_DATA_DIR", str(s.data_dir))
     assert cli_main(["backup", str(tmp_path / "cli-out")]) == 0
     last = capsys.readouterr().out.strip().splitlines()[-1]
     assert NAME_RE.match(os.path.basename(last)) and os.path.isfile(last)
 
     target = tmp_path / "cli-restore"
-    monkeypatch.setenv("FAMILYCHAT_DATA_DIR", str(target))
+    monkeypatch.setenv("SWAHNCHAT_DATA_DIR", str(target))
     assert cli_main(["restore", last]) == 0
-    assert db_rows(target / "familychat.db")["users"]
+    assert db_rows(target / "swahnchat.db")["users"]
     assert cli_main(["restore", last]) == 1  # existing data, no --force
     assert "--force" in capsys.readouterr().err
     assert cli_main(["restore", last, "--force"]) == 0

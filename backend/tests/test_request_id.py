@@ -98,7 +98,7 @@ def json_log():
 
 
 def test_every_log_line_of_a_request_has_its_id(app, client, json_log):
-    log = logging.getLogger("familychat.test")
+    log = logging.getLogger("swahnchat.test")
 
     @app.get("/api/v1/_sync_route")
     def sync_route():  # runs in the threadpool
@@ -123,9 +123,7 @@ def test_every_log_line_of_a_request_has_its_id(app, client, json_log):
     access = [e for e in lines if e["msg"] == "request"]
     assert {e["request_id"] for e in access} == {"sync-req-0001", "async-req-001"}
     assert all(
-        e["request_id"]
-        for e in lines
-        if e["logger"].startswith("familychat.test") and e["msg"] != "outside any request"
+        e["request_id"] for e in lines if e["logger"].startswith("swahnchat.test") and e["msg"] != "outside any request"
     )
 
 

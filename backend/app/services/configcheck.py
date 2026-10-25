@@ -7,7 +7,7 @@ from pathlib import Path
 
 from sqlalchemy.engine import make_url
 
-from app.config import Settings
+from app.config import Settings, legacy_env_message, legacy_env_vars
 from app.services.push import parse_hosts
 from app.services.stats import free_disk_bytes
 
@@ -37,7 +37,7 @@ def _existing_ancestor(path: Path) -> Path:
 
 
 def check(settings: Settings, secret_key_bytes: int) -> ConfigReport:
-    """`secret_key_bytes` is the length of the configured FAMILYCHAT_SECRET_KEY (0 when unset): the Settings object
+    """`secret_key_bytes` is the length of the configured SWAHNCHAT_SECRET_KEY (0 when unset): the Settings object
     may hold an ephemeral replacement, which must not hide the problem."""
     r = ConfigReport()
     prod = settings.env == "production"
@@ -73,11 +73,15 @@ def check(settings: Settings, secret_key_bytes: int) -> ConfigReport:
         ("admin_alerts", "on" if settings.admin_ntfy_url else "off"),  # the topic URL itself is never printed
     ]
 
+    legacy = legacy_env_vars()
+    if legacy:
+        r.errors.append(legacy_env_message(legacy))
+
     if secret_key_bytes < MIN_SECRET_BYTES:
         problem = (
-            f"FAMILYCHAT_SECRET_KEY is only {secret_key_bytes} bytes (needs {MIN_SECRET_BYTES})"
+            f"SWAHNCHAT_SECRET_KEY is only {secret_key_bytes} bytes (needs {MIN_SECRET_BYTES})"
             if secret_key_bytes
-            else f"FAMILYCHAT_SECRET_KEY is not set (needs {MIN_SECRET_BYTES} bytes)"
+            else f"SWAHNCHAT_SECRET_KEY is not set (needs {MIN_SECRET_BYTES} bytes)"
         )
         if prod:
             r.errors.append(problem + " (the server refuses to start in production)")
@@ -87,11 +91,11 @@ def check(settings: Settings, secret_key_bytes: int) -> ConfigReport:
     try:
         networks = settings.trusted_networks
     except ValueError as exc:
-        r.errors.append(f"FAMILYCHAT_TRUSTED_PROXIES is not a list of CIDRs: {exc}")
+        r.errors.append(f"SWAHNCHAT_TRUSTED_PROXIES is not a list of CIDRs: {exc}")
     else:
         if settings.behind_proxy and not networks:
             r.warnings.append(
-                "FAMILYCHAT_BEHIND_PROXY is set but FAMILYCHAT_TRUSTED_PROXIES is empty: every client appears with "
+                "SWAHNCHAT_BEHIND_PROXY is set but SWAHNCHAT_TRUSTED_PROXIES is empty: every client appears with "
                 "the proxy's address, so rate limits and the audit log's IPs are shared"
             )
         for net in networks:
@@ -102,12 +106,12 @@ def check(settings: Settings, secret_key_bytes: int) -> ConfigReport:
 
     if prod and not hosts:
         r.warnings.append(
-            "production without FAMILYCHAT_PUSH_ALLOWED_HOSTS: push registration is refused (409 push_not_configured)"
+            "production without SWAHNCHAT_PUSH_ALLOWED_HOSTS: push registration is refused (409 push_not_configured)"
         )
     if prod and settings.push_allow_http:
-        r.warnings.append("FAMILYCHAT_PUSH_ALLOW_HTTP is true in production: push endpoints may use plain http")
+        r.warnings.append("SWAHNCHAT_PUSH_ALLOW_HTTP is true in production: push endpoints may use plain http")
     if prod and settings.expose_docs:
-        r.warnings.append("FAMILYCHAT_EXPOSE_DOCS is true in production: /api/v1/docs and openapi.json are public")
+        r.warnings.append("SWAHNCHAT_EXPOSE_DOCS is true in production: /api/v1/docs and openapi.json are public")
     if prod and not settings.rate_limit_enabled:
         r.warnings.append("rate limiting is disabled in production")
 
@@ -121,7 +125,7 @@ def check(settings: Settings, secret_key_bytes: int) -> ConfigReport:
         r.settings.append(("disk_free_mb", str(free_mb)))
         if settings.min_free_disk_mb and free_mb < settings.min_free_disk_mb:
             r.warnings.append(
-                f"low disk: {free_mb} MiB free on the data volume, below FAMILYCHAT_MIN_FREE_DISK_MB="
+                f"low disk: {free_mb} MiB free on the data volume, below SWAHNCHAT_MIN_FREE_DISK_MB="
                 f"{settings.min_free_disk_mb} (/readyz reports 503 low_disk)"
             )
     except OSError as exc:
@@ -130,5 +134,5 @@ def check(settings: Settings, secret_key_bytes: int) -> ConfigReport:
     if re.match(r"postgres(ql)?(\+\w+)?://", settings.database_url) and not settings.database_url.startswith(
         "postgresql+psycopg://"
     ):
-        r.errors.append("a PostgreSQL FAMILYCHAT_DATABASE_URL must start with postgresql+psycopg://")
+        r.errors.append("a PostgreSQL SWAHNCHAT_DATABASE_URL must start with postgresql+psycopg://")
     return r

@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # Restore a backup archive into the running deployment. Stops the backend, replaces the data
 # (the previous data is kept in the volume as /data/pre-restore-<time>), starts the backend again.
-#   ./restore.sh path/to/familychat-backup-YYYYMMDD-HHMMSS.tar.gz [-y]
+#   ./restore.sh path/to/swahnchat-backup-YYYYMMDD-HHMMSS.tar.gz [-y]
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 archive="${1:?usage: restore.sh <archive.tar.gz> [-y]}"
 [ -f "$archive" ] || { echo "no such file: $archive" >&2; exit 1; }
-tar -tzf "$archive" | grep -qx 'manifest.json' || { echo "not a FamilyChat backup: $archive" >&2; exit 1; }
+tar -tzf "$archive" | grep -qx 'manifest.json' || { echo "not a Swahn Chat backup: $archive" >&2; exit 1; }
 
 if [ "${2:-}" != "-y" ]; then
-  read -r -p "Replace ALL current FamilyChat data with $archive? [y/N] " answer
+  read -r -p "Replace ALL current Swahn Chat data with $archive? [y/N] " answer
   [ "$answer" = "y" ] || [ "$answer" = "Y" ] || { echo "aborted"; exit 1; }
 fi
 

@@ -154,19 +154,19 @@ def test_push_allowed_hosts_restricts_endpoints(make_app):
 
 
 def test_production_without_allowlist_refuses_push_registration(make_app, caplog):
-    with caplog.at_level("WARNING", logger="familychat"):
+    with caplog.at_level("WARNING", logger="swahnchat"):
         app, client = make_app(env="production")
     assert any("PUSH_ALLOWED_HOSTS is empty" in r.getMessage() for r in caplog.records)
     a = Factory(app, client).user("alice")
     r = a.put("/devices/me/push", {"kind": "unifiedpush", "endpoint": ENDPOINT})
     assert r.status_code == 409 and r.json()["code"] == "push_not_configured"
-    assert "FAMILYCHAT_PUSH_ALLOWED_HOSTS" in r.json()["message"]
+    assert "SWAHNCHAT_PUSH_ALLOWED_HOSTS" in r.json()["message"]
     # clearing a registration is always possible
     assert a.delete("/devices/me/push").status_code == 204
 
 
 def test_production_with_allowlist_registers_listed_hosts_only(make_app, caplog):
-    with caplog.at_level("WARNING", logger="familychat"):
+    with caplog.at_level("WARNING", logger="swahnchat"):
         app, client = make_app(env="production", push_allowed_hosts="ntfy.example.org")
     assert not any("PUSH_ALLOWED_HOSTS" in r.getMessage() for r in caplog.records)
     a = Factory(app, client).user("alice")

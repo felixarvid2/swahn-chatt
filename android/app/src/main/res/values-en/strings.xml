@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">FamilyChat</string>
+    <string name="app_name">Swahn Chat</string>
     <string name="you">You</string>
     <string name="unknown_user">Unknown</string>
     <string name="group_default_name">Group</string>
@@ -196,7 +196,7 @@
     <string name="invitation_admin">Grant admin rights</string>
     <string name="invitation_created">Invitation created</string>
     <string name="invitation_created_text">Send the code to the person in a safe way. It is shown only now and can be used once.</string>
-    <string name="invitation_share_text">Your FamilyChat invitation code: %1$s</string>
+    <string name="invitation_share_text">Your Swahn Chat invitation code: %1$s</string>
     <string name="devices_load_failed">Could not load the devices.</string>
     <string name="this_device">This device</string>
     <string name="last_seen">Last active %1$s</string>
@@ -259,7 +259,7 @@
     <string name="draft_preview">Draft: %1$s</string>
     <!-- links -->
     <string name="link_confirm_title">Open link?</string>
-    <string name="link_confirm_text">You are leaving FamilyChat. Check the whole address before you continue.</string>
+    <string name="link_confirm_text">You are leaving Swahn Chat. Check the whole address before you continue.</string>
     <string name="link_confirm_open">Open</string>
     <string name="link_target_web">Website: %1$s</string>
     <string name="link_target_email">E-mail address: %1$s</string>
@@ -292,10 +292,10 @@
     <string name="lock_1_minute">1 minute</string>
     <string name="lock_5_minutes">5 minutes</string>
     <string name="lock_30_minutes">30 minutes</string>
-    <string name="lock_title">FamilyChat is locked</string>
+    <string name="lock_title">Swahn Chat is locked</string>
     <string name="lock_text">Unlock to see your messages.</string>
     <string name="lock_unlock">Unlock</string>
-    <string name="lock_prompt_title">Unlock FamilyChat</string>
+    <string name="lock_prompt_title">Unlock Swahn Chat</string>
     <string name="lock_prompt_subtitle">Confirm that it is you</string>
     <plurals name="notification_new_messages">
         <item quantity="one">New message</item>
@@ -405,7 +405,7 @@
     <string name="invite_scanned_from">Invitation to the server</string>
     <string name="invite_scanned_check">Check that this is the server you expect. The code decides where the account is created.</string>
     <string name="invite_scanned_suspicious">The address contains international characters that can imitate another name. Only continue if you recognise it.</string>
-    <string name="invite_error_not_invite">This is not an invitation to FamilyChat.</string>
+    <string name="invite_error_not_invite">This is not an invitation to Swahn Chat.</string>
     <string name="invite_error_version">The invitation is from a newer version of the app. Update the app or type the details by hand.</string>
     <string name="invite_error_too_long">The QR code is too long to be an invitation.</string>
     <string name="invite_error_malformed">The invitation has the wrong format and was not used.</string>
@@ -468,7 +468,7 @@
     <string name="share_preparing">Preparing what you are sharing …</string>
     <string name="share_summary_text">Text: %1$s</string>
     <string name="share_nothing">There was nothing to share.</string>
-    <string name="share_not_signed_in">Sign in to FamilyChat first, then share again.</string>
+    <string name="share_not_signed_in">Sign in to Swahn Chat first, then share again.</string>
     <string name="share_rejected_some">%1$d shared files were not accepted (too large, wrong type or not allowed).</string>
     <string name="share_rejected_all">What you tried to share could not be accepted.</string>
     <string name="share_too_many">At most 10 files can be shared at once. The rest were left out.</string>
@@ -505,7 +505,7 @@
     <string name="history_import_already">%1$d were already here or have been deleted here.</string>
     <string name="history_import_unknown_conversation">%1$d belong to conversations this phone does not have and were skipped.</string>
     <string name="history_import_invalid">%1$d records were invalid and were skipped.</string>
-    <string name="history_error_not_a_file">This is not a FamilyChat history file.</string>
+    <string name="history_error_not_a_file">This is not a Swahn Chat history file.</string>
     <string name="history_error_version">The file is from a newer version of the app. Update the app and try again.</string>
     <string name="history_error_parameters">The file uses settings this app does not accept.</string>
     <string name="history_error_wrong_passphrase">Wrong passphrase, or the file is damaged. Nothing was imported.</string>

@@ -4,7 +4,7 @@
 # The shared secret only lives in the container environment and in that file on a tmpfs; it is never printed.
 set -eu
 
-: "${TURN_SECRET:?TURN_SECRET (FAMILYCHAT_TURN_SECRET in .env) must be set}"
+: "${TURN_SECRET:?TURN_SECRET (SWAHNCHAT_TURN_SECRET in .env) must be set}"
 if [ "${#TURN_SECRET}" -lt 32 ]; then
   echo "TURN_SECRET must be at least 32 characters (openssl rand -base64 48)" >&2
   exit 1
@@ -18,7 +18,7 @@ cp /etc/coturn/turnserver.conf "$conf"
   echo
   echo "# --- from the environment"
   printf 'static-auth-secret=%s\n' "$TURN_SECRET"
-  printf 'realm=%s\n' "${TURN_REALM:-familychat}"
+  printf 'realm=%s\n' "${TURN_REALM:-swahnchat}"
   # Behind NAT: the public address (or PUBLIC/PRIVATE) that clients must send media to.
   if [ -n "${TURN_EXTERNAL_IP:-}" ]; then printf 'external-ip=%s\n' "$TURN_EXTERNAL_IP"; fi
   # Phones on the tailnet reach each other through the relay only when it may send to 100.64.0.0/10. That also lets

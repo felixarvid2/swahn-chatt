@@ -11,7 +11,7 @@ from collections.abc import Callable
 
 import httpx
 
-log = logging.getLogger("familychat.alerts")
+log = logging.getLogger("swahnchat.alerts")
 
 MINUTE = 60.0
 HOUR = 3600.0
@@ -100,7 +100,7 @@ class AdminAlerts:
                 self._queue.task_done()
 
     def _deliver(self, kind: str) -> None:
-        headers = {"Title": "FamilyChat", "Tags": "warning", "Content-Type": "text/plain; charset=utf-8"}
+        headers = {"Title": "Swahn Chat", "Tags": "warning", "Content-Type": "text/plain; charset=utf-8"}
         if self._token:
             headers["Authorization"] = f"Bearer {self._token}"
         try:

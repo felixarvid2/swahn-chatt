@@ -1,7 +1,7 @@
 [project]
-name = "familychat-backend"
+name = "swahnchat-backend"
 version = "0.1.0"
-description = "FamilyChat self-hosted messenger backend (ciphertext mailbox)"
+description = "Swahn Chat self-hosted messenger backend (ciphertext mailbox)"
 requires-python = ">=3.12"
 
 [tool.pytest.ini_options]

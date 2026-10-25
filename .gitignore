@@ -11,7 +11,7 @@ __pycache__/
 data/
 data-dev/
 backend/data*/
-# ...but the Android app's source package se.familychat.app.data is code, not data
+# ...but the Android app's source package se.swahnchat.app.data is code, not data
 !android/app/src/**/data/
 *.db
 *.db-wal
