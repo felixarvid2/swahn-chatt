@@ -1,6 +1,6 @@
 # Swahn Chat handover
 
-> Formerly FamilyChat; renamed to Swahn Chat in v0.5.0 (new app id `se.swahnchat.app`, `SWAHNCHAT_*` settings, `swahnchat.db`). Older entries below that say "FamilyChat" describe the past.
+> Formerly FamilyChat; renamed to Swahn Chat in v0.5.0.
 
 Last updated: 2026-10-24. Branch `ccr-187bef76-iz1nsw` (PR #54: first version; PR #55: security fixes).
 

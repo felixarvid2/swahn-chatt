@@ -1,6 +1,6 @@
 # Swahn Chat
 
-> Formerly FamilyChat; renamed to Swahn Chat in v0.5.0. Upgrading an existing install: see "Byte från FamilyChat till Swahn Chat" in [docs/DRIFTHANDBOK.md](docs/DRIFTHANDBOK.md).
+> Formerly FamilyChat; renamed to Swahn Chat in v0.5.0.
 
 A private, self-hosted messenger for a family (5–15 people). The server is a Raspberry Pi; the client is an Android
 app. Messages, edits and attachments are **end-to-end encrypted on the phones with the Signal protocol (libsignal)**.
