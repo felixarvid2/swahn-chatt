@@ -93,3 +93,77 @@ def test_deleting_is_rate_limited(make_app, factory):
     alice = Factory(app, client).user("alice")
     codes = [alice.delete("/users/me", json={"password": f"wrong-{uuid.uuid4()}"}).status_code for _ in range(7)]
     assert codes[:5] == [403] * 5 and codes[5:] == [429, 429]
+
+
+LOGIN = "/api/v1/auth/login"
+WRONG = "wrong-password-xyz"
+
+
+def login(client, name="alice", password=PASSWORD):
+    return client.post(LOGIN, json={"username": name, "password": password, "device_name": "x"})
+
+
+def test_wrong_reauth_passwords_count_toward_the_login_lockout(make_app, factory_for=None):
+    from tests.conftest import Factory
+
+    app, client = make_app(rate_limit_enabled=True)
+    alice = Factory(app, client).user("alice")
+    # 10 failures through the two re-auth endpoints (the per-minute limit is 5 per endpoint)
+    for _ in range(5):
+        assert alice.delete("/users/me", json={"password": WRONG}).status_code == 403
+        assert (
+            alice.put(
+                "/users/me/password", {"current_password": WRONG, "new_password": "n3w-password-xyz!"}
+            ).status_code
+            == 403
+        )
+    # locked: the login is refused even with the right password, and so are the re-auth endpoints
+    r = login(client)
+    assert r.status_code == 429 and r.json()["code"] == "rate_limited"
+    assert alice.delete("/users/me", json={"password": PASSWORD}).status_code == 429
+    assert (
+        alice.put("/users/me/password", {"current_password": PASSWORD, "new_password": "n3w-password-xyz!"}).status_code
+        == 429
+    )
+    assert alice.get("/users/me").status_code == 200  # the account itself is untouched
+
+
+def test_reauth_lockout_survives_a_restart_and_is_audited(make_app):
+    from fastapi.testclient import TestClient
+    from sqlalchemy import func, select
+
+    from app.models import AuditEvent, LoginFailure
+    from tests.conftest import Factory
+
+    app, client = make_app(rate_limit_enabled=True)
+    alice = Factory(app, client).user("alice")
+    for _ in range(5):
+        assert alice.delete("/users/me", json={"password": WRONG}).status_code == 403
+        assert (
+            alice.put(
+                "/users/me/password", {"current_password": WRONG, "new_password": "n3w-password-xyz!"}
+            ).status_code
+            == 403
+        )
+    with app.state.session_factory() as db:
+        assert db.scalar(select(func.count()).select_from(LoginFailure)) == 10
+        actions = [a for (a,) in db.execute(select(AuditEvent.action))]
+        assert actions.count("password_change_failed") == 5 and actions.count("self_delete_failed") == 5
+        details = [
+            d for (d,) in db.execute(select(AuditEvent.details).where(AuditEvent.action == "password_change_failed"))
+        ]
+        assert WRONG not in str(details) and "n3w-password" not in str(details)
+    app2, _ = make_app(rate_limit_enabled=True, database_url=app.state.settings.database_url)
+    r = login(TestClient(app2), password=PASSWORD)
+    assert r.status_code == 429
+
+
+def test_without_failures_the_reauth_endpoints_still_work(make_app):
+    from tests.conftest import Factory
+
+    app, client = make_app(rate_limit_enabled=True)
+    alice = Factory(app, client).user("alice")
+    assert (
+        alice.put("/users/me/password", {"current_password": PASSWORD, "new_password": "n3w-password-xyz!"}).status_code
+        == 204
+    )

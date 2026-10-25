@@ -7,7 +7,16 @@ from sqlalchemy.orm import Session
 
 from app import __version__, clock
 from app.config import Settings
-from app.deps import Principal, get_alerts, get_db, get_ip, get_read_db, get_settings_dep, require_admin
+from app.deps import (
+    Principal,
+    get_alerts,
+    get_db,
+    get_ip,
+    get_read_db,
+    get_settings_dep,
+    require_admin,
+    require_admin_write,
+)
 from app.errors import conflict, error_responses, invalid, not_found
 from app.migrate import code_head, db_revision
 from app.models import Attachment, Device, Invitation, User
@@ -74,7 +83,7 @@ def create_invitation(
 )
 def post_invitation(
     body: InvitationCreate,
-    p: Principal = Depends(require_admin),
+    p: Principal = Depends(require_admin_write),
     ip: str = Depends(get_ip),
     db: Session = Depends(get_db),
 ):
@@ -120,7 +129,7 @@ def list_invitations(_: Principal = Depends(require_admin), db: Session = Depend
 )
 def revoke_invitation(
     invitation_id: str,
-    p: Principal = Depends(require_admin),
+    p: Principal = Depends(require_admin_write),
     ip: str = Depends(get_ip),
     db: Session = Depends(get_db),
 ):
@@ -137,7 +146,7 @@ def revoke_invitation(
 @router.delete("/users/{user_id}", status_code=204, summary="Remove a user", responses=error_responses(404, 409))
 def remove_user(
     user_id: str,
-    p: Principal = Depends(require_admin),
+    p: Principal = Depends(require_admin_write),
     ip: str = Depends(get_ip),
     db: Session = Depends(get_db),
 ):
@@ -161,7 +170,7 @@ def remove_user(
 )
 def issue_password_reset(
     user_id: str,
-    p: Principal = Depends(require_admin),
+    p: Principal = Depends(require_admin_write),
     ip: str = Depends(get_ip),
     db: Session = Depends(get_db),
 ):
@@ -182,7 +191,7 @@ def issue_password_reset(
 def revoke_user_device(
     user_id: str,
     device_id: str,
-    p: Principal = Depends(require_admin),
+    p: Principal = Depends(require_admin_write),
     ip: str = Depends(get_ip),
     db: Session = Depends(get_db),
 ):
@@ -278,7 +287,7 @@ def _active_target(db: Session, user_id: str) -> User:
 )
 def suspend_user(
     user_id: str,
-    p: Principal = Depends(require_admin),
+    p: Principal = Depends(require_admin_write),
     ip: str = Depends(get_ip),
     db: Session = Depends(get_db),
 ):
@@ -287,6 +296,8 @@ def suspend_user(
     if user_id == p.user_id:
         raise conflict("administrators cannot suspend themselves")
     user = _active_target(db, user_id)
+    if user.is_admin and user.suspended_at is None and accounts.active_admin_count(db, excluding=user.id) == 0:
+        raise conflict("the last active administrator cannot be suspended", "last_admin")
     if accounts.suspend_user(db, user):
         audit.record(db, "user_suspended", actor=p.user_id, target_user=user.id, ip=ip, is_admin=user.is_admin)
         db.commit()
@@ -301,7 +312,7 @@ def suspend_user(
 )
 def unsuspend_user(
     user_id: str,
-    p: Principal = Depends(require_admin),
+    p: Principal = Depends(require_admin_write),
     ip: str = Depends(get_ip),
     db: Session = Depends(get_db),
 ):
@@ -321,7 +332,7 @@ def unsuspend_user(
 def update_user(
     user_id: str,
     body: AdminUserUpdate,
-    p: Principal = Depends(require_admin),
+    p: Principal = Depends(require_admin_write),
     ip: str = Depends(get_ip),
     alerts: AdminAlerts = Depends(get_alerts),
     db: Session = Depends(get_db),

@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 
 from app import clock
 from app.config import Settings
-from app.deps import Principal, get_db, get_ip, get_limiter, get_principal, get_read_db, get_settings_dep
+from app.deps import Principal, get_alerts, get_db, get_ip, get_limiter, get_principal, get_read_db, get_settings_dep
 from app.errors import ApiError, conflict, error_responses, invalid, not_found
 from app.models import Attachment, Device, User
 from app.ratelimit import RateLimiter
@@ -19,7 +19,8 @@ from app.schemas import (
     UserSettingsUpdate,
 )
 from app.security import hash_password, verify_password
-from app.services import accounts, audit, presence
+from app.services import accounts, audit, lockout, presence
+from app.services.alerts import AdminAlerts
 from app.services.views import devices_out_db, user_out
 
 router = APIRouter(prefix="/users", tags=["users"], responses=error_responses(401))
@@ -118,6 +119,7 @@ def delete_me(
     p: Principal = Depends(get_principal),
     settings: Settings = Depends(get_settings_dep),
     limiter: RateLimiter = Depends(get_limiter),
+    alerts: AdminAlerts = Depends(get_alerts),
     addr: str = Depends(get_ip),
     rdb: Session = Depends(get_read_db),
     db: Session = Depends(get_db),
@@ -126,9 +128,12 @@ def delete_me(
     devices, sessions and keys are revoked, the user leaves every conversation (their messages stay in them), and
     their avatar and unreferenced attachments become garbage-collectable."""
     limiter.check(f"self-delete:{p.user_id}", 5)
+    lockout.ensure_not_locked(limiter, settings, p.username)  # the same per-username lockout as the login
     current = rdb.scalar(select(User.password_hash).where(User.id == p.user_id))
     rdb.rollback()  # no transaction while Argon2 runs
     if current is None or not verify_password(settings, current, body.password):
+        if lockout.record_failure(db, limiter, settings, p.username):
+            alerts.send("login_lockout")
         audit.record(db, "self_delete_failed", actor=p.user_id, target_user=p.user_id, ip=addr)
         db.commit()
         raise ApiError(403, "invalid_credentials", "password is wrong")
@@ -154,14 +159,20 @@ def change_password(
     p: Principal = Depends(get_principal),
     settings: Settings = Depends(get_settings_dep),
     limiter: RateLimiter = Depends(get_limiter),
+    alerts: AdminAlerts = Depends(get_alerts),
     addr: str = Depends(get_ip),
     rdb: Session = Depends(get_read_db),
     db: Session = Depends(get_db),
 ):
     limiter.check(f"password:{p.user_id}", 5)
+    lockout.ensure_not_locked(limiter, settings, p.username)  # the same per-username lockout as the login
     current = rdb.scalar(select(User.password_hash).where(User.id == p.user_id))
     rdb.rollback()  # no transaction while Argon2 runs
     if current is None or not verify_password(settings, current, body.current_password):
+        if lockout.record_failure(db, limiter, settings, p.username):
+            alerts.send("login_lockout")
+        audit.record(db, "password_change_failed", actor=p.user_id, target_user=p.user_id, ip=addr)
+        db.commit()
         raise ApiError(403, "invalid_credentials", "current password is wrong")
     new_hash = hash_password(settings, body.new_password)
     user = db.get(User, p.user_id)

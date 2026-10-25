@@ -23,6 +23,8 @@ from app.services import stats
 # Seconds. Fine enough for a Pi (tens of ms for a message send, seconds for an Argon2 login or an upload).
 BUCKETS = (0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0)
 CONTENT_TYPE = "text/plain; version=0.0.4; charset=utf-8"
+METHODS = frozenset({"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"})
+OTHER_METHOD = "OTHER"  # any other (made-up) method: one series, not one per string a client sends
 UNMATCHED = "unmatched"  # no route matched (404/405 noise from scanners): one series, not one per URL
 
 
@@ -45,7 +47,7 @@ class HttpMetrics:
         self._hist: dict[tuple[str, str, str], list[float]] = {}  # per bucket (+Inf last), then [sum]
 
     def observe(self, method: str, route: str, status: int, seconds: float) -> None:
-        key = (method, route, str(status))
+        key = (method if method in METHODS else OTHER_METHOD, route, str(status))
         with self._lock:
             self._counts[key] = self._counts.get(key, 0) + 1
             h = self._hist.setdefault(key, [0.0] * (len(BUCKETS) + 2))

@@ -3,8 +3,13 @@
 import threading
 
 import pytest
+from sqlalchemy import select
 from starlette.websockets import WebSocketDisconnect
 
+from app.deps import Principal, require_admin_write
+from app.errors import ApiError
+from app.models import User
+from app.services import accounts
 from tests.conftest import PASSWORD
 
 WS = "/api/v1/ws"
@@ -197,3 +202,55 @@ def admin_listing(*actors):
         if r.status_code == 200:
             return r.json()
     raise AssertionError("nobody can list users")
+
+
+# ---------------------------------------------------------------- stale principal / races
+
+
+def test_two_admins_cannot_suspend_each_other_at_the_same_time(admin, alice, app):
+    admin.patch(f"/admin/users/{alice.id}", {"is_admin": True})
+    for _ in range(5):  # a race is probabilistic: repeat it
+        start, results = threading.Barrier(2), []
+
+        def suspend(actor, target, start=start, results=results):
+            start.wait()
+            results.append(actor.post(f"/admin/users/{target.id}/suspend").status_code)
+
+        threads = [
+            threading.Thread(target=suspend, args=(admin, alice)),
+            threading.Thread(target=suspend, args=(alice, admin)),
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(30)
+        # the loser was suspended by the winner before its write transaction began: 403 account_suspended
+        assert sorted(results) == [204, 403], results
+        with app.state.session_factory() as db:
+            assert accounts.active_admin_count(db) == 1
+            for u in db.scalars(select(User)).all():
+                u.suspended_at = None
+            db.commit()
+
+
+def test_a_stale_admin_principal_is_rechecked_inside_the_write_transaction(admin, alice, bob, app):
+    """The principal is read before the handler; if the caller was demoted in between, the write is refused."""
+    admin.patch(f"/admin/users/{alice.id}", {"is_admin": True})
+    principal = alice  # alice authenticated as an administrator ...
+    assert admin.patch(f"/admin/users/{alice.id}", {"is_admin": False}).status_code == 200  # ... and then was demoted
+    with app.state.session_factory() as db:
+        p = Principal(alice.id, alice.device_id, "s", "alice", True)
+        with pytest.raises(ApiError) as e:
+            require_admin_write(p, db)
+        assert e.value.status == 403
+    assert principal.post(f"/admin/users/{bob.id}/suspend").status_code == 403
+
+
+def test_suspending_the_last_active_administrator_is_refused(admin, alice, app):
+    admin.patch(f"/admin/users/{alice.id}", {"is_admin": True})
+    assert admin.post(f"/admin/users/{alice.id}/suspend").status_code == 204
+    # the only other administrator is suspended: the remaining one cannot suspend herself, and nobody else can act
+    r = admin.post(f"/admin/users/{admin.id}/suspend")
+    assert r.status_code == 409  # self-suspension guard
+    with app.state.session_factory() as db:
+        assert accounts.active_admin_count(db) == 1

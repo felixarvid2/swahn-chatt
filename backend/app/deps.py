@@ -145,3 +145,22 @@ def require_admin(p: Principal = Depends(get_principal)) -> Principal:
     if not p.is_admin:
         raise ApiError(403, "forbidden", "administrator only")
     return p
+
+
+def require_admin_write(p: Principal = Depends(require_admin), db: Session = Depends(get_db)) -> Principal:
+    """`require_admin` for routes that write. The principal was read before the handler ran, so a concurrent request
+    may have suspended, removed or demoted this admin since. Writers are serialised by the first statement of the
+    request's write transaction (BEGIN IMMEDIATE / advisory lock, see db.py), so this fresh read, made in that same
+    transaction (get_db is shared with the handler), sees every earlier writer's commit and nothing changes before
+    the handler commits. Two admins suspending each other can therefore never both succeed."""
+    row = db.execute(select(User.is_admin, User.disabled_at, User.suspended_at).where(User.id == p.user_id)).first()
+    if row is None or row.disabled_at is not None:
+        db.rollback()
+        raise unauthorized("session is no longer valid")
+    if row.suspended_at is not None:
+        db.rollback()
+        raise account_suspended()
+    if not row.is_admin:
+        db.rollback()
+        raise ApiError(403, "forbidden", "administrator only")
+    return p

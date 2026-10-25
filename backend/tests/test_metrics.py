@@ -134,3 +134,19 @@ def test_gauges(local, app, client, alice, bob, factory):
 
 def test_metrics_is_not_part_of_the_api_document(app):
     assert not [p for p in app.openapi()["paths"] if "metrics" in p]
+
+
+def test_made_up_methods_and_urls_do_not_multiply_the_series(app, local):
+    import random
+    import string
+
+    rnd = random.Random(7)
+    for i in range(1000):
+        method = "".join(rnd.choices(string.ascii_uppercase, k=rnd.randint(3, 12)))
+        local.request(method, f"/api/v1/nothing-{i}/{rnd.random()}")
+    text = local.get("/metrics").text
+    series = [lab for n, lab, _ in samples(text) if n == "familychat_http_requests_total"]
+    assert len(series) <= 10
+    assert {lab["method"] for lab in series} <= {"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "OTHER"}
+    assert {lab["route"] for lab in series if lab["method"] == "OTHER"} == {"unmatched"}
+    assert value(text, "familychat_http_requests_total", method="OTHER", route="unmatched", status="404") >= 900
