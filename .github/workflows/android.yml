@@ -125,7 +125,9 @@ jobs:
           target: google_apis
           arch: x86_64
           force-avd-creation: false
-          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          # Cold boot: after loading the cached snapshot the emulator reported boot_completed before system services
+          # (input) were up, and the runner's unlock key event failed before any test ran.
+          emulator-options: -no-snapshot -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: true
           working-directory: familychat/android
           script: ./scripts/run-instrumented.sh
