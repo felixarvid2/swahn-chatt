@@ -119,7 +119,13 @@ class WebRtcLoopbackTest {
     /** A call ended on another thread must never reach the disposed PeerConnection: every operation on a closed session is cancelled. */
     @Test fun aClosedSessionCancelsEveryOperationAndIgnoresCandidates() = runBlocking<Unit> {
         val factory = WebRtcMediaSessionFactory(appContext)
-        val session = factory.create(emptyList(), relayOnly = false, video = false, listener = Side("closed"))
+        // No peer: local candidates (they can arrive before close()) and states are just dropped.
+        val alone = object : MediaSession.Listener {
+            override fun onLocalCandidate(candidate: IceCandidate) = Unit
+
+            override fun onConnectionState(state: MediaConnectionState) = Unit
+        }
+        val session = factory.create(emptyList(), relayOnly = false, video = false, listener = alone)
         val offer = session.createOffer()
         session.close()
         assertFailsWith<CancellationException> { session.createOffer() }
