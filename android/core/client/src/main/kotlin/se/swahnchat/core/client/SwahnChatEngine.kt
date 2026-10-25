@@ -450,6 +450,15 @@ class SwahnChatEngine(
         return c.members.firstOrNull { it.userId != me }?.userId
     }
 
+    /**
+     * True when the device [deviceId] of [userId] is unverified and was created less than [maxAgeMs] ago by the server's
+     * clock, or is not in the local device list (a call is only locked on to listed devices, so this is a safe default).
+     */
+    suspend fun isNewUnverifiedDevice(userId: String, deviceId: String, maxAgeMs: Long): Boolean {
+        val device = ctx.store.getDevices(userId).firstOrNull { it.id == deviceId } ?: return true
+        return !isVerified(deviceId) && ctx.serverNow() - device.createdAt < maxAgeMs
+    }
+
     /** The current time on the server's clock as far as known (the local clock until a response told the difference). */
     fun serverNow(): Long = ctx.serverNow()
 

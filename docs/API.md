@@ -250,7 +250,10 @@ nothing on the server side; their devices are excluded from future envelopes.
 - `kind: "call"` is the signalling channel for 1:1 audio/video calls (offer, answer, ICE candidates, hangup, busy;
   the encrypted content decides which). Only in `direct` conversations (`409 calls_direct_only` otherwise), no
   `target_message_id`, no attachments (`422`). It carries envelopes for the full device set like a message, so all
-  of the callee's devices ring and the caller's other devices learn the outcome; the server never sees the SDP.
+  of the callee's devices ring and the caller's other devices learn the outcome; the server never sees the SDP. Inside the
+  encrypted content the `call` object is `{call_id, action, video, sdp?, candidates?, reason?, sent_at?}`; `sent_at` is the
+  sender's clock in epoch milliseconds (always set by current clients, which drop an offer without it or more than 5 minutes
+  from their own clock).
   It is **not a message** for the server: no `last_message_*`/`updated_at`/unread change, it ignores
   `disappearing_seconds`, is never in `GET /conversations/{id}/messages`, and cannot be edited, deleted or reacted
   to. It is synchronised as an ordinary `message` event with `data.kind: "call"`. Retention is short: the hourly

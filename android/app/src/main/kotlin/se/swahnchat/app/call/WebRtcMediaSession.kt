@@ -1,5 +1,6 @@
 package se.swahnchat.app.call
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -26,7 +27,9 @@ import org.webrtc.IceCandidate as RtcIceCandidate
  *
  * Threading: WebRTC invokes the observer (and so the [MediaSession.Listener]) on its signalling thread; the suspend
  * functions resume on that thread too. [lock] guards the candidate queue and the closed flag only; the PeerConnection is never
- * called while it is held (close() blocks on the signalling thread, which fires the observer). Remote candidates that arrive before the remote description is set (the signalling path does not order them) are held back
+ * called while it is held (close() blocks on the signalling thread, which fires the observer): every call into it is
+ * preceded by a check of [closed] under the lock ([ensureOpen]: the suspend functions throw [CancellationException], the
+ * candidate paths just stop), then the lock is released and the call made. Remote candidates that arrive before the remote description is set (the signalling path does not order them) are held back
  * and added right after it.
  *
  * Neither the SDP nor candidates are ever logged.
@@ -95,21 +98,21 @@ class WebRtcMediaSession internal constructor(
     }
 
     override suspend fun createOffer(): String {
-        val offer = createDescription { peerConnection.createOffer(it, MediaConstraints()) }
-        setDescription { peerConnection.setLocalDescription(it, offer) }
+        val offer = createDescription { ensureOpen(); peerConnection.createOffer(it, MediaConstraints()) }
+        setDescription { ensureOpen(); peerConnection.setLocalDescription(it, offer) }
         return offer.description
     }
 
     override suspend fun acceptOffer(sdp: String): String {
-        setDescription { peerConnection.setRemoteDescription(it, SessionDescription(SessionDescription.Type.OFFER, sdp)) }
+        setDescription { ensureOpen(); peerConnection.setRemoteDescription(it, SessionDescription(SessionDescription.Type.OFFER, sdp)) }
         onRemoteDescriptionSet()
-        val answer = createDescription { peerConnection.createAnswer(it, MediaConstraints()) }
-        setDescription { peerConnection.setLocalDescription(it, answer) }
+        val answer = createDescription { ensureOpen(); peerConnection.createAnswer(it, MediaConstraints()) }
+        setDescription { ensureOpen(); peerConnection.setLocalDescription(it, answer) }
         return answer.description
     }
 
     override suspend fun acceptAnswer(sdp: String) {
-        setDescription { peerConnection.setRemoteDescription(it, SessionDescription(SessionDescription.Type.ANSWER, sdp)) }
+        setDescription { ensureOpen(); peerConnection.setRemoteDescription(it, SessionDescription(SessionDescription.Type.ANSWER, sdp)) }
         onRemoteDescriptionSet()
     }
 
@@ -120,7 +123,7 @@ class WebRtcMediaSession internal constructor(
             if (!remoteDescriptionSet) pendingRemoteCandidates += converted
             remoteDescriptionSet
         }
-        if (ready) converted.forEach { peerConnection.addIceCandidate(it) }
+        if (ready) addCandidates(converted)
     }
 
     override fun setMuted(muted: Boolean) {
@@ -149,7 +152,22 @@ class WebRtcMediaSession internal constructor(
             remoteDescriptionSet = true
             pendingRemoteCandidates.toList().also { pendingRemoteCandidates.clear() }
         }
-        pending.forEach { peerConnection.addIceCandidate(it) }
+        addCandidates(pending)
+    }
+
+    /** Throws [CancellationException] when the call has been closed (on any thread): checked under [lock], then released before the call. */
+    private fun ensureOpen() {
+        if (!isOpen()) throw CancellationException("media session closed")
+    }
+
+    private fun isOpen() = synchronized(lock) { !closed }
+
+    /** Adds candidates one by one, each only while the session is open (a call ended on another thread disposes the connection). */
+    private fun addCandidates(candidates: List<RtcIceCandidate>) {
+        for (c in candidates) {
+            if (!isOpen()) return
+            peerConnection.addIceCandidate(c)
+        }
     }
 
     private suspend fun createDescription(start: (SdpResultObserver) -> Unit): SessionDescription =

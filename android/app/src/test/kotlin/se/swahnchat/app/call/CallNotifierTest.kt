@@ -128,6 +128,22 @@ class CallNotifierTest {
         assertFalse(info.exported)
     }
 
+    @Test fun `a call via a new unverified device says so in the subtitle and the privacy setting still applies to the name`() {
+        signalling.newDevice = true
+        ring()
+        assertEquals("Röstsamtal – ny enhet", shadowOf(incoming()!!).contentText?.toString())
+        assertEquals("Bertil", title(incoming()!!))
+    }
+
+    @Test fun `a new device reveals no name when notifications are hidden`() {
+        signalling.newDevice = true
+        prefs.setNotificationPrivacy(NotificationPrivacy.HIDDEN)
+        ring("call-2", video = true)
+        val n = incoming()!!
+        assertEquals("Inkommande samtal", title(n))
+        assertEquals("Videosamtal – ny enhet", shadowOf(n).contentText?.toString())
+    }
+
     @Test fun `a video call says so`() {
         ring(video = true)
         assertEquals("Videosamtal", shadowOf(incoming()!!).contentText?.toString())

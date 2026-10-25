@@ -18,6 +18,8 @@ object CallAction {
 /**
  * One step of a 1:1 call's signalling, end-to-end encrypted like a message: the server never sees the SDP, the ICE
  * candidates or whether it is an audio or a video call. [sdp] is set for offers and answers, [candidates] for ICE.
+ * [sentAt] is the sender's clock (epoch ms): the sender always sets it, it is nullable only so older signals still decode;
+ * a receiver drops an offer without it or far from its own clock (a server cannot hold an offer back and replay it later).
  */
 @Serializable
 data class CallSignal(
@@ -27,6 +29,7 @@ data class CallSignal(
     @SerialName("sdp") val sdp: String? = null,
     @SerialName("candidates") val candidates: List<IceCandidate>? = null,
     @SerialName("reason") val reason: String? = null,
+    @SerialName("sent_at") val sentAt: Long? = null,
 )
 
 /** A WebRTC ICE candidate as carried in a [CallSignal]. */

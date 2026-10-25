@@ -24,6 +24,12 @@ interface CallSignalling {
     /** Adds the history [notice] of the call [callId] to the conversation, on this phone only (nothing is sent). */
     suspend fun recordCall(conversationId: String, callId: String, notice: SystemEvent.Call)
 
+    /**
+     * True when [deviceId] of [userId] is not verified (safety number not marked verified) and was created less than
+     * [NEW_DEVICE_DAYS] days ago, or is unknown. The call is locked on to that device; see [CallState.InCall.peerDeviceNew].
+     */
+    suspend fun isNewUnverifiedDevice(userId: String, deviceId: String): Boolean
+
     /** The current time on the server's clock, to judge how old a signal is. */
     fun serverNow(): Long
 }
@@ -37,5 +43,12 @@ class EngineCallSignalling(private val engine: SwahnChatEngine) : CallSignalling
     override suspend fun recordCall(conversationId: String, callId: String, notice: SystemEvent.Call) =
         engine.recordCallNotice(conversationId, callId, notice)
 
+    override suspend fun isNewUnverifiedDevice(userId: String, deviceId: String): Boolean =
+        engine.isNewUnverifiedDevice(userId, deviceId, NEW_DEVICE_DAYS * MS_PER_DAY)
+
     override fun serverNow(): Long = engine.serverNow()
+
+    private companion object {
+        const val MS_PER_DAY = 86_400_000L
+    }
 }

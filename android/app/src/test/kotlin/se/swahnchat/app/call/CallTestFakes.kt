@@ -25,6 +25,9 @@ class TestSignalling : CallSignalling {
     val sent = ArrayList<CallSignal>()
     val notices = ArrayList<SystemEvent.Call>()
 
+    /** Whether the other member's device counts as new and unverified. */
+    var newDevice = false
+
     override val signals: Flow<CallSignalEvent> get() = flow
 
     override suspend fun send(conversationId: String, signal: CallSignal) {
@@ -39,6 +42,8 @@ class TestSignalling : CallSignalling {
         notices += notice
     }
 
+    override suspend fun isNewUnverifiedDevice(userId: String, deviceId: String): Boolean = newDevice
+
     override fun serverNow(): Long = System.currentTimeMillis()
 
     /** The other member's phone calls (an offer), or acts on the call [callId] with [action]. */
@@ -46,7 +51,7 @@ class TestSignalling : CallSignalling {
         flow.tryEmit(CallSignalEvent(DIRECT, user, device, fromSelf, System.currentTimeMillis(), signal))
     }
 
-    fun offer(callId: String, video: Boolean = false) = receive(CallSignal(callId, CallAction.OFFER, video, sdp = SDP))
+    fun offer(callId: String, video: Boolean = false) = receive(CallSignal(callId, CallAction.OFFER, video, sdp = SDP, sentAt = System.currentTimeMillis()))
 
     fun hangup(callId: String) = receive(CallSignal(callId, CallAction.HANGUP))
 

@@ -549,6 +549,9 @@
     <string name="call_ended_missed">Missed call</string>
     <string name="call_ended_elsewhere">Answered on another device</string>
     <string name="call_ended_failed">The call could not be connected</string>
+    <string name="call_new_device_warning">The call goes via a new device of %1$s that is not verified. Compare the safety number if you are unsure.</string>
+    <string name="call_new_device_warning_anonymous">The call goes via a new device of the other person that is not verified. Compare the safety number if you are unsure.</string>
+    <string name="call_kind_new_device">%1$s – new device</string>
     <string name="call_mute">Mute microphone</string>
     <string name="call_unmute">Unmute microphone</string>
     <string name="call_speaker_on">Speaker on</string>

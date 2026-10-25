@@ -32,7 +32,7 @@ class FakeServer {
         val id: String, val userId: String, val number: Int, val name: String,
         var keys: UploadKeysRequest? = null,
         val ec: ArrayDeque<OneTimePreKeyDto> = ArrayDeque(), val pq: ArrayDeque<PqPreKeyDto> = ArrayDeque(),
-        var revoked: Boolean = false, var acked: Long = 0,
+        var revoked: Boolean = false, var acked: Long = 0, var createdAt: Long = 0,
     )
 
     class UserRec(val id: String, val username: String, var displayName: String, val password: String, val isAdmin: Boolean)
@@ -190,7 +190,7 @@ class FakeServer {
     )
 
     private fun userDto(u: UserRec) = User(u.id, u.username, u.displayName, null, u.isAdmin, 0)
-    private fun deviceDto(d: DeviceRec) = Device(d.id, d.userId, d.number, d.name, 0, 0, d.keys?.identityKey)
+    private fun deviceDto(d: DeviceRec) = Device(d.id, d.userId, d.number, d.name, d.createdAt, 0, d.keys?.identityKey)
 
     // --- internals ----------------------------------------------------------------------------------------------------
 

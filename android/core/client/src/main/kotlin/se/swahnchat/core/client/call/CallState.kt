@@ -37,6 +37,13 @@ sealed interface CallState {
         val conversationId: String
         val peerUserId: String
         val video: Boolean
+
+        /**
+         * True when the device this call is locked on to (callee: the offering device; caller: the first answering
+         * device) is not verified and was added less than [NEW_DEVICE_DAYS] days ago: a device someone may have added to
+         * the other person's account. The call screen warns about it.
+         */
+        val peerDeviceNew: Boolean
     }
 
     /** We called and the callee's devices ring. */
@@ -45,6 +52,7 @@ sealed interface CallState {
         override val conversationId: String,
         override val peerUserId: String,
         override val video: Boolean,
+        override val peerDeviceNew: Boolean = false,
     ) : InCall
 
     /** Someone called us; accept with [CallManager.accept] or [CallManager.reject]. */
@@ -53,6 +61,7 @@ sealed interface CallState {
         override val conversationId: String,
         override val peerUserId: String,
         override val video: Boolean,
+        override val peerDeviceNew: Boolean = false,
     ) : InCall
 
     /** Answered, the media connection is being established. [outgoing] is true for the caller. */
@@ -62,6 +71,7 @@ sealed interface CallState {
         override val peerUserId: String,
         override val video: Boolean,
         val outgoing: Boolean,
+        override val peerDeviceNew: Boolean = false,
     ) : InCall
 
     /** Media flows; [since] is the clock time (ms) it connected. */
@@ -72,7 +82,11 @@ sealed interface CallState {
         override val video: Boolean,
         val outgoing: Boolean,
         val since: Long,
+        override val peerDeviceNew: Boolean = false,
     ) : InCall
 
     data class Ended(val callId: String, val reason: EndReason) : CallState
 }
+
+/** A device that is unverified and younger than this many days counts as new ([CallState.InCall.peerDeviceNew]). */
+const val NEW_DEVICE_DAYS = 7L

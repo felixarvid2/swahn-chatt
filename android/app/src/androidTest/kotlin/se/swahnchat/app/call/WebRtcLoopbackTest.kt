@@ -17,7 +17,9 @@ import se.swahnchat.core.client.call.MediaConnectionState
 import se.swahnchat.core.client.call.MediaSession
 import se.swahnchat.core.model.IceCandidate
 import java.util.concurrent.CopyOnWriteArrayList
+import kotlinx.coroutines.CancellationException
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -112,6 +114,19 @@ class WebRtcLoopbackTest {
         assertNull(callerVideo.remoteVideoTrack.value, "closing clears the remote track")
         assertNull(callerVideo.localVideoTrack, "closing clears the local track")
         assertNull(factory.current.value, "closing clears the factory's current session")
+    }
+
+    /** A call ended on another thread must never reach the disposed PeerConnection: every operation on a closed session is cancelled. */
+    @Test fun aClosedSessionCancelsEveryOperationAndIgnoresCandidates() = runBlocking<Unit> {
+        val factory = WebRtcMediaSessionFactory(appContext)
+        val session = factory.create(emptyList(), relayOnly = false, video = false, listener = Side("closed"))
+        val offer = session.createOffer()
+        session.close()
+        assertFailsWith<CancellationException> { session.createOffer() }
+        assertFailsWith<CancellationException> { session.acceptOffer(offer) }
+        assertFailsWith<CancellationException> { session.acceptAnswer(offer) }
+        session.addRemoteCandidates(listOf(IceCandidate("0", 0, "candidate:1 1 udp 1 10.0.0.1 9 typ host"))) // no crash
+        session.close() // twice is fine
     }
 
     private companion object {

@@ -444,7 +444,8 @@ class TwoUserEndToEndTest {
             val textsBefore = bob.texts(conv)
             val id = aliceCalls.startCall(conv, video = false)
             eventually(timeout, "bob rings") { bobCalls.state.value is CallState.Incoming }
-            assertEquals(CallState.Incoming(id, conv, alice.userId, false), bobCalls.state.value)
+            // alice's phone was created a moment ago on the real backend and bob never verified it: the call is flagged
+            assertEquals(CallState.Incoming(id, conv, alice.userId, false, peerDeviceNew = true), bobCalls.state.value)
             // the offer reached bob end to end encrypted and with the DTLS fingerprint the media layer needs
             bobCalls.accept()
             eventually(timeout, "alice gets the answer") { aliceCalls.state.value is CallState.Connecting }

@@ -38,6 +38,9 @@ class FakeSignalling(val net: FakeNet, val userId: String, val deviceId: String)
     var turn: () -> TurnCredentials = { TurnCredentials(listOf("stun:s:3478", "turn:t:3478"), "user", "secret", 3600) }
     var turnFetches = 0
 
+    /** Which (user, device) counts as new and unverified; by default none does. */
+    var newDevice: (String, String) -> Boolean = { _, _ -> false }
+
     init {
         net.phones += this
     }
@@ -61,6 +64,8 @@ class FakeSignalling(val net: FakeNet, val userId: String, val deviceId: String)
     override suspend fun recordCall(conversationId: String, callId: String, notice: SystemEvent.Call) {
         notices += Triple(conversationId, callId, notice)
     }
+
+    override suspend fun isNewUnverifiedDevice(userId: String, deviceId: String): Boolean = newDevice(userId, deviceId)
 
     override fun serverNow(): Long = net.now()
 

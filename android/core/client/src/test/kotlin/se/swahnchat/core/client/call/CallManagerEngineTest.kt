@@ -70,4 +70,29 @@ class CallManagerEngineTest {
         }
         assertFailsWith<IllegalArgumentException> { a.manager.startCall("nope", video = false) }
     }
+
+    @Test
+    fun `a device is new when unverified and younger than the window, by the directory's created_at`() = runBlocking<Unit> {
+        val alice = TestClient(server, "alice", scope).also { it.signUp() }
+        val bob = TestClient(server, "bob", scope).also { it.signUp() }
+        alice.engine.refreshDirectory()
+        alice.engine.createDirect(bob.userId()) // the devices of a user are listed once there is a conversation with them
+        val day = 86_400_000L
+        val week = 7 * day
+        val bobDevice = bob.deviceIdOnServer()
+        suspend fun check(createdAt: Long): Boolean {
+            server.devices.getValue(bobDevice).createdAt = createdAt
+            alice.engine.refreshDirectory()
+            return alice.engine.isNewUnverifiedDevice(bob.userId(), bobDevice, week)
+        }
+        val now = System.currentTimeMillis()
+        assertTrue(check(now - day), "one day old and unverified")
+        assertTrue(check(now - 6 * day))
+        assertTrue(!check(now - 8 * day), "older than seven days")
+        assertTrue(!check(0), "no creation time known counts as old")
+        assertTrue(check(now - day))
+        alice.engine.setVerified(bobDevice, true)
+        assertTrue(!alice.engine.isNewUnverifiedDevice(bob.userId(), bobDevice, week), "verified devices are never new")
+        assertTrue(alice.engine.isNewUnverifiedDevice(bob.userId(), "no-such-device", week), "an unknown device warns")
+    }
 }
