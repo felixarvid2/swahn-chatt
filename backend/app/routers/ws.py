@@ -18,7 +18,7 @@ from app.schemas import UUID_RE
 from app.security import AccessClaims, decode_access_token
 from app.services.sync import latest_cursor
 
-log = logging.getLogger("familychat.ws")
+log = logging.getLogger("swahnchat.ws")
 router = APIRouter()
 
 # Inbound frame limits per connection (sliding windows, seconds).

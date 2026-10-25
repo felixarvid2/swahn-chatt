@@ -1,4 +1,4 @@
-# FamilyChat on Android: build, install, connect
+# Swahn Chat on Android: build, install, connect
 
 This is for the person who builds the app and installs it on the family's phones. The server side is in
 [RASPBERRY_PI_SETUP.md](RASPBERRY_PI_SETUP.md); how the encryption works is in [SECURITY.md](SECURITY.md).
@@ -20,7 +20,7 @@ set to English (Android 13+ can also set the language per app).
 Tell Gradle where the SDK is (the file is git-ignored):
 
 ```bash
-cd familychat/android
+cd android
 echo "sdk.dir=$HOME/Android/Sdk" > local.properties        # adjust the path
 ```
 
@@ -30,8 +30,8 @@ echo "sdk.dir=$HOME/Android/Sdk" > local.properties        # adjust the path
 ./gradlew assembleDebug
 ```
 
-The APK is `familychat/android/app/build/outputs/apk/debug/app-debug.apk`. The debug build has the application id
-`se.familychat.app.debug`, so it installs next to a release build, and it can talk to a development server over plain
+The APK is `android/app/build/outputs/apk/debug/app-debug.apk`. The debug build has the application id
+`se.swahnchat.app.debug`, so it installs next to a release build, and it can talk to a development server over plain
 `http://` on your own network (section 6). Both only exist in debug builds.
 
 ### Release build (for the family)
@@ -41,27 +41,27 @@ signed with **your own key**. Create it once and keep it somewhere safe and **ou
 the key can publish updates that install over your app, and you need the same key for every future update:
 
 ```bash
-keytool -genkeypair -v -keystore ~/familychat-release.jks -alias familychat \
+keytool -genkeypair -v -keystore ~/swahnchat-release.jks -alias swahnchat \
         -keyalg RSA -keysize 4096 -validity 10000
 ./gradlew assembleRelease \
-  -Pfamilychat.keystore=$HOME/familychat-release.jks -Pfamilychat.keystorePassword=... \
-  -Pfamilychat.keyAlias=familychat -Pfamilychat.keyPassword=...
+  -Pswahnchat.keystore=$HOME/swahnchat-release.jks -Pswahnchat.keystorePassword=... \
+  -Pswahnchat.keyAlias=swahnchat -Pswahnchat.keyPassword=...
 ```
 
 The result is `app/build/outputs/apk/release/app-release.apk` (about 30 MB, arm64 and x86_64 only). Without the
-`-Pfamilychat.*` properties the release APK is signed with the debug key: fine to check that minification works, not
+`-Pswahnchat.*` properties the release APK is signed with the debug key: fine to check that minification works, not
 something to hand to other people. You can also put the properties in `~/.gradle/gradle.properties`.
 
-`make apk` and `make apk-release` (in `familychat/`) wrap these commands; `make apk-release` signs when you pass
+`make apk` and `make apk-release` (in `swahnchat/`) wrap these commands; `make apk-release` signs when you pass
 `KEYSTORE=... KEYSTORE_PASSWORD=... KEY_ALIAS=... KEY_PASSWORD=...`.
 
 ### Releases on GitHub (signed APK from CI)
 
-Pushing a tag that starts with `familychat-v` runs `.github/workflows/familychat-release.yml`. It builds the release
-APK, signs it with your key, and creates a GitHub release with `familychat-<version>.apk` and a `.sha256` file:
+Pushing a tag that starts with `swahnchat-v` runs `.github/workflows/release.yml`. It builds the release
+APK, signs it with your key, and creates a GitHub release with `swahnchat-<version>.apk` and a `.sha256` file:
 
 ```bash
-git tag familychat-v1.0.0 && git push origin familychat-v1.0.0
+git tag swahnchat-v1.0.0 && git push origin swahnchat-v1.0.0
 ```
 
 One-time setup. Create the keystore as above (once; keep it and its passwords outside the repository and in a password
@@ -69,25 +69,25 @@ manager, because every future update must be signed with the same key), then sto
 (*Settings, Secrets and variables, Actions*; or with the `gh` CLI):
 
 ```bash
-base64 -w0 ~/familychat-release.jks | gh secret set FAMILYCHAT_KEYSTORE_BASE64     # macOS: base64 -i file | tr -d '\n'
-gh secret set FAMILYCHAT_KEYSTORE_PASSWORD
-gh secret set FAMILYCHAT_KEY_ALIAS            # familychat, the -alias used with keytool
-gh secret set FAMILYCHAT_KEY_PASSWORD
+base64 -w0 ~/swahnchat-release.jks | gh secret set SWAHNCHAT_KEYSTORE_BASE64     # macOS: base64 -i file | tr -d '\n'
+gh secret set SWAHNCHAT_KEYSTORE_PASSWORD
+gh secret set SWAHNCHAT_KEY_ALIAS            # swahnchat, the -alias used with keytool
+gh secret set SWAHNCHAT_KEY_PASSWORD
 ```
 
-The workflow writes the keystore to a temporary file on the runner and passes it as `-Pfamilychat.keystore`,
-`-Pfamilychat.keystorePassword`, `-Pfamilychat.keyAlias` and `-Pfamilychat.keyPassword` (the properties
+The workflow writes the keystore to a temporary file on the runner and passes it as `-Pswahnchat.keystore`,
+`-Pswahnchat.keystorePassword`, `-Pswahnchat.keyAlias` and `-Pswahnchat.keyPassword` (the properties
 `app/build.gradle.kts` reads). If any of the four secrets is missing, the workflow still runs but signs with the public
-debug key, names the file `familychat-<version>-DEBUG-SIGNED.apk` and marks the release as a pre-release: that file is
-only for checking the pipeline. Check a download with `sha256sum -c familychat-<version>.apk.sha256`, and the signing
+debug key, names the file `swahnchat-<version>-DEBUG-SIGNED.apk` and marks the release as a pre-release: that file is
+only for checking the pipeline. Check a download with `sha256sum -c swahnchat-<version>.apk.sha256`, and the signing
 key with `apksigner verify --print-certs`. The GitHub release is public if the repository is public: see the note in
 section 2 about the AGPL and who may get the APK. Use a private repository, or delete the release and hand out the
 artifact yourself, if the family's app should not be downloadable by everybody.
 
 The tag does not set the app's version: raise `versionCode` and `versionName` in `app/build.gradle.kts` before tagging.
 
-Continuous integration (`familychat-android.yml`) builds, tests and lints on every push or pull request touching
-`familychat/android/` or `familychat/backend/`, runs `scripts/run-e2e.sh`, and uploads the debug APK and the test
+Continuous integration (`swahnchat-android.yml`) builds, tests and lints on every push or pull request touching
+`android/` or `backend/`, runs `scripts/run-e2e.sh`, and uploads the debug APK and the test
 reports as artifacts. It needs no `local.properties`: the Android SDK location comes from `ANDROID_HOME`, which
 `android-actions/setup-android` sets. Locally, `ANDROID_HOME` (or `ANDROID_SDK_ROOT`) works the same instead of `local.properties`.
 
@@ -124,7 +124,7 @@ API proxy, and app start (`ActivityScenario`) with the login screen (Compose).
 `qa` is the release build (same R8 rules, minify and resource shrinking on) with the application id suffix `.qa`, signed
 with the debug key, so it can sit next to a real install. `-PtestBuildType=qa` is needed because the tests target one build
 type at a time (the task `connectedQaAndroidTest` only exists with it). The qa run skips the Compose UI test (package
-`se.familychat.app.ui`). The tests use their own database file and Keystore alias, never `familychat.db`, but app start
+`se.swahnchat.app.ui`). The tests use their own database file and Keystore alias, never `swahnchat.db`, but app start
 opens the real one of the `.debug` / `.qa` app, so use a device without data you care about. If a qa test fails with
 `NoSuchMethodError`, `ClassNotFoundException` or a serialization error, a keep rule is missing: fix `app/proguard-rules.pro`
 if the app needs it, `app/proguard-test-rules.pro` only if the test APK alone calls it (that file is only used for `qa`).
@@ -177,33 +177,33 @@ The app needs the server's `https://` address. There are two options, described 
 1. Install the **Tailscale** app from the Play Store or F-Droid on every phone and sign in to the same tailnet as
    the Pi. Keep it connected (Settings, *Always-on VPN* helps).
 2. The address is `https://<pi-name>.<tailnet-name>.ts.net` (`tailscale serve status` on the Pi prints it).
-3. In FamilyChat open the login screen, type the address in *Serveradress*, then tap *Anslutningsinställningar* and
+3. In Swahn Chat open the login screen, type the address in *Serveradress*, then tap *Anslutningsinställningar* and
    *Testa anslutningen*. A green "Servern svarar" with "Krypterad anslutning (TLS)" means it works. If it does not,
    the message says whether the server is unreachable (is Tailscale connected?), has no valid certificate, or
    answers with an error.
 
-**Public domain:** use `https://chat.example.org` (whatever you set as `FAMILYCHAT_DOMAIN`). No extra app is needed.
+**Public domain:** use `https://chat.example.org` (whatever you set as `SWAHNCHAT_DOMAIN`). No extra app is needed.
 
 The app refuses `http://` addresses (release builds) and servers with an invalid certificate. It never offers to "continue
 anyway".
 
 ## 4. Notifications: ntfy as the UnifiedPush distributor
 
-FamilyChat has no Google services. Without push it only fetches messages while it is open and every 15 minutes in the
+Swahn Chat has no Google services. Without push it only fetches messages while it is open and every 15 minutes in the
 background. With push the Pi sends an empty "something new" signal through ntfy and the phone fetches and decrypts the
 messages itself, then shows the notification. The signal contains no sender and no text.
 
 1. On the Pi, set up ntfy ([RASPBERRY_PI_SETUP.md, section 7](RASPBERRY_PI_SETUP.md#7-push-notifications-with-ntfy-unifiedpush)).
 2. On each phone install the **ntfy** app (F-Droid or Play Store). Open it once, open *Settings* and set *Default
    server* to your `NTFY_BASE_URL`.
-3. Open FamilyChat, *Inställningar*, *Pushnotiser (UnifiedPush)* and choose **ntfy**. The line then changes from
+3. Open Swahn Chat, *Inställningar*, *Pushnotiser (UnifiedPush)* and choose **ntfy**. The line then changes from
    "ansluter …" to "Aktiv via ntfy" within a few seconds. (If ntfy is the only distributor the app picks it by itself
    at login.)
 4. **Battery optimisation.** Android stops background apps to save power, and a stopped ntfy means no push. Exempt both
-   apps: *Settings, Apps, ntfy, Battery, Unrestricted* (the name differs by maker), and the same for FamilyChat.
+   apps: *Settings, Apps, ntfy, Battery, Unrestricted* (the name differs by maker), and the same for Swahn Chat.
    Some makers add their own "autostart" or "protected apps" switch (Xiaomi, Huawei, OnePlus, Samsung's *Sleeping
    apps*): turn the apps on there too. https://dontkillmyapp.com lists the steps for every brand.
-5. Android 13 and newer asks for permission to show notifications the first time FamilyChat starts; answer *Allow*.
+5. Android 13 and newer asks for permission to show notifications the first time Swahn Chat starts; answer *Allow*.
    It can be changed later under *Inställningar*, *Notiser för meddelanden*.
 
 If push does not work the app still delivers within 15 minutes, and immediately while it is open.
@@ -278,12 +278,12 @@ the notification arrives (ntfy) and that the conversation opens with the message
 
 | Symptom | Check |
 |---|---|
-| `SDK location not found` | `local.properties` with `sdk.dir=...` in `familychat/android` |
+| `SDK location not found` | `local.properties` with `sdk.dir=...` in `android` |
 | `Unable to strip the following libraries` and a 185 MB APK | Install the NDK (section 1) |
 | "Servern svarar inte" | Tailscale connected on the phone? `https://<address>/healthz` in the phone's browser |
 | "Servern har inget giltigt certifikat" | `tailscale serve` running and HTTPS certificates enabled? Phone clock correct? |
 | Login says wrong password right after a password change | Other devices are logged out by a password change; log in again |
-| Messages appear only when the app is opened | Section 4: distributor chosen? battery optimisation off for ntfy and FamilyChat? |
+| Messages appear only when the app is opened | Section 4: distributor chosen? battery optimisation off for ntfy and Swahn Chat? |
 | "Det gick inte att avkryptera meddelandet" | The message was sent to a device that did not exist yet, or its key changed. Tap *Granska* if shown; otherwise ask the sender to send it again |
 | Red warning "Säkerhetsnumret … har ändrats" | Compare the number with the person (section 6) before accepting |
 
@@ -308,7 +308,7 @@ the notification arrives (ntfy) and that the conversation opens with the message
 ## QR codes, swipe to reply, message info, storage (what to know when testing on a phone)
 
 - **Safety number QR / invitation QR**: see sections 5 and 6. The QR formats are `fcsn1:<base64url of libsignal's scannable
-  fingerprint>` and `familychat://invite?v=1&server=<https url>&code=<code>`. Nothing registers `familychat://invite` with
+  fingerprint>` and `swahnchat://invite?v=1&server=<https url>&code=<code>`. Nothing registers `swahnchat://invite` with
   the system, so another app or a web page cannot open the app on an invitation; scanning happens inside the app.
 - **Swipe to reply**: swipe a message to the right (haptic tick at the threshold); long-press menu and TalkBack's actions
   offer *Svara* as well. Vertical scrolling of the list is not affected.
@@ -333,7 +333,7 @@ the notification arrives (ntfy) and that the conversation opens with the message
   carries its time; the clock starts when the receiver first sees it, then the text, files and search entries are removed from
   that phone (also after a restart). The server's own timer never deletes anything on the phone without that encrypted message.
 - **Several images**: up to 10 in one message with a caption; preview strip with remove; grid in the chat; swipe in the viewer.
-- **Dela till FamilyChat**: other apps can share text, photos, video, audio, PDF and files (`content://` only) to FamilyChat. Pick
+- **Dela till Swahn Chat**: other apps can share text, photos, video, audio, PDF and files (`content://` only) to Swahn Chat. Pick
   the conversation, the composer is filled in and nothing is sent until you press send. With the app lock on, unlock first.
 - **Vidarebefordra**: up to 5 conversations; the copy is encrypted again with new keys and marked *Vidarebefordrat*, and uses the
   target conversation's timer.

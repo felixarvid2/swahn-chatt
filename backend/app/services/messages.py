@@ -118,7 +118,7 @@ def send(db: Session, p: Principal, req: SendMessage) -> tuple[dict, bool]:
         client_ts=req.client_ts,
         server_ts=now,
         # The conversation's timer as it is right now; later changes do not touch messages already stored.
-        # Calls ignore the timer: the maintenance job removes them after FAMILYCHAT_CALL_RETENTION_SECONDS.
+        # Calls ignore the timer: the maintenance job removes them after SWAHNCHAT_CALL_RETENTION_SECONDS.
         expires_at=now + conv.disappearing_seconds * 1000 if conv.disappearing_seconds and req.kind != "call" else None,
     )
     db.add(msg)

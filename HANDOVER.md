@@ -1,4 +1,6 @@
-# FamilyChat handover
+# Swahn Chat handover
+
+> Formerly FamilyChat; renamed to Swahn Chat in v0.5.0 (new app id `se.swahnchat.app`, `SWAHNCHAT_*` settings, `swahnchat.db`). Older entries below that say "FamilyChat" describe the past.
 
 Last updated: 2026-10-24. Branch `ccr-187bef76-iz1nsw` (PR #54: first version; PR #55: security fixes).
 
@@ -99,7 +101,7 @@ Do not relax it without asking.
 ## Next steps (in order)
 
 1. Install the debug APK on two phones and do the first-phone check (end of ANDROID_SETUP.md §8), then fix what breaks (SQLCipher, R8, push).
-2. Build and run the Docker stack on the Pi 4/5. Set up `tailscale serve`, ntfy, `FAMILYCHAT_PUSH_ALLOWED_HOSTS`
+2. Build and run the Docker stack on the Pi 4/5. Set up `tailscale serve`, ntfy, `SWAHNCHAT_PUSH_ALLOWED_HOSTS`
    and the nightly backup timer. Run a restore drill.
 3. Test notification delivery with the app closed and the phone idle (`adb shell dumpsys deviceidle force-idle`).
 4. Create a real release keystore (kept out of git) and build a signed release.

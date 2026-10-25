@@ -19,7 +19,7 @@ from app import clock
 from app.models import User
 from app.services.events import co_member_user_ids
 
-log = logging.getLogger("familychat.presence")
+log = logging.getLogger("swahnchat.presence")
 
 
 def frame(user_id: str, online: bool, last_seen_at: int | None) -> dict:

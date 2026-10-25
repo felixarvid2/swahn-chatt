@@ -12,9 +12,9 @@ from sqlalchemy.pool import NullPool
 
 from app.config import Settings
 
-log = logging.getLogger("familychat.db")
+log = logging.getLogger("swahnchat.db")
 
-READ_ONLY_OPTION = "familychat_read_only"
+READ_ONLY_OPTION = "swahnchat_read_only"
 # pg_advisory_xact_lock key shared by all writing transactions; held until commit or rollback.
 PG_WRITE_LOCK_KEY = 0x46414D43  # "FAMC"
 PG_LOCK_TIMEOUT = "10s"  # like SQLite's busy timeout: fail instead of waiting forever

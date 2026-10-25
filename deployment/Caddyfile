@@ -1,11 +1,11 @@
 # Used by the `caddy` compose profile. Caddy gets and renews Let's Encrypt certificates by itself
-# (ports 80 and 443 must reach this machine and FAMILYCHAT_DOMAIN must point at it).
-{$FAMILYCHAT_DOMAIN} {
+# (ports 80 and 443 must reach this machine and SWAHNCHAT_DOMAIN must point at it).
+{$SWAHNCHAT_DOMAIN} {
 	encode zstd gzip
 
 	# Request bodies are capped here before they reach the backend. Everything except the attachment upload
 	# is small JSON (the backend itself allows 8 MiB). The upload cap must stay a little above
-	# FAMILYCHAT_MAX_ATTACHMENT_MB (default 100 MiB, which the backend enforces exactly): raise CADDY_MAX_UPLOAD
+	# SWAHNCHAT_MAX_ATTACHMENT_MB (default 100 MiB, which the backend enforces exactly): raise CADDY_MAX_UPLOAD
 	# in .env together with it.
 	@upload {
 		method POST
@@ -14,7 +14,7 @@
 
 	# Reverse proxy incl. WebSockets (/api/v1/ws) - no extra configuration needed.
 	# Caddy replaces any client supplied X-Forwarded-For with the real peer address, which is what the
-	# backend's rate limiter uses once FAMILYCHAT_TRUSTED_PROXIES covers the Docker network.
+	# backend's rate limiter uses once SWAHNCHAT_TRUSTED_PROXIES covers the Docker network.
 	handle @upload {
 		request_body {
 			max_size {$CADDY_MAX_UPLOAD:110MB}

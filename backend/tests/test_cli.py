@@ -18,14 +18,14 @@ CODE_RE = re.compile(r"^[A-Z2-9]{5}(-[A-Z2-9]{5}){3}$")
 def run_cli(data_dir, *args, env_name="development", extra_env=None):
     env = {
         **os.environ,
-        "FAMILYCHAT_ENV": env_name,
-        "FAMILYCHAT_DATA_DIR": str(data_dir),
-        "FAMILYCHAT_ARGON2_MEMORY_KB": "8",
-        "FAMILYCHAT_ARGON2_TIME_COST": "1",
-        "FAMILYCHAT_ARGON2_PARALLELISM": "1",
+        "SWAHNCHAT_ENV": env_name,
+        "SWAHNCHAT_DATA_DIR": str(data_dir),
+        "SWAHNCHAT_ARGON2_MEMORY_KB": "8",
+        "SWAHNCHAT_ARGON2_TIME_COST": "1",
+        "SWAHNCHAT_ARGON2_PARALLELISM": "1",
     }
     env.update(extra_env or {})
-    env.pop("FAMILYCHAT_SECRET_KEY", None)
+    env.pop("SWAHNCHAT_SECRET_KEY", None)
     return subprocess.run(
         [sys.executable, "-m", "app.cli", *args], cwd=BACKEND, env=env, capture_output=True, text=True, timeout=120
     )
@@ -44,7 +44,7 @@ def test_create_invite_prints_only_code_on_last_line_and_works_on_fresh_dir(tmp_
     assert r.returncode == 0, r.stderr
     lines = r.stdout.strip().splitlines()
     assert lines and CODE_RE.match(lines[-1]) and len(lines) == 1  # stdout carries nothing but the code
-    assert (data / "familychat.db").exists()
+    assert (data / "swahnchat.db").exists()
     app, client = serve(data)
     with client:
         res = client.post(
@@ -120,7 +120,7 @@ def test_list_and_remove_user(tmp_path):
 def test_seed_dev_refuses_outside_development(tmp_path):
     r = run_cli(tmp_path, "seed-dev", env_name="production")
     assert r.returncode == 1 and "development" in r.stderr
-    assert not (tmp_path / "familychat.db").exists()
+    assert not (tmp_path / "swahnchat.db").exists()
 
 
 def test_seed_dev_creates_users_conversations_and_is_idempotent(tmp_path):
@@ -156,9 +156,9 @@ def test_seed_dev_creates_users_conversations_and_is_idempotent(tmp_path):
 
 
 def test_cli_main_in_process_invite(tmp_path, monkeypatch, capsys):
-    monkeypatch.setenv("FAMILYCHAT_ENV", "development")
-    monkeypatch.setenv("FAMILYCHAT_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("FAMILYCHAT_SECRET_KEY", SECRET)
+    monkeypatch.setenv("SWAHNCHAT_ENV", "development")
+    monkeypatch.setenv("SWAHNCHAT_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("SWAHNCHAT_SECRET_KEY", SECRET)
     assert cli_main(["create-invite"]) == 0
     assert CODE_RE.match(capsys.readouterr().out.strip().splitlines()[-1])
 

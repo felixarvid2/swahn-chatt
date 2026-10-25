@@ -16,16 +16,18 @@ from app.services.backup import BackupError
 
 def _settings() -> Settings:
     # The CLI never signs tokens, so a missing secret must not stop it (production would refuse to start).
-    if len(os.environ.get("FAMILYCHAT_SECRET_KEY", "").encode()) < 32:
+    if len(os.environ.get("SWAHNCHAT_SECRET_KEY", "").encode()) < 32:
         return Settings(secret_key=secrets.token_urlsafe(48))
     return Settings()
 
 
 def _open(settings: Settings):
     from app.db import make_engine, make_session_factory
+    from app.legacy import adopt_legacy_database
     from app.migrate import upgrade
 
     settings.data_dir.mkdir(parents=True, exist_ok=True)
+    adopt_legacy_database(settings)
     upgrade(settings)  # no-op when current; lets the CLI run before the first server start
     return make_session_factory(make_engine(settings.database_url))
 
@@ -172,7 +174,7 @@ def cmd_verify_backup(args, settings: Settings) -> int:
 def cmd_check_config(args, settings: Settings) -> int:
     from app.services import configcheck
 
-    report = configcheck.check(settings, len(os.environ.get("FAMILYCHAT_SECRET_KEY", "").encode()))
+    report = configcheck.check(settings, len(os.environ.get("SWAHNCHAT_SECRET_KEY", "").encode()))
     width = max(len(k) for k, _ in report.settings)
     for key, value in report.settings:
         print(f"{key:<{width}}  {value}")
@@ -189,7 +191,7 @@ def cmd_check_config(args, settings: Settings) -> int:
 
 def cmd_seed_dev(args, settings: Settings) -> int:
     if settings.env != "development":
-        print("seed-dev only runs with FAMILYCHAT_ENV=development", file=sys.stderr)
+        print("seed-dev only runs with SWAHNCHAT_ENV=development", file=sys.stderr)
         return 1
     import uuid
 

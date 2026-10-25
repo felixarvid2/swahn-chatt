@@ -1,8 +1,8 @@
-# FamilyChat API (v1)
+# Swahn Chat API (v1)
 
 This document is the contract between the backend (`backend/`) and the Android client (`android/`).
 The running server also serves a generated OpenAPI document at `/api/v1/openapi.json` and Swagger UI at
-`/api/v1/docs` (disabled when `FAMILYCHAT_ENV=production` unless `FAMILYCHAT_EXPOSE_DOCS=true`).
+`/api/v1/docs` (disabled when `SWAHNCHAT_ENV=production` unless `SWAHNCHAT_EXPOSE_DOCS=true`).
 
 ## Conventions
 
@@ -29,7 +29,7 @@ The running server also serves a generated OpenAPI document at `/api/v1/openapi.
   `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'` (the Swagger UI page at `/api/v1/docs` gets a
   relaxed policy that allows its CDN assets). API responses are `Cache-Control: no-store` unless a route sets its own
   (attachment downloads: `private, no-store`). `Strict-Transport-Security` is sent only when the administrator sets
-  `FAMILYCHAT_HSTS=true` (HTTPS only). Clients can ignore all of these.
+  `SWAHNCHAT_HSTS=true` (HTTPS only). Clients can ignore all of these.
 - Ordering: `seq` values are integers assigned by the server from one monotonic counter. Message `seq` orders
   messages; event `seq` is the sync cursor. They are different counters.
 
@@ -72,7 +72,7 @@ content (see SECURITY.md, "Content is bound to its context").
 | Method | Path | Result |
 |---|---|---|
 | GET | `/healthz` | `200 {"status":"ok"}` (process alive) |
-| GET | `/readyz` | `200 {"status":"ready","migration":"<head>"}` when the database answers, is at the migration head this server ships, and the data volume has enough free space. Otherwise `503 {"status":"unavailable","code":...}` with `database_unavailable`, `migration_mismatch` (plus `migration` and `expected`) or `low_disk` (plus `free_disk_mb` and `min_free_disk_mb`; threshold `FAMILYCHAT_MIN_FREE_DISK_MB`, default 200, `0` turns the check off) |
+| GET | `/readyz` | `200 {"status":"ready","migration":"<head>"}` when the database answers, is at the migration head this server ships, and the data volume has enough free space. Otherwise `503 {"status":"unavailable","code":...}` with `database_unavailable`, `migration_mismatch` (plus `migration` and `expected`) or `low_disk` (plus `free_disk_mb` and `min_free_disk_mb`; threshold `SWAHNCHAT_MIN_FREE_DISK_MB`, default 200, `0` turns the check off) |
 
 ## Authentication
 
@@ -90,13 +90,13 @@ Display name: 1–64 characters. Device name: 1–64 characters.
 | Method | Path | Body | Result |
 |---|---|---|---|
 | POST | `/auth/invite/redeem` | `{code, username, password, display_name, device_name}` | `201 AuthResponse`. `404 invalid_invite` for unknown/expired/used codes, `409 username_taken` |
-| POST | `/auth/login` | `{username, password, device_name}` | `200 AuthResponse`. Every login registers a **new device**. `401 invalid_credentials` (same answer for unknown user and wrong password). `403 account_suspended` when the password is right but the account is suspended (never for a wrong password, so it reveals nothing about usernames). `409 device_limit` when the account already has the maximum number of active devices (default 10, `FAMILYCHAT_MAX_DEVICES_PER_USER`; the `message` says so: remove a device, then log in again). `429 rate_limited` while the username is locked after repeated failures (see below) |
+| POST | `/auth/login` | `{username, password, device_name}` | `200 AuthResponse`. Every login registers a **new device**. `401 invalid_credentials` (same answer for unknown user and wrong password). `403 account_suspended` when the password is right but the account is suspended (never for a wrong password, so it reveals nothing about usernames). `409 device_limit` when the account already has the maximum number of active devices (default 10, `SWAHNCHAT_MAX_DEVICES_PER_USER`; the `message` says so: remove a device, then log in again). `429 rate_limited` while the username is locked after repeated failures (see below) |
 | POST | `/auth/refresh` | `{refresh_token}` | `200 AuthResponse` with a **new** refresh token (`403 account_suspended` while the account is suspended; the session is kept and works again after unsuspending); the old one stops working. Presenting **any** refresh token the session issued earlier (not only the previous one) revokes the whole session and its device (`401 token_reused`) |
 | POST | `/auth/logout` | – (auth) | `204`. Revokes the session and the device, deletes the device's public keys |
 | POST | `/auth/password/reset` | `{code, new_password, device_name}` | `200 AuthResponse`. Redeems a reset code an administrator issued (see below). `404 invalid_reset_code` for unknown, expired, used or replaced codes (or a removed account), `422` for a weak password, `429` like redeem |
 
-- Access tokens are JWT (HS256) valid for 15 minutes (`FAMILYCHAT_ACCESS_TOKEN_MINUTES`). Refresh tokens are
-  random 256-bit values, stored hashed, valid for 60 days (`FAMILYCHAT_REFRESH_TOKEN_DAYS`), sliding on refresh.
+- Access tokens are JWT (HS256) valid for 15 minutes (`SWAHNCHAT_ACCESS_TOKEN_MINUTES`). Refresh tokens are
+  random 256-bit values, stored hashed, valid for 60 days (`SWAHNCHAT_REFRESH_TOKEN_DAYS`), sliding on refresh.
 - Each request re-checks that the session, device and user are still active, so revocation is immediate.
 - An expired access token returns `401 {"code":"token_expired"}`; the client refreshes and retries once.
 - Rate limits (in-process): per client IP (IPv6 clients per /64 prefix) login 10/min and 5/min per IP+username,
@@ -132,12 +132,12 @@ Display name: 1–64 characters. Device name: 1–64 characters.
 | GET | `/admin/stats` | – | `200 {users, active_devices, conversations, messages, undelivered_envelopes, attachments, db_bytes, attachments_bytes, disk_free_bytes, version, migration: {head, current}, uptime_seconds, db_maintenance}`. `db_maintenance` is the last weekly database maintenance run, `null` before the first: `{at, dialect, ok, steps, vacuum, duration_ms, freelist_ratio, error}` (`vacuum` is `done`, `not_needed`, `disk_space`, `busy` (waits for a quiet moment, retried hourly) or `n/a`; `error` is only an exception type name). `users` counts active accounts; `undelivered_envelopes` only those for active devices; `db_bytes` is the SQLite file with its WAL (`null` for other databases); `disk_free_bytes` is free space on the data volume |
 | GET | `/admin/audit?before_id=&limit=` | – | `200 [{id, at, actor_user_id, action, target_user_id, target_id, ip, details}]`, newest first. `limit` 1..200 (default 50); pass the smallest `id` of a page as `before_id` for the next (older) page. See "Audit log" in `SECURITY.md` for the actions |
 
-Monitoring: `GET /metrics` (not under `/api/v1`) serves Prometheus text format: `familychat_http_requests_total` and
-`familychat_http_request_duration_seconds` (histogram) by `method`, `route` (the route template such as
+Monitoring: `GET /metrics` (not under `/api/v1`) serves Prometheus text format: `swahnchat_http_requests_total` and
+`swahnchat_http_request_duration_seconds` (histogram) by `method`, `route` (the route template such as
 `/api/v1/conversations/{conversation_id}`, `unmatched` when nothing matched) and `status`, plus
-`familychat_websocket_connections`, `familychat_push_queue_depth`, `familychat_event_queue_depth` (unacknowledged
-sync events), `familychat_database_size_bytes`, `familychat_disk_free_bytes`, `familychat_uptime_seconds` and
-`familychat_build_info`. There are no per-user labels. Access: a request from this machine (peer `127.0.0.1`/`::1`
+`swahnchat_websocket_connections`, `swahnchat_push_queue_depth`, `swahnchat_event_queue_depth` (unacknowledged
+sync events), `swahnchat_database_size_bytes`, `swahnchat_disk_free_bytes`, `swahnchat_uptime_seconds` and
+`swahnchat_build_info`. There are no per-user labels. Access: a request from this machine (peer `127.0.0.1`/`::1`
 that no proxy forwarded: no `X-Forwarded-For`, `Forwarded` or `X-Real-IP` header) or an administrator's bearer
 token; everybody else gets a plain `404`.
 
@@ -161,7 +161,7 @@ Bootstrap and server-side administration use the CLI (see `docs/RASPBERRY_PI_SET
 | GET | `/users/{user_id}/devices` | – | `200 [Device]` (active devices). For another user who has not opted in to presence, `last_seen_at` is the device's `created_at` (device activity would be presence) |
 | GET | `/devices/me` | – | `200 Device` plus `last_push_at` (when the server last tried to push to this device, `null` if never) and `last_push_status` (HTTP status the push server answered, `0` = no answer such as a network error or timeout, `null` if never). These two fields are shown only here, never to other users |
 | POST | `/devices/me/push/test` | – | `202 {"status":"queued"}`. Queues one push (the usual content-free `{"t":"sync"}`, so older clients simply sync) to the endpoint this device registered; read the outcome from `last_push_at` / `last_push_status` of `GET /devices/me` a moment later. `409 push_not_configured` when no endpoint is registered or the server has no push allow-list in production. Rate limited to 3 per 10 minutes per device (`429`, `Retry-After`) |
-| PUT | `/devices/me/push` | `{kind: "unifiedpush", endpoint: "https://..."}` | `204`. `422` when the endpoint is not https or its host is not in the server's `FAMILYCHAT_PUSH_ALLOWED_HOSTS` (IP-literal hosts only if listed). `409 push_not_configured` when the production server has no allowed hosts configured, i.e. push is unavailable there |
+| PUT | `/devices/me/push` | `{kind: "unifiedpush", endpoint: "https://..."}` | `204`. `422` when the endpoint is not https or its host is not in the server's `SWAHNCHAT_PUSH_ALLOWED_HOSTS` (IP-literal hosts only if listed). `409 push_not_configured` when the production server has no allowed hosts configured, i.e. push is unavailable there |
 | DELETE | `/devices/me/push` | – | `204` |
 
 Push delivery: the server retries a push that failed transiently (network error, timeout, `429`, `5xx`) after 5 s, 30 s and 2 min
@@ -255,7 +255,7 @@ nothing on the server side; their devices are excluded from future envelopes.
   `disappearing_seconds`, is never in `GET /conversations/{id}/messages`, and cannot be edited, deleted or reacted
   to. It is synchronised as an ordinary `message` event with `data.kind: "call"`. Retention is short: the hourly
   maintenance job deletes call messages with their envelopes, delivered or not, once older than
-  `FAMILYCHAT_CALL_RETENTION_SECONDS` (default 600), so a device that was offline gets the event but may see no
+  `SWAHNCHAT_CALL_RETENTION_SECONDS` (default 600), so a device that was offline gets the event but may see no
   content; clients must ignore call events whose `server_ts` is older than the call timeout (about a minute) rather
   than ring. At most 60 call messages per minute per sender (`429 rate_limited`). The push for it is content-free
   like any other (`{"t":"sync"}`) but is sent with high priority (see below). Old clients ignore the unknown kind.
@@ -287,8 +287,8 @@ nothing on the server side; their devices are excluded from future envelopes.
 {"urls": ["stun:pi.example.ts.net:3478", "turn:pi.example.ts.net:3478?transport=udp"],
  "username": "1767225600:<user_id>", "credential": "<base64 HMAC-SHA1(secret, username)>", "ttl": 3600}
 ```
-`username` is `<expiry unix seconds>:<user_id>`; use them as the `iceServers` entry. Without `FAMILYCHAT_TURN_URLS`
-there is no relay: `urls` holds only the optional STUN URLs (`FAMILYCHAT_STUN_URLS`, possibly empty) and
+`username` is `<expiry unix seconds>:<user_id>`; use them as the `iceServers` entry. Without `SWAHNCHAT_TURN_URLS`
+there is no relay: `urls` holds only the optional STUN URLs (`SWAHNCHAT_STUN_URLS`, possibly empty) and
 `username` and `credential` are `null`, so clients still try direct (host) candidates. Fetch fresh credentials per
 call. Setup: RASPBERRY_PI_SETUP.md, section 12.
 
@@ -340,7 +340,7 @@ Server → client:
 - `{"type": "presence", "user_id": "uuid", "online": true, "last_seen_at": 1700000000000}` — only about users who
   opted in (`PATCH /users/me/settings`) and share a conversation with you; sent when their first device connects or
   their last device disconnects (debounced: the first change goes out at once, later changes of the same user at
-  most every 10 s, `FAMILYCHAT_PRESENCE_DEBOUNCE_SECONDS`, and only the state current at that moment). Nothing is
+  most every 10 s, `SWAHNCHAT_PRESENCE_DEBOUNCE_SECONDS`, and only the state current at that moment). Nothing is
   sent for users who did not opt in. When someone switches sharing off, one final frame with `online: false` and
   `last_seen_at: null` tells you to forget what you showed (the same as for any user who does not share). On
   connect there is no snapshot: read `GET /users`. Clients that do not know this type ignore it.
@@ -364,12 +364,12 @@ redacted in server logs, but proxies and other logs may still record it.
 
 `POST /attachments?purpose=message|avatar` with the raw bytes as the body (streamed).
 - `purpose=message`: `Content-Type: application/octet-stream`. The body is the **client-encrypted** file; the
-  server cannot inspect it. Max `FAMILYCHAT_MAX_ATTACHMENT_MB` (default 100).
+  server cannot inspect it. Max `SWAHNCHAT_MAX_ATTACHMENT_MB` (default 100).
 - `purpose=avatar`: `Content-Type: image/jpeg|image/png|image/webp`, max 2 MiB, magic bytes must match the
   type. Avatars are not end-to-end encrypted (they are visible to all users of the server).
 - Optional header `X-Content-SHA256: <hex>`; the server rejects the upload with `422 checksum_mismatch` if the
   received bytes differ.
-- Per-user quota `FAMILYCHAT_USER_QUOTA_MB` (default 2048) → `413 quota_exceeded`.
+- Per-user quota `SWAHNCHAT_USER_QUOTA_MB` (default 2048) → `413 quota_exceeded`.
 - `201 {"id", "purpose", "content_type", "size", "sha256", "created_at"}`.
 
 ### Resumable uploads (large message attachments)
@@ -379,7 +379,7 @@ For files too big to risk on one request. Quota for the whole `size` is reserved
 
 | Method | Path | Body | Result |
 |---|---|---|---|
-| POST | `/attachments/uploads` | `{size: 1.., purpose: "message", sha256?: hex}` | `201 {upload_id, offset: 0, size, expires_at, max_chunk_bytes}`. `413 payload_too_large` above `FAMILYCHAT_MAX_ATTACHMENT_MB`, `413 quota_exceeded`, `429 too_many_uploads` (10 open sessions per user), `429 rate_limited` |
+| POST | `/attachments/uploads` | `{size: 1.., purpose: "message", sha256?: hex}` | `201 {upload_id, offset: 0, size, expires_at, max_chunk_bytes}`. `413 payload_too_large` above `SWAHNCHAT_MAX_ATTACHMENT_MB`, `413 quota_exceeded`, `429 too_many_uploads` (10 open sessions per user), `429 rate_limited` |
 | PATCH | `/attachments/uploads/{id}` | raw bytes, `Content-Type: application/octet-stream`, header `Upload-Offset: <current offset>` | `200 {offset}` (also as header `Upload-Offset`), or `201` with the attachment object after the last byte. At most 8 MiB per request and not beyond `size` (`413 payload_too_large`). `409 offset_mismatch` (body `{"offset": n}` and header `Upload-Offset` name the server's offset), `409 upload_busy` when another chunk of the session is being written, `409 upload_corrupt` if the stored file no longer matches the session (the session is dropped; start again), `422 invalid_request` (missing or bad header, empty chunk), `415`. A request that breaks off leaves no trace: resume at the reported offset |
 | GET / HEAD | `/attachments/uploads/{id}` | – | `200 {upload_id, offset, size, expires_at, max_chunk_bytes}` with headers `Upload-Offset` and `Upload-Length` (HEAD: headers only). Use it to find where to continue |
 

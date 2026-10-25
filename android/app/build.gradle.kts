@@ -8,7 +8,7 @@ plugins {
 }
 
 android {
-    namespace = "se.familychat.app"
+    namespace = "se.swahnchat.app"
     compileSdk = 35
     // Which build type the instrumented tests run against: debug (default) or qa (R8-minified, see below). The tasks are
     // connected<Debug|Qa>AndroidTest; AGP only creates the one for this build type, so CI passes -PtestBuildType=qa.
@@ -16,28 +16,28 @@ android {
     testBuildType = testBuild
 
     defaultConfig {
-        applicationId = "se.familychat.app"
+        applicationId = "se.swahnchat.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 4
-        versionName = "0.4.0"
+        versionCode = 5
+        versionName = "0.5.0"
         // libsignal ships arm64 for phones and x86_64 for emulators (see SECURITY.md)
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // The R8 (qa) run covers crypto, serialization, database and app start; the Compose UI checks need the debug build.
-        if (testBuild == "qa") testInstrumentationRunnerArguments["notPackage"] = "se.familychat.app.ui"
+        if (testBuild == "qa") testInstrumentationRunnerArguments["notPackage"] = "se.swahnchat.app.ui"
     }
 
     signingConfigs {
         // Release builds are signed with a developer-supplied keystore (never committed). Without one the release
         // variant is signed with the debug key so that `assembleRelease` can be verified locally.
         create("release") {
-            val path = providers.gradleProperty("familychat.keystore").orNull
+            val path = providers.gradleProperty("swahnchat.keystore").orNull
             if (path != null) {
                 storeFile = file(path)
-                storePassword = providers.gradleProperty("familychat.keystorePassword").orNull
-                keyAlias = providers.gradleProperty("familychat.keyAlias").orNull
-                keyPassword = providers.gradleProperty("familychat.keyPassword").orNull
+                storePassword = providers.gradleProperty("swahnchat.keystorePassword").orNull
+                keyAlias = providers.gradleProperty("swahnchat.keyAlias").orNull
+                keyPassword = providers.gradleProperty("swahnchat.keyPassword").orNull
             }
         }
     }
@@ -54,7 +54,7 @@ android {
             isShrinkResources = true
             buildConfigField("boolean", "ALLOW_INSECURE_LAN", "false")
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            signingConfig = if (providers.gradleProperty("familychat.keystore").isPresent) {
+            signingConfig = if (providers.gradleProperty("swahnchat.keystore").isPresent) {
                 signingConfigs.getByName("release")
             } else {
                 signingConfigs.getByName("debug")
@@ -219,7 +219,7 @@ dependencies {
 tasks.withType<Test>().configureEach {
     maxHeapSize = "2g"
     // The end-to-end test (RoomEngineE2ETest) reads these; pass them through only when set (scripts/run-e2e.sh sets them).
-    listOf("FAMILYCHAT_TEST_URL", "FAMILYCHAT_TEST_ADMIN_INVITE", "FAMILYCHAT_TEST_APP_ADMIN_INVITE").forEach { name ->
+    listOf("SWAHNCHAT_TEST_URL", "SWAHNCHAT_TEST_ADMIN_INVITE", "SWAHNCHAT_TEST_APP_ADMIN_INVITE").forEach { name ->
         System.getenv(name)?.let { environment(name, it) }
     }
 }

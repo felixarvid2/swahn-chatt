@@ -78,18 +78,18 @@ def test_development_generates_an_ephemeral_secret_with_a_warning(tmp_path, capl
 
 def test_settings_defaults_and_env(tmp_path, monkeypatch):
     s = Settings(env="development", data_dir=tmp_path, secret_key=SECRET)
-    assert s.database_url == f"sqlite:///{(tmp_path / 'familychat.db').resolve()}"
+    assert s.database_url == f"sqlite:///{(tmp_path / 'swahnchat.db').resolve()}"
     assert s.attachments_dir == tmp_path / "attachments"
     assert (s.max_attachment_mb, s.user_quota_mb, s.access_token_minutes, s.refresh_token_days) == (100, 2048, 15, 60)
     assert s.push_allow_http is False and s.expose_docs is False and s.trusted_networks == []
-    monkeypatch.setenv("FAMILYCHAT_ENV", "development")
-    monkeypatch.setenv("FAMILYCHAT_DATA_DIR", str(tmp_path / "d"))
-    monkeypatch.setenv("FAMILYCHAT_MAX_ATTACHMENT_MB", "7")
-    monkeypatch.setenv("FAMILYCHAT_TRUSTED_PROXIES", "10.0.0.0/8, 172.16.0.0/12")
-    monkeypatch.setenv("FAMILYCHAT_ATTACHMENTS_DIR", str(tmp_path / "att"))
+    monkeypatch.setenv("SWAHNCHAT_ENV", "development")
+    monkeypatch.setenv("SWAHNCHAT_DATA_DIR", str(tmp_path / "d"))
+    monkeypatch.setenv("SWAHNCHAT_MAX_ATTACHMENT_MB", "7")
+    monkeypatch.setenv("SWAHNCHAT_TRUSTED_PROXIES", "10.0.0.0/8, 172.16.0.0/12")
+    monkeypatch.setenv("SWAHNCHAT_ATTACHMENTS_DIR", str(tmp_path / "att"))
     e = Settings()
     assert e.max_attachment_mb == 7 and len(e.trusted_networks) == 2 and e.attachments_dir == tmp_path / "att"
-    assert e.sqlite_path == (tmp_path / "d" / "familychat.db").resolve()
+    assert e.sqlite_path == (tmp_path / "d" / "swahnchat.db").resolve()
 
 
 def test_docs_exposure(tmp_path):

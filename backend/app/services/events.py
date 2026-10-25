@@ -14,7 +14,7 @@ from app.hub import Hub
 from app.models import ConversationMember, Device, DeviceKey, Event, User
 from app.services.push import PushService
 
-log = logging.getLogger("familychat.events")
+log = logging.getLogger("swahnchat.events")
 
 
 class Dispatcher:

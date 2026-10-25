@@ -67,7 +67,7 @@ def test_configure_logging_redacts_uvicorn_error_records(capsys):
     state = _snapshot()
     try:
         for h in list(logging.getLogger().handlers):
-            if getattr(h, "_familychat", False):
+            if getattr(h, "_swahnchat", False):
                 logging.getLogger().removeHandler(h)
         configure_logging("INFO")
         _emit_like_uvicorn()

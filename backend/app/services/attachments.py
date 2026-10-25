@@ -22,7 +22,7 @@ from app.models import (
     User,
 )
 
-log = logging.getLogger("familychat.attachments")
+log = logging.getLogger("swahnchat.attachments")
 
 AVATAR_TYPES = {"image/jpeg", "image/png", "image/webp"}
 AVATAR_MAX_BYTES = 2 * 1024 * 1024

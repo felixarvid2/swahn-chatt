@@ -15,7 +15,7 @@ from app.config import Settings
 from app.models import LoginFailure
 from app.ratelimit import RateLimiter
 
-log = logging.getLogger("familychat.lockout")
+log = logging.getLogger("swahnchat.lockout")
 
 # Failed password guesses per username (whatever the client IP, and whether or not the account exists, so the
 # response never reveals which usernames are real): temporary lock after LOGIN_FAILS_PER_HOUR failures within an

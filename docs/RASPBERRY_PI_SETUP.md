@@ -1,6 +1,6 @@
-# Running FamilyChat on a Raspberry Pi
+# Running Swahn Chat on a Raspberry Pi
 
-This guide takes a fresh Raspberry Pi to a running, backed-up FamilyChat server. Architecture and trade-offs are
+This guide takes a fresh Raspberry Pi to a running, backed-up Swahn Chat server. Architecture and trade-offs are
 in [ARCHITECTURE.md](ARCHITECTURE.md), the security model in [SECURITY.md](SECURITY.md).
 
 What you need: a Raspberry Pi 4 or 5 (2 GB RAM is enough), a good microSD card or, better, a USB SSD, and the
@@ -9,7 +9,7 @@ family's Android phones. Everything runs in Docker; the backend is one Python pr
 ## 1. Prepare Raspberry Pi OS (64-bit)
 
 1. Flash **Raspberry Pi OS Lite (64-bit)** with Raspberry Pi Imager. In the Imager's settings set a hostname
-   (for example `familychat`), your user, your SSH key or password, Wi-Fi if needed and your time zone.
+   (for example `swahnchat`), your user, your SSH key or password, Wi-Fi if needed and your time zone.
    The image must be 64-bit (`uname -m` prints `aarch64`).
 2. Boot, `ssh` in and update:
    ```bash
@@ -21,7 +21,7 @@ family's Android phones. Everything runs in Docker; the backend is one Python pr
 4. Prefer an SSD over an SD card: SQLite writes and attachments wear cards out.
 
 **Shortcut:** steps 2 to 4 and 6 (first administrator) are automated by `deployment/install-pi.sh`. Clone the
-repository (step 3), then run `cd familychat/deployment && ./install-pi.sh`. It checks the architecture, RAM, disk and
+repository (step 3), then run `cd deployment && ./install-pi.sh`. It checks the architecture, RAM, disk and
 Docker, writes `.env` with a generated secret (an existing `.env` and secret are never overwritten), asks how the
 phones will reach the server (Tailscale on the host, Tailscale container, Caddy domain, or later) and whether to enable
 push, builds, starts, waits until the backend is healthy and prints the first administrator invitation. It does not
@@ -34,14 +34,14 @@ unattended use. You then only do the Tailscale or router part of step 5 and set 
 curl -fsSL https://get.docker.com | sudo sh
 sudo usermod -aG docker "$USER"      # log out and in again afterwards
 docker compose version                # the compose plugin is included
-sudo systemctl enable docker          # start Docker (and so FamilyChat) after a reboot
+sudo systemctl enable docker          # start Docker (and so Swahn Chat) after a reboot
 ```
 
 ## 3. Get the code and configure it
 
 ```bash
-git clone <your repository url> familychat
-cd familychat/deployment
+git clone <your repository url> swahnchat
+cd deployment
 cp .env.example .env
 chmod 600 .env
 ```
@@ -49,7 +49,7 @@ chmod 600 .env
 Edit `.env`. The one required value is the signing secret:
 
 ```bash
-sed -i "s|^FAMILYCHAT_SECRET_KEY=.*|FAMILYCHAT_SECRET_KEY=$(openssl rand -base64 48)|" .env
+sed -i "s|^SWAHNCHAT_SECRET_KEY=.*|SWAHNCHAT_SECRET_KEY=$(openssl rand -base64 48)|" .env
 ```
 
 (or run `openssl rand -base64 48` yourself and paste it). The server refuses to start in production without a
@@ -109,7 +109,7 @@ Option A, not together with it (same ports).
 
 1. In the Tailscale admin console enable **MagicDNS** and **HTTPS Certificates** (DNS page) and create an **auth key**
    (Settings, Keys). It is only used for the first login.
-2. In `.env` set `TS_AUTHKEY=tskey-auth-...` and, if you like, `TS_HOSTNAME=familychat` (the node name).
+2. In `.env` set `TS_AUTHKEY=tskey-auth-...` and, if you like, `TS_HOSTNAME=swahnchat` (the node name).
 3. ```bash
    docker compose --profile tailscale up -d
    docker compose logs tailscale          # "Startup complete" / the node's address
@@ -132,7 +132,7 @@ image tag was pulled, but a real tailnet login has not been tested in this repos
 
 1. Get a domain (a dynamic DNS name works) and point an A/AAAA record at your home IP. Forward TCP 80 and 443
    (and UDP 443 for HTTP/3) from the router to the Pi.
-2. In `.env` set `FAMILYCHAT_DOMAIN=chat.example.org` (and `NTFY_DOMAIN`, see below).
+2. In `.env` set `SWAHNCHAT_DOMAIN=chat.example.org` (and `NTFY_DOMAIN`, see below).
 3. ```bash
    docker compose --profile caddy up -d
    docker compose logs -f caddy      # watch it obtain the certificate
@@ -140,7 +140,7 @@ image tag was pulled, but a real tailnet login has not been tested in this repos
    Caddy terminates TLS, proxies `/api/v1/ws` WebSockets and obtains/renews Let's Encrypt certificates. Keep the
    `caddy-data` volume; deleting it forces re-issuing and can hit Let's Encrypt rate limits. Caddy caps request
    bodies at 9 MB, except attachment uploads: those may be `CADDY_MAX_UPLOAD` (default `110MB`). If you raise
-   `FAMILYCHAT_MAX_ATTACHMENT_MB` above 100, raise `CADDY_MAX_UPLOAD` in `.env` too (a bit above it).
+   `SWAHNCHAT_MAX_ATTACHMENT_MB` above 100, raise `CADDY_MAX_UPLOAD` in `.env` too (a bit above it).
 4. Never forward port 8000.
 
 You can run Tailscale and Caddy side by side, but choose one address for the app.
@@ -184,9 +184,9 @@ read on the new device. That is the same as a lost phone and intended. The code 
 (`audit` shows `password_reset_issued` and `password_reset_used`).
 
 `check-config` is worth running after every change to `.env`: it prints the settings the server will use (never
-the secret key or database password) and warns about: production without `FAMILYCHAT_PUSH_ALLOWED_HOSTS`, a
-missing or short secret key (an error in production), API docs exposed in production, `FAMILYCHAT_BEHIND_PROXY=true`
-without `FAMILYCHAT_TRUSTED_PROXIES`, push over plain http in production and low disk space.
+the secret key or database password) and warns about: production without `SWAHNCHAT_PUSH_ALLOWED_HOSTS`, a
+missing or short secret key (an error in production), API docs exposed in production, `SWAHNCHAT_BEHIND_PROXY=true`
+without `SWAHNCHAT_TRUSTED_PROXIES`, push over plain http in production and low disk space.
 
 Every login on a new phone is a new *device* with new encryption keys. Messages sent before a device existed
 cannot be read on it; that is how end-to-end encryption works here (see SECURITY.md).
@@ -207,11 +207,11 @@ Without push the app only syncs when it is open or every 15 minutes. With push t
    curl https://<ntfy url>/v1/health                                   # {"healthy":true}
    ```
 3. On each phone install the **ntfy** app (F-Droid or Play Store). In its settings set the *default server* to
-   your `NTFY_BASE_URL` and exempt the app from battery optimisation. In FamilyChat choose ntfy as the
+   your `NTFY_BASE_URL` and exempt the app from battery optimisation. In Swahn Chat choose ntfy as the
    UnifiedPush distributor; the app registers its endpoint (`https://.../up…`) with `PUT /devices/me/push`.
-4. The backend only sends to `https` endpoints (`FAMILYCHAT_PUSH_ALLOW_HTTP=false`), with a 5 second timeout, and
+4. The backend only sends to `https` endpoints (`SWAHNCHAT_PUSH_ALLOW_HTTP=false`), with a 5 second timeout, and
    never blocks a request on it. Failures are logged without the endpoint URL.
-5. **Set `FAMILYCHAT_PUSH_ALLOWED_HOSTS` in `.env`** to the host name of your ntfy server (for example
+5. **Set `SWAHNCHAT_PUSH_ALLOWED_HOSTS` in `.env`** to the host name of your ntfy server (for example
    `pi.tailnet-name.ts.net`; comma separated for several). It is required: while it is empty the production
    server refuses to register push endpoints (`409 push_not_configured`), logs a warning at startup and sends no
    push. With it set, endpoints on any other host are refused, so the server cannot be abused to send requests
@@ -228,8 +228,8 @@ pushes never arrive, check `docker compose logs backend | grep push` and test `d
 "import urllib.request;print(urllib.request.urlopen('https://<ntfy host>/v1/health').read())"`. This path has not
 been verified on real hardware in this repository's test environment.
 
-**Alerts for you (optional).** Set `FAMILYCHAT_ADMIN_NTFY_URL` in `.env` to a full ntfy topic URL (https; pick a long
-random topic name only you subscribe to, add `FAMILYCHAT_ADMIN_NTFY_TOKEN` if the server needs login) and the backend
+**Alerts for you (optional).** Set `SWAHNCHAT_ADMIN_NTFY_URL` in `.env` to a full ntfy topic URL (https; pick a long
+random topic name only you subscribe to, add `SWAHNCHAT_ADMIN_NTFY_TOKEN` if the server needs login) and the backend
 posts a short plain-text alert, with no user names or content, when disk space is low, maintenance fails, a login
 lockout is triggered, a refresh token is reused or a new administrator is granted (rate limited, details in
 SECURITY.md and the handbook, section 15). It can be the same ntfy server as above.
@@ -240,7 +240,7 @@ publicly, read the ntfy documentation on access control.
 ## 8. Upgrading
 
 ```bash
-cd ~/familychat/deployment
+cd ~/deployment
 ./backup.sh                          # always back up first
 git pull
 docker compose up -d --build         # rebuilds the image; migrations run automatically on start
@@ -260,10 +260,10 @@ version changed the database, `./restore.sh` the backup taken in step one (migra
 
 `./backup.sh [dest-dir]` asks the running container for one consistent snapshot (`sqlite3` online backup API, so
 it is safe while the server is in use), copies the `.tar.gz` to the host (default `deployment/backups/`, mode 600),
-verifies it can be read and keeps the newest 14 (`FAMILYCHAT_BACKUP_KEEP=30` in `.env` or in the environment changes
+verifies it can be read and keeps the newest 14 (`SWAHNCHAT_BACKUP_KEEP=30` in `.env` or in the environment changes
 that; the older `KEEP=30 ./backup.sh` still works; `./backup.sh --prune` only applies the retention rule). The
 archive contains:
-`familychat.db`, all attachments and a `manifest.json` with counts and SHA-256 checksums.
+`swahnchat.db`, all attachments and a `manifest.json` with counts and SHA-256 checksums.
 
 **What a backup contains:** accounts, password hashes, public keys, conversation membership, message metadata and
 **ciphertext only**. Nobody can read messages from it, and restoring does not give anyone back messages they can no
@@ -273,9 +273,9 @@ it off the Pi, store it somewhere you trust (see SECURITY.md, "Backups and encry
 Nightly backups with systemd (edit the paths and user in the files first):
 
 ```bash
-sudo cp deployment/systemd/familychat-backup.{service,timer} /etc/systemd/system/
-sudo systemctl daemon-reload && sudo systemctl enable --now familychat-backup.timer
-systemctl list-timers familychat-backup.timer
+sudo cp deployment/systemd/swahnchat-backup.{service,timer} /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now swahnchat-backup.timer
+systemctl list-timers swahnchat-backup.timer
 ```
 
 or with cron, see `deployment/systemd/crontab.example`. A backup on the same SD card does not survive the card, so
@@ -284,14 +284,14 @@ copy it elsewhere. `backup.sh` can do that with [rclone](https://rclone.org) (in
 ```bash
 sudo apt install rclone        # or: curl https://rclone.org/install.sh | sudo bash
 rclone config                  # as the user that runs the backup: first a normal remote (Drive, S3, SFTP, ...),
-                               # then a "crypt" remote layered on top of it, e.g. named familychat-crypt
+                               # then a "crypt" remote layered on top of it, e.g. named swahnchat-crypt
 ```
 
 Use a **crypt** remote: the archive holds metadata and password hashes, and crypt encrypts file names and content
 before they leave the Pi (keep the crypt passwords somewhere other than the Pi). Then set in `.env`:
 
 ```bash
-FAMILYCHAT_BACKUP_RCLONE_REMOTE=familychat-crypt:familychat-backups
+SWAHNCHAT_BACKUP_RCLONE_REMOTE=swahnchat-crypt:swahnchat-backups
 ```
 
 After each successful local backup `backup.sh` runs `rclone copy <backup dir> <remote>` (new archives only; older ones
@@ -302,7 +302,7 @@ as failed, but the local backup stays. The remote is not pruned automatically: u
 Restore, for example onto a new Pi after step 4:
 
 ```bash
-./restore.sh /path/to/familychat-backup-20260101-031500.tar.gz
+./restore.sh /path/to/swahnchat-backup-20260101-031500.tar.gz
 ```
 
 It stops the backend, verifies every checksum in the manifest (a damaged or modified archive is rejected and
@@ -315,7 +315,7 @@ starts the backend again. Delete the `pre-restore-*` folder when you are happy:
 touching any data:
 
 ```bash
-docker compose exec backend python -m app.cli verify-backup /data/backups/familychat-backup-....tar.gz
+docker compose exec backend python -m app.cli verify-backup /data/backups/swahnchat-backup-....tar.gz
 ```
 
 It checks the entry names, the manifest and every checksum, runs SQLite's `integrity_check` on a temporary copy and
@@ -326,16 +326,16 @@ Test your restore once, before you need it.
 
 **Monthly automatic check.** `./backup.sh --verify-latest [dir]` runs that same verification on the newest archive in
 the backup directory (it streams the file from the host into the container, so no path juggling) and exits non-zero
-if the archive is damaged, missing, or older than `FAMILYCHAT_BACKUP_MAX_AGE_DAYS` (default 3: the nightly backup has
+if the archive is damaged, missing, or older than `SWAHNCHAT_BACKUP_MAX_AGE_DAYS` (default 3: the nightly backup has
 stopped). A systemd timer runs it on the first of every month; a failure shows in `systemctl --failed`:
 
 ```bash
-sudo cp deployment/systemd/familychat-verify-backup.{service,timer} /etc/systemd/system/   # edit User= and paths first
-sudo systemctl daemon-reload && sudo systemctl enable --now familychat-verify-backup.timer
-sudo systemctl start familychat-verify-backup.service && journalctl -u familychat-verify-backup -n 20
+sudo cp deployment/systemd/swahnchat-verify-backup.{service,timer} /etc/systemd/system/   # edit User= and paths first
+sudo systemctl daemon-reload && sudo systemctl enable --now swahnchat-verify-backup.timer
+sudo systemctl start swahnchat-verify-backup.service && journalctl -u swahnchat-verify-backup -n 20
 ```
 
-To be told about a failure, see `deployment/systemd/familychat-notify-failure@.service` (optional `OnFailure=` hook
+To be told about a failure, see `deployment/systemd/swahnchat-notify-failure@.service` (optional `OnFailure=` hook
 that posts to a private ntfy topic). Day-to-day operation in Swedish: [DRIFTHANDBOK.md](DRIFTHANDBOK.md).
 
 ## 10. Logs, health and reboots
@@ -352,7 +352,7 @@ docker compose ps                       # health status from the container healt
 
 `/readyz` answers `503` with a `code` when something needs your attention: `migration_mismatch` (the database is
 not at the version this image expects: run the upgrade steps in section 8), `low_disk` (less than
-`FAMILYCHAT_MIN_FREE_DISK_MB`, default 200, free on the data volume: free space or enlarge the disk before
+`SWAHNCHAT_MIN_FREE_DISK_MB`, default 200, free on the data volume: free space or enlarge the disk before
 SQLite fails writes) or `database_unavailable`. Point an uptime monitor at it. `/healthz` only says the process
 is alive.
 
@@ -382,8 +382,8 @@ the last administrator must promote someone else first. All of these are in the 
 
 A lost or stolen phone: an administrator revokes it with `DELETE /api/v1/admin/users/{user_id}/devices/{device_id}`
 (the owner can do the same from another device). Delivered messages are deleted from the server after
-`FAMILYCHAT_ENVELOPE_RETENTION_DAYS` (30) days and audit entries after `FAMILYCHAT_AUDIT_RETENTION_DAYS` (180);
-both run in the hourly maintenance job. Once a week (`FAMILYCHAT_DB_MAINTENANCE_DAYS`) the same job also maintains the
+`SWAHNCHAT_ENVELOPE_RETENTION_DAYS` (30) days and audit entries after `SWAHNCHAT_AUDIT_RETENTION_DAYS` (180);
+both run in the hourly maintenance job. Once a week (`SWAHNCHAT_DB_MAINTENANCE_DAYS`) the same job also maintains the
 database (SQLite: `PRAGMA optimize`, `ANALYZE`, WAL checkpoint and, only if more than 20 % of the file is free pages and
 the server is quiet, `VACUUM`; PostgreSQL: `ANALYZE`); the last result is `db_maintenance` in `GET /api/v1/admin/stats`.
 When the server restarts, open apps are disconnected with code 1001 and
@@ -409,13 +409,13 @@ services:
     image: postgres:16
     restart: unless-stopped
     environment:
-      POSTGRES_USER: familychat
-      POSTGRES_DB: familychat
-      POSTGRES_PASSWORD: ${FAMILYCHAT_POSTGRES_PASSWORD:?set FAMILYCHAT_POSTGRES_PASSWORD in .env}
+      POSTGRES_USER: swahnchat
+      POSTGRES_DB: swahnchat
+      POSTGRES_PASSWORD: ${SWAHNCHAT_POSTGRES_PASSWORD:?set SWAHNCHAT_POSTGRES_PASSWORD in .env}
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U familychat -d familychat"]
+      test: ["CMD-SHELL", "pg_isready -U swahnchat -d swahnchat"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -426,12 +426,12 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      FAMILYCHAT_DATABASE_URL: postgresql+psycopg://familychat:${FAMILYCHAT_POSTGRES_PASSWORD}@postgres:5432/familychat
+      SWAHNCHAT_DATABASE_URL: postgresql+psycopg://swahnchat:${SWAHNCHAT_POSTGRES_PASSWORD}@postgres:5432/swahnchat
 volumes:
   postgres-data:
 ```
 
-Put `FAMILYCHAT_POSTGRES_PASSWORD=<long random letters and digits>` in `.env` (avoid characters that need URL
+Put `SWAHNCHAT_POSTGRES_PASSWORD=<long random letters and digits>` in `.env` (avoid characters that need URL
 escaping: `@ : / ? #`), then start with both files:
 
 ```bash
@@ -444,8 +444,8 @@ The entrypoint runs `alembic upgrade head` against PostgreSQL on every start, li
 
 - There is **no migration of existing SQLite data** to PostgreSQL. Decide before the family starts using it.
 - `backup.sh`, `restore.sh` and the CLI `backup`/`restore`/`verify-backup` handle SQLite only. Back up PostgreSQL
-  with `docker compose exec -T postgres pg_dump -U familychat familychat | gzip > familychat-db-$(date +%F).sql.gz`
-  **and** the attachments in the `familychat-data` volume (`/data/attachments`), taken at about the same time.
+  with `docker compose exec -T postgres pg_dump -U swahnchat swahnchat | gzip > swahnchat-db-$(date +%F).sql.gz`
+  **and** the attachments in the `swahnchat-data` volume (`/data/attachments`), taken at about the same time.
 - `GET /admin/stats` reports `db_bytes: null`; `/readyz` and the migration check work as before.
 - All writing transactions are serialised with an advisory lock so that the sync cursor stays correct (see
   ARCHITECTURE.md, "Sync cursor and the database"); a request that cannot get it within 10 s fails with a server
@@ -462,7 +462,7 @@ both phones can reach each other directly.
 
 - **Everybody on the same Tailscale network (recommended): usually no relay.** The phones find each other through
   their tailnet addresses (`100.x.y.z`) and talk directly; Tailscale hole-punches or relays (DERP) the packets itself.
-  Leave `FAMILYCHAT_TURN_URLS` empty. If a call connects but has no sound on some mobile networks, add the relay below.
+  Leave `SWAHNCHAT_TURN_URLS` empty. If a call connects but has no sound on some mobile networks, add the relay below.
 - **Public setup, or some phones are not on the tailnet:** run the `turn` profile. It relays when a direct path fails
   (symmetric NAT, carrier-grade NAT, strict firewalls). A relay is also what makes a call work between two phones that
   are on different mobile networks.
@@ -471,15 +471,15 @@ both phones can reach each other directly.
 
 1. Add to `.env` (the same secret is used by the backend and by coturn):
    ```bash
-   openssl rand -base64 48                       # copy the output into FAMILYCHAT_TURN_SECRET
-   FAMILYCHAT_TURN_SECRET=<that value>
-   FAMILYCHAT_TURN_URLS=turn:pi.your-tailnet.ts.net:3478?transport=udp,turn:pi.your-tailnet.ts.net:3478?transport=tcp
-   FAMILYCHAT_STUN_URLS=stun:pi.your-tailnet.ts.net:3478          # optional
+   openssl rand -base64 48                       # copy the output into SWAHNCHAT_TURN_SECRET
+   SWAHNCHAT_TURN_SECRET=<that value>
+   SWAHNCHAT_TURN_URLS=turn:pi.your-tailnet.ts.net:3478?transport=udp,turn:pi.your-tailnet.ts.net:3478?transport=tcp
+   SWAHNCHAT_STUN_URLS=stun:pi.your-tailnet.ts.net:3478          # optional
    TURN_EXTERNAL_IP=                                              # public IP (or PUBLIC/PRIVATE) behind NAT
    ```
 2. `docker compose --profile turn up -d` (or add `turn` to `COMPOSE_PROFILES`), then `docker compose up -d` again so
    the backend picks up the new variables. `docker compose logs turn` shows `Total relay threads`, and
-   `docker compose ps` shows the service `healthy`. The backend refuses to start with `FAMILYCHAT_TURN_URLS` and a
+   `docker compose ps` shows the service `healthy`. The backend refuses to start with `SWAHNCHAT_TURN_URLS` and a
    secret shorter than 32 bytes.
 3. Check the credentials: `curl -s -H "Authorization: Bearer <access token>" https://<server>/api/v1/calls/turn`.
 
@@ -503,7 +503,7 @@ any port 3478` and `... proto udp to any port 49160:49200`). Public setup: forwa
 `TURN_EXTERNAL_IP` to the public address, and prefer `turns:` with a certificate for the TCP fallback on networks that
 block UDP (copy `fullchain.pem` and `privkey.pem` to `deployment/turn-certs/`, readable by the user "nobody", for example
 from Caddy's certificate volume or `tailscale cert`, and add `turns:your.host:5349?transport=tcp` to
-`FAMILYCHAT_TURN_URLS`). Certificate renewals need a copy and a `docker compose restart turn`.
+`SWAHNCHAT_TURN_URLS`). Certificate renewals need a copy and a `docker compose restart turn`.
 
 **Tailscale addresses and the relay (`TURN_ALLOW_TAILNET_PEERS`)**
 
@@ -535,10 +535,69 @@ certificates, behind-NAT operation, Raspberry Pi hardware.
 
 | Symptom | Look at |
 |---|---|
-| Container restarts immediately | `docker compose logs backend`: usually a missing or short `FAMILYCHAT_SECRET_KEY` |
-| App says token expired in a loop | The phone's clock is wrong, or `FAMILYCHAT_SECRET_KEY` changed (log in again) |
+| Container restarts immediately | `docker compose logs backend`: usually a missing or short `SWAHNCHAT_SECRET_KEY` |
+| App says token expired in a loop | The phone's clock is wrong, or `SWAHNCHAT_SECRET_KEY` changed (log in again) |
 | `429 rate_limited` | Too many attempts from one address (IPv6: one /64 prefix), or too many failed logins for that username (10 per hour, 30 per day, from anywhere); wait for `Retry-After` seconds. The counters are in memory: restarting the backend clears them |
-| `409 device_limit` at login | The account has `FAMILYCHAT_MAX_DEVICES_PER_USER` (default 10) active devices; remove an old one from a signed-in device (`DELETE /devices/{id}`) or with `remove-user` as an admin |
-| Revoked device still shows connected | The CLI cannot reach the running server's sockets; they close within `FAMILYCHAT_WS_REVALIDATE_SECONDS` (60 s) |
+| `409 device_limit` at login | The account has `SWAHNCHAT_MAX_DEVICES_PER_USER` (default 10) active devices; remove an old one from a signed-in device (`DELETE /devices/{id}`) or with `remove-user` as an admin |
+| Revoked device still shows connected | The CLI cannot reach the running server's sockets; they close within `SWAHNCHAT_WS_REVALIDATE_SECONDS` (60 s) |
 | No push notifications | ntfy health URL, battery optimisation for the ntfy app, `docker compose logs backend \| grep push` |
-| Disk filling up | `docker system df`; attachments live in the `familychat-data` volume (per-user quota `FAMILYCHAT_USER_QUOTA_MB`) |
+| Disk filling up | `docker system df`; attachments live in the `swahnchat-data` volume (per-user quota `SWAHNCHAT_USER_QUOTA_MB`) |
+
+## Byte från FamilyChat till Swahn Chat
+
+(Switching an existing install from FamilyChat to Swahn Chat, v0.5.0. The commands are the same as in
+`DRIFTHANDBOK.md` section 18.) The rename touched every setting, file and unit name, so an existing install is moved
+once. The server helps: on first start it renames `familychat.db` to `swahnchat.db` inside the data volume; it no
+longer reads `FAMILYCHAT_*` variables (it logs an error naming them, and in production it refuses to start when only
+`FAMILYCHAT_SECRET_KEY` is set, so it never runs with an ephemeral key); and `restore.sh` / `verify-backup` accept
+old `familychat-backup-*` archives. The steps (comments are Swedish, as in the handbook):
+
+```bash
+# 1. Stoppa stacken och ta en säkerhetskopia först (med det gamla repot, som fortfarande heter familychat)
+cd ~/familychat/deployment            # den gamla klonen; justera sökvägen om din ligger någon annanstans
+./backup.sh ~/familychat-backups      # ger familychat-backup-*.tar.gz; kopiera den gärna också bort från Pi:n
+docker compose down                   # volymerna finns kvar (ingen -v!)
+
+# 2. Hämta den nya koden och flytta över .env; byt variabelprefix med ETT kommando
+git clone https://github.com/felixarvid2/swahn-chatt.git ~/swahn-chat
+cp ~/familychat/deployment/.env ~/swahn-chat/deployment/.env && chmod 600 ~/swahn-chat/deployment/.env
+sed -i 's/FAMILYCHAT_/SWAHNCHAT_/g' ~/swahn-chat/deployment/.env
+grep -n 'FAMILYCHAT\|TS_HOSTNAME' ~/swahn-chat/deployment/.env   # inga FAMILYCHAT_ kvar; behåll TS_HOSTNAME=familychat om telefonerna ska nå samma Tailscale-namn
+
+# 3. Flytta datat från de gamla Docker-volymerna (projektet hette familychat, nu swahnchat).
+#    Volymernas riktiga namn är <projekt>_<volym>: familychat_familychat-data blir swahnchat_swahnchat-data.
+#    Databasfilen familychat.db i volymen döps om till swahnchat.db av servern vid första starten.
+for v in familychat-data caddy-data caddy-config ntfy-cache tailscale-state; do
+  old="familychat_$v"; new="swahnchat_${v/familychat/swahnchat}"
+  docker volume inspect "$old" >/dev/null 2>&1 || continue          # volymen används inte i din installation
+  docker volume create --label com.docker.compose.project=swahnchat \
+    --label "com.docker.compose.volume=${v/familychat/swahnchat}" "$new" >/dev/null
+  docker run --rm -v "$old":/from -v "$new":/to alpine cp -a /from/. /to/
+done
+# Samma sak i korthet för den viktigaste volymen:
+#   docker run --rm -v familychat_familychat-data:/from -v swahnchat_swahnchat-data:/to alpine cp -a /from/. /to/
+
+# 4. Byt namn på systemd-enheterna och säkerhetskopiemappen
+sudo systemctl disable --now familychat-backup.timer familychat-verify-backup.timer
+sudo rm /etc/systemd/system/familychat-*.service /etc/systemd/system/familychat-*.timer
+mv ~/familychat-backups ~/swahnchat-backups
+[ -d /etc/familychat ] && sudo mv /etc/familychat /etc/swahnchat      # admin-ntfy.env för larmen
+sudo cp ~/swahn-chat/deployment/systemd/swahnchat-* /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now swahnchat-backup.timer swahnchat-verify-backup.timer
+
+# 5. Starta och kontrollera
+cd ~/swahn-chat/deployment
+docker compose up -d --build
+docker compose ps && curl -s http://127.0.0.1:8000/readyz
+docker compose exec backend python -m app.cli check-config      # ska sluta med "configuration OK"
+docker compose exec backend ls /data                            # swahnchat.db ska finnas, familychat.db inte
+./backup.sh ~/swahnchat-backups && ./backup.sh --verify-latest ~/swahnchat-backups
+```
+
+**Phones.** Swahn Chat has a new application id (`se.swahnchat.app`), so it is a different app: every phone must
+uninstall FamilyChat, install Swahn Chat and log in again. The local history is lost with the old app unless it is
+exported first (**Settings**, **Export history** in FamilyChat); the new app can import that file.
+
+**Clean up after a week:** `docker volume rm familychat_familychat-data` (and the other `familychat_*` volumes),
+`rm -r ~/familychat`, and the old backups once you have fresh ones.

@@ -1,4 +1,4 @@
-"""PostgreSQL specifics. Skipped unless FAMILYCHAT_TEST_DATABASE_URL points at a PostgreSQL server.
+"""PostgreSQL specifics. Skipped unless SWAHNCHAT_TEST_DATABASE_URL points at a PostgreSQL server.
 
 The sync cursor is a plain number: a device that has read event N moves on to `seq > N`. That is only safe when
 event seq values become visible in order. SQLite guarantees it (one writer at a time, BEGIN IMMEDIATE); on

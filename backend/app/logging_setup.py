@@ -52,14 +52,14 @@ def configure_logging(level: str = "INFO") -> None:
             lg.addFilter(RedactQueryFilter())
     root = logging.getLogger()
     for h in list(root.handlers):
-        if getattr(h, "_familychat", False):
+        if getattr(h, "_swahnchat", False):
             root.removeHandler(h)
     if any(isinstance(h.formatter, JsonFormatter) for h in root.handlers):
         root.setLevel(level.upper())  # e.g. uvicorn's --log-config already installed the JSON handler
         logging.getLogger("uvicorn.access").disabled = True
         return
     handler = logging.StreamHandler(sys.stdout)
-    handler._familychat = True  # type: ignore[attr-defined]
+    handler._swahnchat = True  # type: ignore[attr-defined]
     handler.setFormatter(JsonFormatter())
     handler.addFilter(RedactQueryFilter())
     root.addHandler(handler)

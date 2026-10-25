@@ -1,4 +1,4 @@
-# FamilyChat architecture
+# Swahn Chat architecture
 
 ```
  Android phone (Kotlin)                         Raspberry Pi (Docker)
@@ -31,7 +31,7 @@
 
 - Python 3.12, FastAPI, Pydantic v2, SQLAlchemy 2 (sync engine, endpoints run in the threadpool), Alembic,
   argon2-cffi, PyJWT, httpx (push), uvicorn.
-- `app/main.py` app factory; `app/config.py` settings from `FAMILYCHAT_*` environment variables;
+- `app/main.py` app factory; `app/config.py` settings from `SWAHNCHAT_*` environment variables;
   `app/db.py` engine/session (SQLite WAL, `busy_timeout`, foreign keys on; PostgreSQL write lock, see
   "Sync cursor"); `app/models.py`; `app/request_id.py` (X-Request-ID middleware and log context);
   `app/openapi.py` (OpenAPI post-processing);
@@ -107,17 +107,17 @@ reset by a success. `404`/`410` clears the endpoint as before.
 **Security headers.** `SecurityHeadersMiddleware` adds the headers to every HTTP response, including errors and the
 body-limit `413`; a header a route sets itself wins. `Cache-Control: no-store` is the default, the strict CSP
 (`default-src 'none'`) applies everywhere except the Swagger UI page, which needs `cdn.jsdelivr.net` (script and
-stylesheet), `fastapi.tiangolo.com` (favicon) and one inline script. HSTS only with `FAMILYCHAT_HSTS=true`.
+stylesheet), `fastapi.tiangolo.com` (favicon) and one inline script. HSTS only with `SWAHNCHAT_HSTS=true`.
 
 **Maintenance.** The hourly loop (a worker thread, `asyncio.to_thread`) prunes data and, once per
-`FAMILYCHAT_DB_MAINTENANCE_DAYS` (7), runs `app/services/dbmaint.py`: on SQLite `PRAGMA optimize`, `ANALYZE`, a WAL
+`SWAHNCHAT_DB_MAINTENANCE_DAYS` (7), runs `app/services/dbmaint.py`: on SQLite `PRAGMA optimize`, `ANALYZE`, a WAL
 checkpoint (TRUNCATE) and `VACUUM` only when more than 20 % of the pages are free, the disk has 1.25 times the
 database size free and no request arrived for a minute (VACUUM holds the write lock for the seconds it takes; a
 postponed VACUUM is retried every hour); on PostgreSQL `ANALYZE` only. The result is stored in `server_state` and shown
 by `GET /admin/stats`. The same loop checks free disk space and sends operator alerts (`app/services/alerts.py`, see
 SECURITY.md) when maintenance fails or disk is low.
 
-Run the suite against PostgreSQL with `FAMILYCHAT_TEST_DATABASE_URL=postgresql+psycopg://user:pw@host:5432/postgres`
+Run the suite against PostgreSQL with `SWAHNCHAT_TEST_DATABASE_URL=postgresql+psycopg://user:pw@host:5432/postgres`
 (a role that may create databases); tests that need the SQLite file itself are skipped there. SQLite stays the
 default and the only backend `backup`/`restore`/`verify-backup` support; PostgreSQL is backed up with `pg_dump`.
 
@@ -195,7 +195,7 @@ Client data flow:
   `SyncProcessor.applyCall` authenticates a received signal like a reaction (listed and pinned sender device, sender a
   member, content bound to the event, `direct` conversation), always decrypts it so the ratchet moves on, and drops it
   when the identity is untrusted, a check fails, an envelope is missing (server retention) or it is older than 60 s. What
-  passes is emitted on `FamilyChatEngine.callSignals` as `CallSignalEvent`; nothing reaches the message store, the unread
+  passes is emitted on `SwahnChatEngine.callSignals` as `CallSignalEvent`; nothing reaches the message store, the unread
   counts or `EngineEvent.MessageReceived`, so no message notification. Age is judged on the server's clock:
   `ServerClock` in `:core:network` learns `Date header - local time` from successful responses.
 - **State machine.** `CallManager` (one call at a time) is driven by `engine.callSignals` (the app calls `start()` at

@@ -1,4 +1,4 @@
-# FamilyChat developer and operator shortcuts. Run `make` or `make help` for the list.
+# Swahn Chat developer and operator shortcuts. Run `make` or `make help` for the list.
 # Variables:  PYTHON=... (backend venv python)  KEYSTORE=... KEYSTORE_PASSWORD=... KEY_ALIAS=... KEY_PASSWORD=... (apk-release)
 #             BACKUP_DIR=... (backup)  NOTE="Grandma" (invite)  ARCHIVE=path (restore)
 
@@ -35,7 +35,7 @@ apk: ## Debug APK -> android/app/build/outputs/apk/debug/
 	@echo "$(CURDIR)/$(ANDROID)/app/build/outputs/apk/debug/app-debug.apk"
 
 apk-release: ## Release APK; signed when KEYSTORE, KEYSTORE_PASSWORD, KEY_ALIAS, KEY_PASSWORD are set, else debug-signed
-	cd $(ANDROID) && ./gradlew assembleRelease $(if $(KEYSTORE),-Pfamilychat.keystore=$(KEYSTORE) -Pfamilychat.keystorePassword=$(KEYSTORE_PASSWORD) -Pfamilychat.keyAlias=$(KEY_ALIAS) -Pfamilychat.keyPassword=$(KEY_PASSWORD))
+	cd $(ANDROID) && ./gradlew assembleRelease $(if $(KEYSTORE),-Pswahnchat.keystore=$(KEYSTORE) -Pswahnchat.keystorePassword=$(KEYSTORE_PASSWORD) -Pswahnchat.keyAlias=$(KEY_ALIAS) -Pswahnchat.keyPassword=$(KEY_PASSWORD))
 	@echo "$(CURDIR)/$(ANDROID)/app/build/outputs/apk/release/app-release.apk"
 
 docker-build: ## Build the backend image
@@ -53,8 +53,8 @@ logs: ## Follow the logs of all running services
 backup: ## Back up now (BACKUP_DIR, default deployment/backups; see backup.sh for retention and rclone)
 	cd $(DEPLOY) && ./backup.sh $(BACKUP_DIR)
 
-restore: ## Restore ARCHIVE=path/to/familychat-backup-*.tar.gz (asks before replacing data)
-	@test -n "$(ARCHIVE)" || { echo "usage: make restore ARCHIVE=path/to/familychat-backup-YYYYMMDD-HHMMSS.tar.gz" >&2; exit 2; }
+restore: ## Restore ARCHIVE=path/to/swahnchat-backup-*.tar.gz (asks before replacing data)
+	@test -n "$(ARCHIVE)" || { echo "usage: make restore ARCHIVE=path/to/swahnchat-backup-YYYYMMDD-HHMMSS.tar.gz" >&2; exit 2; }
 	cd $(DEPLOY) && ./restore.sh "$(abspath $(ARCHIVE))"
 
 invite: ## Create a single-use invitation code (NOTE="Grandma")

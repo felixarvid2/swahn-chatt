@@ -12,7 +12,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.request_id import HEADER as REQUEST_ID_HEADER
 from app.request_id import current_request_id
 
-log = logging.getLogger("familychat.errors")
+log = logging.getLogger("swahnchat.errors")
 
 
 class ApiError(Exception):

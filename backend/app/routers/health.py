@@ -9,7 +9,7 @@ from app.schemas import HealthOut, ReadyOut, UnavailableOut
 from app.services.stats import free_disk_bytes
 
 router = APIRouter(tags=["health"])
-log = logging.getLogger("familychat.health")
+log = logging.getLogger("swahnchat.health")
 
 
 @router.get("/healthz", response_model=HealthOut, summary="Liveness probe")

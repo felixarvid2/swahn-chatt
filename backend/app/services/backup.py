@@ -17,7 +17,8 @@ from app.config import Settings
 from app.services.attachments import InvalidStoragePath, check_storage_path
 
 FORMAT = 1
-DB_NAME = "familychat.db"
+DB_NAME = "swahnchat.db"
+LEGACY_DB_NAME = "familychat.db"  # archives made before the rename to Swahn Chat contain the database under this name
 ATT_RE = re.compile(r"^attachments/[0-9a-f]{2}/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
 
@@ -66,10 +67,10 @@ def create_backup(settings: Settings, out_dir: Path) -> Path:
         raise BackupError(f"database not found: {db_path}")
     out_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-    final = out_dir / f"familychat-backup-{stamp}.tar.gz"
+    final = out_dir / f"swahnchat-backup-{stamp}.tar.gz"
     n = 1
     while final.exists():
-        final = out_dir / f"familychat-backup-{stamp}-{n}.tar.gz"
+        final = out_dir / f"swahnchat-backup-{stamp}-{n}.tar.gz"
         n += 1
     partial = final.with_name(final.name + ".partial")
     with tempfile.TemporaryDirectory(prefix="fc-backup-", dir=out_dir) as tmp:
@@ -212,6 +213,8 @@ def _extract_verified(archive: Path, staging: Path, keep_attachments: bool = Tru
         with tarfile.open(archive, "r:gz") as tar:
             for member in tar:
                 name = member.name
+                if name == LEGACY_DB_NAME:
+                    name = DB_NAME  # old archive: read the database under its new name
                 if not member.isfile():
                     raise BackupError(f"unexpected non-file entry in archive: {name!r}")
                 if name not in ("manifest.json", DB_NAME) and not ATT_RE.match(name):
@@ -240,7 +243,8 @@ def _extract_verified(archive: Path, staging: Path, keep_attachments: bool = Tru
         raise BackupError("archive has no manifest or database")
     try:
         manifest = json.loads((staging / "manifest.json").read_text())
-        expected = {manifest["database"]["path"]: manifest["database"]}
+        db_path = manifest["database"]["path"]
+        expected = {DB_NAME if db_path == LEGACY_DB_NAME else db_path: manifest["database"]}
         expected.update({e["path"]: e for e in manifest["attachments"]})
     except (ValueError, KeyError, TypeError) as exc:
         raise BackupError("manifest is invalid") from exc

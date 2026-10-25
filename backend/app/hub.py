@@ -5,7 +5,7 @@ import logging
 import threading
 from dataclasses import dataclass, field
 
-log = logging.getLogger("familychat.hub")
+log = logging.getLogger("swahnchat.hub")
 
 
 QUEUE_LIMIT = 256  # outgoing messages a connection may have waiting; a client that does not read is dropped

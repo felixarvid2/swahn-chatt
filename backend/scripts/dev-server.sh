@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Start the FamilyChat backend for local development: ENV=development, data in backend/data-dev,
+# Start the Swahn Chat backend for local development: ENV=development, data in backend/data-dev,
 # port 8000 on all interfaces, migrations applied first. Usage: backend/scripts/dev-server.sh
-# Override with FAMILYCHAT_DATA_DIR / PORT / HOST if needed.
+# Override with SWAHNCHAT_DATA_DIR / PORT / HOST if needed.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
@@ -11,11 +11,11 @@ else
   PY=${PYTHON:-python3.12}
 fi
 
-export FAMILYCHAT_ENV=development
-export FAMILYCHAT_DATA_DIR="${FAMILYCHAT_DATA_DIR:-$PWD/data-dev}"
-export FAMILYCHAT_PUSH_ALLOW_HTTP="${FAMILYCHAT_PUSH_ALLOW_HTTP:-true}"
-export FAMILYCHAT_LOG_LEVEL="${FAMILYCHAT_LOG_LEVEL:-INFO}"
-mkdir -p "$FAMILYCHAT_DATA_DIR"
+export SWAHNCHAT_ENV=development
+export SWAHNCHAT_DATA_DIR="${SWAHNCHAT_DATA_DIR:-$PWD/data-dev}"
+export SWAHNCHAT_PUSH_ALLOW_HTTP="${SWAHNCHAT_PUSH_ALLOW_HTTP:-true}"
+export SWAHNCHAT_LOG_LEVEL="${SWAHNCHAT_LOG_LEVEL:-INFO}"
+mkdir -p "$SWAHNCHAT_DATA_DIR"
 
 "$PY" -m alembic upgrade head
 exec "$PY" -m uvicorn app.main:create_app --factory \

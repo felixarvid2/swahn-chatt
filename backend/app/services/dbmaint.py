@@ -22,7 +22,7 @@ from app.config import Settings
 from app.db import READ_ONLY_OPTION
 from app.models import ServerState
 
-log = logging.getLogger("familychat.dbmaint")
+log = logging.getLogger("swahnchat.dbmaint")
 
 STATE_KEY = "db_maintenance"
 DAY_MS = 86_400_000

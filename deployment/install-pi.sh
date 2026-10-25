@@ -1,25 +1,25 @@
 #!/usr/bin/env bash
-# Guided installer for FamilyChat on a Raspberry Pi (Raspberry Pi OS 64-bit, also fine on other Debian-like arm64 hosts).
+# Guided installer for Swahn Chat on a Raspberry Pi (Raspberry Pi OS 64-bit, also fine on other Debian-like arm64 hosts).
 #
 #   ./install-pi.sh                       asks what it needs
 #   ./install-pi.sh --yes --access caddy --domain chat.example.org     no questions
 #
 # What it does: checks the machine (architecture, RAM, disk, Docker + compose plugin), creates .env from
-# .env.example with a freshly generated FAMILYCHAT_SECRET_KEY, asks how the family reaches the server and whether to
+# .env.example with a freshly generated SWAHNCHAT_SECRET_KEY, asks how the family reaches the server and whether to
 # enable push, builds and starts the stack, waits until the backend is healthy and prints the first administrator
 # invitation. It is safe to run again: an existing .env and its secret are never overwritten, and an
 # invitation is only created when no administrator exists yet.
 #
 # Options (each can also be given as the environment variable in brackets):
-#   --access MODE      how phones reach the server [FAMILYCHAT_INSTALL_ACCESS]:
+#   --access MODE      how phones reach the server [SWAHNCHAT_INSTALL_ACCESS]:
 #                        tailscale-host    Tailscale installed on this Pi, you run `tailscale serve` (recommended)
 #                        tailscale-sidecar Tailscale in a container (compose profile `tailscale`)
 #                        caddy             public domain with automatic HTTPS (compose profile `caddy`)
 #                        none              local only (http://127.0.0.1:8000), decide later
-#   --domain NAME      public DNS name for MODE caddy [FAMILYCHAT_INSTALL_DOMAIN]
-#   --push-host NAME   host name of your ntfy server; enables push (profile `ntfy`) [FAMILYCHAT_INSTALL_PUSH_HOST]
+#   --domain NAME      public DNS name for MODE caddy [SWAHNCHAT_INSTALL_DOMAIN]
+#   --push-host NAME   host name of your ntfy server; enables push (profile `ntfy`) [SWAHNCHAT_INSTALL_PUSH_HOST]
 #                        use "none" to say that you do not want push
-#   --ts-hostname NAME node name for tailscale-sidecar (default familychat) [TS_HOSTNAME]
+#   --ts-hostname NAME node name for tailscale-sidecar (default swahnchat) [TS_HOSTNAME]
 #   --ts-authkey KEY   Tailscale auth key for tailscale-sidecar [TS_AUTHKEY]
 #   --install-docker   install Docker with get.docker.com if it is missing (otherwise it asks, or prints the command)
 #   --yes, -y          never ask: use the options above and defaults, fail where an answer is required
@@ -31,9 +31,9 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$HERE"
 
-ACCESS="${FAMILYCHAT_INSTALL_ACCESS:-}"
-DOMAIN="${FAMILYCHAT_INSTALL_DOMAIN:-}"
-PUSH_HOST="${FAMILYCHAT_INSTALL_PUSH_HOST:-}"
+ACCESS="${SWAHNCHAT_INSTALL_ACCESS:-}"
+DOMAIN="${SWAHNCHAT_INSTALL_DOMAIN:-}"
+PUSH_HOST="${SWAHNCHAT_INSTALL_PUSH_HOST:-}"
 TS_HOSTNAME_ARG="${TS_HOSTNAME:-}"
 TS_AUTHKEY_ARG="${TS_AUTHKEY:-}"
 ASSUME_YES=0
@@ -172,14 +172,14 @@ else
 fi
 chmod 600 .env
 
-secret="$(env_get FAMILYCHAT_SECRET_KEY)"
+secret="$(env_get SWAHNCHAT_SECRET_KEY)"
 if [ -z "$secret" ]; then
-  env_set FAMILYCHAT_SECRET_KEY "$(openssl rand -base64 48 | tr -d '\n')"
-  echo "generated FAMILYCHAT_SECRET_KEY"
+  env_set SWAHNCHAT_SECRET_KEY "$(openssl rand -base64 48 | tr -d '\n')"
+  echo "generated SWAHNCHAT_SECRET_KEY"
 elif [ "${#secret}" -lt 32 ]; then
-  warn "FAMILYCHAT_SECRET_KEY in .env is shorter than 32 characters; the server will refuse to start. Replace it with: openssl rand -base64 48"
+  warn "SWAHNCHAT_SECRET_KEY in .env is shorter than 32 characters; the server will refuse to start. Replace it with: openssl rand -base64 48"
 else
-  echo "FAMILYCHAT_SECRET_KEY already set: not touched"
+  echo "SWAHNCHAT_SECRET_KEY already set: not touched"
 fi
 
 # Questions are asked on a fresh install, or for anything given as an option on an existing one.
@@ -213,7 +213,7 @@ EOF
     tailscale-sidecar)
       add_profile tailscale
       ask TS_HOSTNAME_ARG "Name of the Tailscale node (the address becomes https://NAME.<tailnet>.ts.net):" "${TS_HOSTNAME_ARG:-$(env_get TS_HOSTNAME)}"
-      env_set TS_HOSTNAME "${TS_HOSTNAME_ARG:-familychat}"
+      env_set TS_HOSTNAME "${TS_HOSTNAME_ARG:-swahnchat}"
       if [ -z "$TS_AUTHKEY_ARG" ] && [ -z "$(env_get TS_AUTHKEY)" ] && interactive; then
         echo "Create an auth key at https://login.tailscale.com/admin/settings/keys (leave empty to log in with a link from the container log instead)."
         read -r -s -p "Tailscale auth key: " TS_AUTHKEY_ARG
@@ -225,7 +225,7 @@ EOF
       add_profile caddy
       if [ -z "$DOMAIN" ]; then ask DOMAIN "Public DNS name that points at this Pi (for example chat.example.org):"; fi
       [ -n "$DOMAIN" ] || die "Caddy needs a domain (--domain NAME)"
-      env_set FAMILYCHAT_DOMAIN "$DOMAIN"
+      env_set SWAHNCHAT_DOMAIN "$DOMAIN"
       ;;
     *) die "unknown access mode '$ACCESS' (tailscale-host, tailscale-sidecar, caddy or none)" ;;
   esac
@@ -241,7 +241,7 @@ EOF
   fi
   if [ -n "$PUSH_HOST" ] && [ "$PUSH_HOST" != none ]; then
     add_profile ntfy
-    env_set FAMILYCHAT_PUSH_ALLOWED_HOSTS "$PUSH_HOST"
+    env_set SWAHNCHAT_PUSH_ALLOWED_HOSTS "$PUSH_HOST"
     if [ "$ACCESS" = caddy ]; then
       env_set NTFY_DOMAIN "$PUSH_HOST"
       env_set NTFY_BASE_URL "https://$PUSH_HOST"
@@ -276,7 +276,7 @@ for _ in $(seq 1 90); do
 done
 if [ "$healthy" != 1 ]; then
   docker compose logs --tail 40 backend >&2 || true
-  die "the backend did not become healthy within 3 minutes (last state: $state). See the log above; usually a missing or short FAMILYCHAT_SECRET_KEY."
+  die "the backend did not become healthy within 3 minutes (last state: $state). See the log above; usually a missing or short SWAHNCHAT_SECRET_KEY."
 fi
 echo "backend is healthy"
 
@@ -312,7 +312,7 @@ EOF
     echo "Enable MagicDNS and HTTPS certificates in the Tailscale admin console. The address is https://<TS_HOSTNAME>.<tailnet>.ts.net"
     ;;
   caddy)
-    echo "Forward TCP 80/443 (and UDP 443) to this Pi; Caddy gets the certificate for https://$(env_get FAMILYCHAT_DOMAIN) by itself."
+    echo "Forward TCP 80/443 (and UDP 443) to this Pi; Caddy gets the certificate for https://$(env_get SWAHNCHAT_DOMAIN) by itself."
     ;;
   *)
     echo "The server listens on http://127.0.0.1:8000 only. Put HTTPS in front of it: docs/RASPBERRY_PI_SETUP.md, section 5."

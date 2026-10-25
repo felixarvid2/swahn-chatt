@@ -1,16 +1,16 @@
-name: FamilyChat release
+name: Swahn Chat release
 
-# Push a tag such as `familychat-v1.0.0` to build the release APK and publish it as a GitHub release.
+# Push a tag such as `swahnchat-v1.0.0` to build the release APK and publish it as a GitHub release.
 on:
   push:
     tags:
-      - "familychat-v*"
+      - "swahnchat-v*"
 
 permissions:
   contents: write # create the release
 
 concurrency:
-  group: familychat-release-${{ github.ref }}
+  group: swahnchat-release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -19,13 +19,13 @@ jobs:
     timeout-minutes: 60
     defaults:
       run:
-        working-directory: familychat/android
+        working-directory: android
     env:
       TAG: ${{ github.ref_name }}
-      KEYSTORE_BASE64: ${{ secrets.FAMILYCHAT_KEYSTORE_BASE64 }}
-      KEYSTORE_PASSWORD: ${{ secrets.FAMILYCHAT_KEYSTORE_PASSWORD }}
-      KEY_ALIAS: ${{ secrets.FAMILYCHAT_KEY_ALIAS }}
-      KEY_PASSWORD: ${{ secrets.FAMILYCHAT_KEY_PASSWORD }}
+      KEYSTORE_BASE64: ${{ secrets.SWAHNCHAT_KEYSTORE_BASE64 }}
+      KEYSTORE_PASSWORD: ${{ secrets.SWAHNCHAT_KEYSTORE_PASSWORD }}
+      KEY_ALIAS: ${{ secrets.SWAHNCHAT_KEY_ALIAS }}
+      KEY_PASSWORD: ${{ secrets.SWAHNCHAT_KEY_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
 
@@ -45,20 +45,20 @@ jobs:
         run: |
           if [ -n "$KEYSTORE_BASE64" ] && [ -n "$KEYSTORE_PASSWORD" ] && [ -n "$KEY_ALIAS" ] && [ -n "$KEY_PASSWORD" ]; then
             echo "signed=true" >> "$GITHUB_OUTPUT"
-            echo "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/familychat-release.jks"
+            echo "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/swahnchat-release.jks"
           else
             echo "signed=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::FAMILYCHAT_KEYSTORE_* secrets are not all set: building a release APK signed with the DEBUG key (not for distribution)."
+            echo "::warning::SWAHNCHAT_KEYSTORE_* secrets are not all set: building a release APK signed with the DEBUG key (not for distribution)."
           fi
 
       - name: Build release APK (signed)
         if: steps.signing.outputs.signed == 'true'
         run: >
           ./gradlew assembleRelease --stacktrace
-          -Pfamilychat.keystore="$RUNNER_TEMP/familychat-release.jks"
-          -Pfamilychat.keystorePassword="$KEYSTORE_PASSWORD"
-          -Pfamilychat.keyAlias="$KEY_ALIAS"
-          -Pfamilychat.keyPassword="$KEY_PASSWORD"
+          -Pswahnchat.keystore="$RUNNER_TEMP/swahnchat-release.jks"
+          -Pswahnchat.keystorePassword="$KEYSTORE_PASSWORD"
+          -Pswahnchat.keyAlias="$KEY_ALIAS"
+          -Pswahnchat.keyPassword="$KEY_PASSWORD"
 
       # Without the -P flags app/build.gradle.kts signs the release variant with the debug key.
       - name: Build release APK (debug-signed)
@@ -68,11 +68,11 @@ jobs:
       - name: Name the APK and write SHA-256
         id: apk
         run: |
-          version="${TAG#familychat-v}"
+          version="${TAG#swahnchat-v}"
           if [ "${{ steps.signing.outputs.signed }}" = "true" ]; then
-            name="familychat-${version}.apk"
+            name="swahnchat-${version}.apk"
           else
-            name="familychat-${version}-DEBUG-SIGNED.apk"
+            name="swahnchat-${version}-DEBUG-SIGNED.apk"
           fi
           mkdir -p "$RUNNER_TEMP/out"
           cp app/build/outputs/apk/release/app-release.apk "$RUNNER_TEMP/out/$name"
@@ -89,10 +89,10 @@ jobs:
         run: |
           if [ "$SIGNED" = "true" ]; then
             flags=""
-            notes="FamilyChat Android release \`$TAG\`, signed with the release key. Verify the download with \`sha256sum -c $APK_NAME.sha256\`."
+            notes="Swahn Chat Android release \`$TAG\`, signed with the release key. Verify the download with \`sha256sum -c $APK_NAME.sha256\`."
           else
             flags="--prerelease"
-            notes="RELEASE KEY MISSING: this APK is signed with the public debug key. Do not hand it to the family; set the FAMILYCHAT_KEYSTORE_* secrets and re-run (docs/ANDROID_SETUP.md). SHA-256 is in \`$APK_NAME.sha256\`."
+            notes="RELEASE KEY MISSING: this APK is signed with the public debug key. Do not hand it to the family; set the SWAHNCHAT_KEYSTORE_* secrets and re-run (docs/ANDROID_SETUP.md). SHA-256 is in \`$APK_NAME.sha256\`."
           fi
           # shellcheck disable=SC2086
-          gh release create "$TAG" "$APK_NAME" "$APK_NAME.sha256" --repo "$GITHUB_REPOSITORY" --verify-tag --title "FamilyChat ${TAG#familychat-v}" --notes "$notes" $flags
+          gh release create "$TAG" "$APK_NAME" "$APK_NAME.sha256" --repo "$GITHUB_REPOSITORY" --verify-tag --title "Swahn Chat ${TAG#swahnchat-v}" --notes "$notes" $flags

@@ -122,7 +122,7 @@ def test_default_device_limit_is_ten(make_app):
 def test_device_limit_is_per_user_and_configurable_by_env(monkeypatch, tmp_path):
     from app.config import Settings
 
-    monkeypatch.setenv("FAMILYCHAT_MAX_DEVICES_PER_USER", "4")
+    monkeypatch.setenv("SWAHNCHAT_MAX_DEVICES_PER_USER", "4")
     assert Settings(env="development", data_dir=tmp_path).max_devices_per_user == 4
 
 

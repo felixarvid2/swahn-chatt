@@ -1,22 +1,22 @@
-name: FamilyChat security
+name: Swahn Chat security
 
 # Known-vulnerability scan (osv.dev) of the dependencies the repository declares. Runs on changes to them and
 # once a week, because new advisories appear without any commit.
 on:
   push:
     paths:
-      - "familychat/backend/requirements*.txt"
-      - "familychat/android/**/*.gradle.kts"
-      - "familychat/android/gradle/**"
-      - "familychat/android/**/gradle.lockfile"
-      - ".github/workflows/familychat-security.yml"
+      - "backend/requirements*.txt"
+      - "android/**/*.gradle.kts"
+      - "android/gradle/**"
+      - "android/**/gradle.lockfile"
+      - ".github/workflows/security.yml"
   pull_request:
     paths:
-      - "familychat/backend/requirements*.txt"
-      - "familychat/android/**/*.gradle.kts"
-      - "familychat/android/gradle/**"
-      - "familychat/android/**/gradle.lockfile"
-      - ".github/workflows/familychat-security.yml"
+      - "backend/requirements*.txt"
+      - "android/**/*.gradle.kts"
+      - "android/gradle/**"
+      - "android/**/gradle.lockfile"
+      - ".github/workflows/security.yml"
   schedule:
     - cron: "17 5 * * 1" # Mondays 05:17 UTC
   workflow_dispatch:
@@ -25,7 +25,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: familychat-security-${{ github.ref }}
+  group: swahnchat-security-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -51,15 +51,15 @@ jobs:
             echo "args<<EOF"
             echo "--format=sarif"
             echo "--output=osv-results.sarif"
-            for f in familychat/backend/requirements*.txt; do
+            for f in backend/requirements*.txt; do
               echo "--lockfile=requirements.txt:$f"
             done
-            find familychat/android -name 'gradle.lockfile' -o -name 'buildscript-gradle.lockfile' | sort | while read -r f; do
+            find android -name 'gradle.lockfile' -o -name 'buildscript-gradle.lockfile' | sort | while read -r f; do
               echo "--lockfile=$f"
             done
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
-          if [ -z "$(find familychat/android -name '*gradle.lockfile' -print -quit)" ]; then
+          if [ -z "$(find android -name '*gradle.lockfile' -print -quit)" ]; then
             echo "::notice::No Gradle lockfiles: Android dependencies are not scanned (dependency locking is a follow-up)."
           fi
 

@@ -23,7 +23,7 @@ from app.schemas import AttachmentOut, UploadCreate, UploadProgressOut, UploadSe
 from app.services import attachments as svc
 from app.services import uploads
 
-log = logging.getLogger("familychat.attachments")
+log = logging.getLogger("swahnchat.attachments")
 
 router = APIRouter(prefix="/attachments", tags=["attachments"], responses=error_responses(401))
 

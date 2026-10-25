@@ -1,0 +1,17 @@
+# Install:  sudo cp swahnchat-backup.{service,timer} /etc/systemd/system/
+#           (edit User=, WorkingDirectory= and the paths first)
+#           sudo systemctl daemon-reload && sudo systemctl enable --now swahnchat-backup.timer
+[Unit]
+Description=Swahn Chat nightly backup
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+User=pi
+WorkingDirectory=/home/pi/swahn-chat/deployment
+# Retention and the optional rclone upload come from deployment/.env (SWAHNCHAT_BACKUP_KEEP, SWAHNCHAT_BACKUP_RCLONE_REMOTE).
+# rclone reads its config from ~/.config/rclone of User=. Uncomment to set them here instead:
+#Environment=SWAHNCHAT_BACKUP_KEEP=30
+#Environment=SWAHNCHAT_BACKUP_RCLONE_REMOTE=swahnchat-crypt:backups
+ExecStart=/home/pi/swahn-chat/deployment/backup.sh /home/pi/swahnchat-backups
