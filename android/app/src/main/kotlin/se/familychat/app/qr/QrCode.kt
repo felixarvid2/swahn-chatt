@@ -18,18 +18,49 @@ import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
  * versioned text format ([SafetyQr], [InviteQr]) because binary QR payloads are decoded with a guessed charset.
  */
 object QrCode {
-    /** Quiet zone in modules; the spec asks for 4, 2 still scans well and keeps the code large on a small screen. */
-    private const val QUIET_ZONE = 2
+    /** Quiet zone in modules, as the QR spec asks (cameras need the margin). */
+    private const val QUIET_ZONE = 4
 
-    /** The modules of the QR code for [text] (true = dark), including the quiet zone. */
-    fun matrix(text: String): BitMatrix = QRCodeWriter().encode(
-        text, BarcodeFormat.QR_CODE, 0, 0,
-        mapOf(
+    /**
+     * The modules of the QR code for [text] (true = dark), including the quiet zone.
+     *
+     * zxing picks the mask by its penalty score, and for some payloads that mask leaves data that its own detector
+     * takes for finder patterns, so the code cannot be read (about one random safety-number code in six). Every code
+     * is therefore decoded once here, and if that fails the other masks are tried in turn.
+     */
+    fun matrix(text: String): BitMatrix {
+        val chosen = encode(text, mask = null)
+        if (readable(chosen, text)) return chosen
+        for (mask in 0 until MASK_PATTERNS) {
+            val m = encode(text, mask)
+            if (readable(m, text)) return m
+        }
+        return chosen
+    }
+
+    private const val MASK_PATTERNS = 8
+
+    private fun encode(text: String, mask: Int?): BitMatrix {
+        val hints = mutableMapOf<EncodeHintType, Any>(
             EncodeHintType.ERROR_CORRECTION to ErrorCorrectionLevel.M,
             EncodeHintType.CHARACTER_SET to "UTF-8",
             EncodeHintType.MARGIN to QUIET_ZONE,
-        ),
-    )
+        )
+        if (mask != null) hints[EncodeHintType.QR_MASK_PATTERN] = mask
+        return QRCodeWriter().encode(text, BarcodeFormat.QR_CODE, 0, 0, hints)
+    }
+
+    /** Whether zxing reads [m] back as [text], rendered at 4 pixels per module. */
+    private fun readable(m: BitMatrix, text: String): Boolean {
+        val scale = 4
+        val w = m.width * scale
+        val h = m.height * scale
+        val pixels = IntArray(w * h) { i -> if (m.get(i % w / scale, i / w / scale)) BLACK else WHITE }
+        return decode(RGBLuminanceSource(w, h, pixels)) == text
+    }
+
+    private const val BLACK = 0xFF000000.toInt()
+    private const val WHITE = 0xFFFFFFFF.toInt()
 
     /**
      * A black and white bitmap of the QR code for [text], [moduleSize] pixels per module. Black on white whatever the app

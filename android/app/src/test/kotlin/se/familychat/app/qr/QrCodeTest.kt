@@ -59,6 +59,14 @@ class QrCodeTest {
         )
     }
 
+    @Test fun `every safety number code decodes, not just a lucky one`() {
+        // Payloads depend on random keys; a weak layout (too small a quiet zone) failed for some of them.
+        repeat(STRESS_PAIRS) {
+            val payload = SafetyQr.payload(number(Phone("a"), Phone("b")))
+            assertEquals(payload, QrCode.decode(QrCode.bitmap(payload)))
+        }
+    }
+
     @Test fun `scans that are not safety number codes are recognised`() {
         val n = number(anna, bertil)
         assertEquals(SafetyQr.ScanResult.NOT_A_SAFETY_CODE, SafetyQr.compare(n, "familychat://invite?v=1"))
@@ -76,5 +84,9 @@ class QrCodeTest {
         assertEquals(true, p.startsWith("fcsn1:"))
         assertEquals(true, p.length < 200)
         assertEquals(true, p.all { it.isLetterOrDigit() || it == ':' || it == '-' || it == '_' })
+    }
+
+    private companion object {
+        const val STRESS_PAIRS = 100
     }
 }
