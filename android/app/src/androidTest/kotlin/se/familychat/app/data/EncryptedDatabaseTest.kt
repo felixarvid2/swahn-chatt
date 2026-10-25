@@ -95,15 +95,23 @@ class EncryptedDatabaseTest {
             } finally {
                 runCatching { intruder.close() }
             }
-            // and no passphrase at all (plain SQLite) cannot read it either
+            // and no passphrase at all (plain SQLite) cannot read it either. Opened read-only with an error handler
+            // that keeps the file: Room's default handler would delete the "corrupt" file and silently create an
+            // empty database, which proves nothing.
             appContext.deleteDatabase(copyName)
-            dbFile.copyTo(appContext.getDatabasePath(copyName), overwrite = true)
-            val plain = AppDatabase.build(appContext, null, copyName)
-            try {
-                runCatching { plain.draft("c1") }.onSuccess { fail("opened without a passphrase: $it") }
-            } finally {
-                runCatching { plain.close() }
+            val copy = appContext.getDatabasePath(copyName)
+            dbFile.copyTo(copy, overwrite = true)
+            val plainRead = runCatching {
+                android.database.sqlite.SQLiteDatabase.openDatabase(
+                    copy.path,
+                    null,
+                    android.database.sqlite.SQLiteDatabase.OPEN_READONLY,
+                ) { /* keep the file */ }.use { db ->
+                    db.rawQuery("SELECT count(*) FROM sqlite_master", null).use { c -> c.moveToFirst(); c.getInt(0) }
+                }
             }
+            plainRead.onSuccess { fail("plain SQLite read the encrypted file ($it tables)") }
+            assertEquals(dbFile.length(), copy.length(), "file must survive the failed open")
         } finally {
             appContext.deleteDatabase(copyName)
         }
