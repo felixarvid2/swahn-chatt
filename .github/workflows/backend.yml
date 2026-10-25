@@ -195,4 +195,4 @@ jobs:
         working-directory: familychat/deployment
         run: |
           cp .env.example .env
-          docker compose --profile caddy --profile ntfy --profile tailscale config --quiet
+          docker compose --profile caddy --profile ntfy --profile tailscale --profile turn config --quiet

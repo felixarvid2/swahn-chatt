@@ -24,6 +24,7 @@ Om inget annat står körs kommandona på Pi:n, i mappen `~/familychat/deploymen
 14. [Felsökningstabell](#14-felsökningstabell)
 15. [Larm till din telefon (ntfy)](#15-larm-till-din-telefon-ntfy)
 16. [Databasunderhåll och HTTPS-skydd](#16-databasunderhåll-och-https-skydd)
+17. [Röst- och videosamtal (TURN)](#17-röst--och-videosamtal-turn)
 
 ## 1. Rutiner: dagligen, veckovis, månadsvis
 
@@ -457,3 +458,39 @@ vid nästa timkörning och ger larmet "Server maintenance failed" (avsnitt 15).
 säkerhetshuvuden (`nosniff`, `X-Frame-Options`, CSP m.fl.) skickas alltid och kräver ingen inställning. Sidan
 `/api/v1/docs` (bara om du slagit på `FAMILYCHAT_EXPOSE_DOCS`) hämtar sin kod från `cdn.jsdelivr.net` och har därför en
 något lösare policy.
+
+## 17. Röst- och videosamtal (TURN)
+
+Samtal går direkt mellan telefonerna (WebRTC, krypterat från ände till ände). Servern skickar bara krypterade
+signalmeddelanden (typ `call`, sparas högst `FAMILYCHAT_CALL_RETENTION_SECONDS`, standard 600 s, och syns aldrig i
+historiken) och delar ut tillfälliga reläuppgifter via `GET /api/v1/calls/turn`. Hela installationen finns i
+[RASPBERRY_PI_SETUP.md](RASPBERRY_PI_SETUP.md), avsnitt 12.
+
+**Behövs ett relä?** Är alla telefoner på samma Tailscale-nät går samtalen oftast direkt: lämna `FAMILYCHAT_TURN_URLS`
+tomt. Kör reläet (coturn) om samtal saknar ljud/bild på mobilnät eller om någon inte är på tailnätet.
+
+```bash
+openssl rand -base64 48        # lägg värdet i FAMILYCHAT_TURN_SECRET i .env (minst 32 byte, loggas aldrig)
+# .env: FAMILYCHAT_TURN_URLS=turn:pi.ditt-nat.ts.net:3478?transport=udp,turn:pi.ditt-nat.ts.net:3478?transport=tcp
+docker compose --profile turn up -d && docker compose up -d      # relä + backend läser de nya värdena
+docker compose ps                                                # turn ska vara "healthy"
+docker compose logs turn | tail
+```
+
+- **Portar:** 3478 UDP+TCP och 49160-49200 UDP (och 5349 för `turns:` om du lagt certifikat i `deployment/turn-certs/`).
+  Med bara Tailscale: öppna inget i routern, tillåt portarna på `tailscale0` i brandväggen. Publikt: vidarebefordra exakt
+  dessa portar och sätt `TURN_EXTERNAL_IP`. Reläet använder värdnätverk och lyssnar på alla Pi:ns gränssnitt, så brandväggen avgör vem som når det.
+- **Tailnätsadresser:** reläet nekar som standard att skicka till `100.64.0.0/10` (Tailscale) och till alla privata nät, så
+  en läckt reläuppgift inte kan användas för att nå andra enheter på ditt tailnät eller hemnätet. Sätt
+  `TURN_ALLOW_TAILNET_PEERS=true` bara om samtal mellan två telefoner på tailnätet verkligen måste gå via reläet, och
+  begränsa då Pi:ns åtkomst med Tailscale-ACL:er.
+- **Integritet:** reläet ser telefonernas IP-adresser och trafikmängd, aldrig innehållet. Vid direkta samtal ser
+  parterna varandras IP-adresser, om inte appen använder "bara relä". Push för inkommande samtal är en vanlig
+  innehållsfri push med hög prioritet; ntfy-servern ser bara "brådskande".
+- **Felsökning:** `docker compose logs turn` (felrad om hemligheten är för kort eller saknas), `docker compose logs backend`
+  (backend vägrar starta om `FAMILYCHAT_TURN_URLS` är satt utan hemlighet på minst 32 byte), och
+  `python -m app.cli check-config` visar `turn: N url(s)` utan att skriva ut hemligheten. Byt hemlighet genom att ändra
+  `FAMILYCHAT_TURN_SECRET` och köra `docker compose --profile turn up -d --force-recreate` samt `docker compose up -d`;
+  pågående samtal klarar sig tills deras uppgifter går ut (en timme).
+- **Uppgradering:** bilden är fastlåst (`coturn/coturn:4.18.0`); byt version medvetet i `docker-compose.yml`, läs
+  releaseanteckningarna och kör `docker compose --profile turn pull`.

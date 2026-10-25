@@ -68,9 +68,16 @@ def send(db: Session, p: Principal, req: SendMessage) -> tuple[dict, bool]:
             raise conflict("message id already used", "id_conflict")
         return messages_out(db, [existing], None)[0], True
 
-    if req.kind == "message" and req.target_message_id:
+    if req.kind == "call":
+        if conv.type != "direct":
+            raise conflict("calls are only available in direct conversations", "calls_direct_only")
+        if req.target_message_id:
+            raise invalid("a call carries no target_message_id")
+        if req.attachment_ids:
+            raise invalid("a call carries no attachments")
+    elif req.kind == "message" and req.target_message_id:
         raise invalid("target_message_id is only for edit, delete and reaction")
-    if req.kind != "message" and not req.target_message_id:
+    elif req.kind != "message" and not req.target_message_id:
         raise invalid("target_message_id is required for edit, delete and reaction")
     if req.kind in ("delete", "reaction") and req.attachment_ids:
         raise invalid(f"a {req.kind} carries no attachments")
@@ -111,7 +118,8 @@ def send(db: Session, p: Principal, req: SendMessage) -> tuple[dict, bool]:
         client_ts=req.client_ts,
         server_ts=now,
         # The conversation's timer as it is right now; later changes do not touch messages already stored.
-        expires_at=now + conv.disappearing_seconds * 1000 if conv.disappearing_seconds else None,
+        # Calls ignore the timer: the maintenance job removes them after FAMILYCHAT_CALL_RETENTION_SECONDS.
+        expires_at=now + conv.disappearing_seconds * 1000 if conv.disappearing_seconds and req.kind != "call" else None,
     )
     db.add(msg)
     db.flush()
@@ -138,10 +146,10 @@ def send(db: Session, p: Principal, req: SendMessage) -> tuple[dict, bool]:
                 (MessageEnvelope.message_id == target.id) | MessageEnvelope.message_id.in_(derived_ids),
             )
         )
-    # kind "reaction": nothing else changes; it is not a message for last_message_* or unread counts.
+    # kinds "reaction" and "call": nothing else changes; they are not messages for last_message_* or unread counts.
     db.flush()
 
-    emit(db, [d for d, _u in recipients], "message", {"message_id": msg.id}, conv.id)
+    emit(db, [d for d, _u in recipients], "message", {"message_id": msg.id}, conv.id, urgent=req.kind == "call")
     return messages_out(db, [msg], None)[0], False
 
 
@@ -149,7 +157,9 @@ def list_messages(
     db: Session, conv: Conversation, user_id: str, device_id: str, before_seq: int | None, limit: int
 ) -> list[dict]:
     member = convs.get_membership(db, conv.id, user_id)
-    q = select(Message).where(Message.conversation_id == conv.id, Message.server_ts >= member.joined_at)
+    q = select(Message).where(
+        Message.conversation_id == conv.id, Message.server_ts >= member.joined_at, Message.kind != "call"
+    )
     if before_seq is not None:
         q = q.where(Message.seq < before_seq)
     msgs = db.scalars(q.order_by(Message.seq.desc()).limit(limit)).all()

@@ -20,6 +20,12 @@ from app.models import Device
 log = logging.getLogger("familychat.push")
 
 PUSH_PAYLOAD = {"t": "sync"}
+# Call signalling (kind "call") pushes carry the same content-free payload but ask for immediate delivery: ntfy reads
+# Priority (5 = max, wakes the phone through the distributor's high priority path), RFC 8030 push services read Urgency.
+URGENT_HEADERS = {"Priority": "5", "Urgency": "high"}
+# Call signalling (kind "call") pushes carry the same content-free payload but ask for immediate delivery: ntfy reads
+# Priority (5 = max, wakes the phone through the distributor's high priority path), RFC 8030 push services read Urgency.
+URGENT_HEADERS = {"Priority": "5", "Urgency": "high"}
 # Waits before the 2nd, 3rd ... attempt (so 3 attempts in all). The wait happens in a schedule, not in the worker.
 RETRY_DELAYS = (5.0, 30.0, 120.0)
 NO_RESPONSE = 0  # last_push_status when the request got no HTTP answer (network error, timeout)
@@ -85,9 +91,10 @@ class PushService:
         self._client = httpx.Client(transport=transport, timeout=timeout, follow_redirects=False)
         self._queue: queue.Queue[str | None] = queue.Queue()
         self._pending: set[str] = set()
-        # Pushes waiting for their next attempt: (due monotonic time, device id, attempts made). Each entry keeps its
-        # queue task open (task_done comes with the final outcome), so flush() also waits for retries.
-        self._retries: list[tuple[float, str, int]] = []
+        self._urgent: set[str] = set()  # devices whose next push is high priority
+        # Pushes waiting for their next attempt: (due monotonic time, device id, attempts made, urgent). Each entry
+        # keeps its queue task open (task_done comes with the final outcome), so flush() also waits for retries.
+        self._retries: list[tuple[float, str, int, bool]] = []
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
         self.sent = 0
@@ -104,10 +111,14 @@ class PushService:
             self._thread = None
         self._client.close()
 
-    def notify(self, device_ids) -> None:
-        """Queue a push for the devices (non-blocking). Duplicates already waiting are coalesced."""
+    def notify(self, device_ids, urgent=()) -> None:
+        """Queue a push for the devices (non-blocking). Duplicates already waiting are coalesced; a device in
+        `urgent` gets a high priority push (a coalesced push is upgraded)."""
+        urgent = set(urgent)
         for did in device_ids:
             with self._lock:
+                if did in urgent:
+                    self._urgent.add(did)
                 if did in self._pending:
                     continue
                 self._pending.add(did)
@@ -127,12 +138,12 @@ class PushService:
         with self._lock:
             return min((r[0] for r in self._retries), default=None)
 
-    def _take_due(self) -> list[tuple[str, int]]:
+    def _take_due(self) -> list[tuple[str, int, bool]]:
         now = time.monotonic()
         with self._lock:
             due = [r for r in self._retries if r[0] <= now]
             self._retries = [r for r in self._retries if r[0] > now]
-        return [(did, attempts) for _, did, attempts in sorted(due)]
+        return [(did, attempts, urgent) for _, did, attempts, urgent in sorted(due)]
 
     def _drop_retries(self, device_id: str) -> None:
         """A fresh push for the device makes its scheduled retries redundant (the hint is the same)."""
@@ -148,26 +159,30 @@ class PushService:
             try:
                 did = self._queue.get(timeout=None if due is None else max(due - time.monotonic(), 0.0))
             except queue.Empty:
-                for retry_id, attempts in self._take_due():
-                    self._process(retry_id, attempts)
+                for retry_id, attempts, urgent in self._take_due():
+                    self._process(retry_id, attempts, urgent)
                 continue
             if did is None:
                 self._queue.task_done()
                 return
             with self._lock:
                 self._pending.discard(did)
+                urgent = did in self._urgent
+                self._urgent.discard(did)
             self._drop_retries(did)
-            self._process(did, 0)
+            self._process(did, 0, urgent)
 
-    def _process(self, device_id: str, attempts: int) -> None:
+    def _process(self, device_id: str, attempts: int, urgent: bool = False) -> None:
         """One delivery attempt (`attempts` = how many retries came before). The attempt's queue task stays open
         while a retry is scheduled and is closed with the final outcome."""
         rescheduled = False
         try:
-            if self._send(device_id) == "retry":
+            if self._send(device_id, urgent) == "retry":
                 if attempts < len(self._retry_delays):
                     with self._lock:
-                        self._retries.append((time.monotonic() + self._retry_delays[attempts], device_id, attempts + 1))
+                        self._retries.append(
+                            (time.monotonic() + self._retry_delays[attempts], device_id, attempts + 1, urgent)
+                        )
                     rescheduled = True
                 else:
                     self._record(device_id, None, failed=True)  # retries exhausted
@@ -195,7 +210,7 @@ class PushService:
         except Exception:  # health bookkeeping must never break delivery
             log.warning("could not record push health", exc_info=True)
 
-    def _send(self, device_id: str) -> str:
+    def _send(self, device_id: str, urgent: bool = False) -> str:
         """Returns "done", or "retry" for a transient failure (network error, 429, 5xx)."""
         with self._read_session_factory() as db:
             dev = db.execute(
@@ -210,7 +225,7 @@ class PushService:
             return "done"
         host = urlsplit(dev.push_endpoint).hostname
         try:
-            resp = self._client.post(dev.push_endpoint, json=PUSH_PAYLOAD)
+            resp = self._client.post(dev.push_endpoint, json=PUSH_PAYLOAD, headers=URGENT_HEADERS if urgent else None)
         except httpx.HTTPError as exc:
             log.warning("push failed host=%s error=%s", host, type(exc).__name__)
             self._record(device_id, NO_RESPONSE)

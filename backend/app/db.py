@@ -89,10 +89,11 @@ def make_read_session_factory(engine: Engine) -> sessionmaker[Session]:
 def _after_commit(session: Session) -> None:
     pending = session.info.pop("pending_notify", None)
     kicks = session.info.pop("pending_kick", None)
+    urgent = session.info.pop("pending_urgent", None)
     dispatcher = session.info.get("dispatcher")
     if dispatcher and (pending or kicks):
         try:
-            dispatcher.dispatch(pending or {}, kicks or set())
+            dispatcher.dispatch(pending or {}, kicks or set(), urgent or set())
         except Exception:  # never let a notification failure fail a committed request
             log.exception("dispatch failed")
 
@@ -101,6 +102,7 @@ def _after_commit(session: Session) -> None:
 def _after_rollback(session: Session) -> None:
     session.info.pop("pending_notify", None)
     session.info.pop("pending_kick", None)
+    session.info.pop("pending_urgent", None)
 
 
 def session_factory_for(settings: Settings) -> Callable[[], Session]:

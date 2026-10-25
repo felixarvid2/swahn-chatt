@@ -65,6 +65,11 @@ def check(settings: Settings, secret_key_bytes: int) -> ConfigReport:
         ("min_free_disk_mb", str(settings.min_free_disk_mb)),
         ("hsts", str(settings.hsts).lower()),
         ("db_maintenance_days", str(settings.db_maintenance_days)),
+        ("call_retention_seconds", str(settings.call_retention_seconds)),
+        (
+            "turn",
+            f"{len(settings.turn_url_list)} url(s)" if settings.turn_url_list else "off",
+        ),  # the secret is never printed
         ("admin_alerts", "on" if settings.admin_ntfy_url else "off"),  # the topic URL itself is never printed
     ]
 

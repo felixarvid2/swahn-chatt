@@ -197,7 +197,7 @@ class MessageOut(BaseModel):
     conversation_id: str
     sender_user_id: str
     sender_device_id: str
-    kind: Literal["message", "edit", "delete", "reaction"]
+    kind: Literal["message", "edit", "delete", "reaction", "call"]
     target_message_id: str | None
     client_ts: int
     server_ts: int
@@ -503,11 +503,18 @@ class EnvelopeIn(Req):
 class SendMessage(Req):
     id: UUIDStr
     conversation_id: UUIDStr
-    kind: Literal["message", "edit", "delete", "reaction"] = "message"
+    kind: Literal["message", "edit", "delete", "reaction", "call"] = "message"
     target_message_id: UUIDStr | None = None
     client_ts: int = Field(ge=0, le=2**62)
     attachment_ids: list[UUIDStr] = Field(default_factory=list, max_length=10)
     envelopes: list[EnvelopeIn] = Field(default_factory=list, max_length=1000)
+
+
+class TurnCredentials(BaseModel):
+    urls: list[str]
+    username: str | None
+    credential: str | None
+    ttl: int
 
 
 class AckRequest(Req):
