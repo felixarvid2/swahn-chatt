@@ -9,6 +9,8 @@ import androidx.work.testing.WorkManagerTestInitHelper
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -133,5 +135,23 @@ class ExpiryManagerTest {
         assertTrue(store.isLocallyDeleted("m1"), "remembered, so a replayed event cannot bring it back")
         assertNull(store.nextExpiry())
         assertTrue(infos().none { it.state == WorkInfo.State.ENQUEUED }, "no job is left for a time that no message has")
+    }
+
+    @Test fun `concurrent purges - whichever returns, the removal is complete`() = runBlocking<Unit> {
+        store.saveAccount(Account("https://x.example/", "me", "dev", 1, "anna", "Anna", false, "Pixel"))
+        db.tokenDao().put(se.familychat.app.data.db.TokenEntity(1, "access", "refresh", 1, 2))
+        assertNotNull(engine.restoreSession())
+        store.upsertConversation(Conversation("c1", "direct", null, createdBy = "me", members = listOf(ConversationMember("me"), ConversationMember("bob"))))
+        val files = (1..20).map { File(preparer.outgoingDir, "race-$it.jpg").apply { writeText("my copy") } }
+        files.forEachIndexed { i, f ->
+            val a = LocalAttachment("r$i", "k", "s", f.length(), "image/jpeg", "f.jpg", "image", 1, 1, null, null, f.absolutePath, DownloadState.DONE)
+            store.upsertMessage(msg("r$i", "bild $i", outgoing = true, attachments = listOf(a), seq = i + 1L))
+        }
+        engine.markDisplayed(files.indices.map { "r$it" })
+        now.addAndGet(300_000)
+        // the timer and the WorkManager job can be due together; the one that finds nothing left must still wait for the other
+        val purges = (1..2).map { async(Dispatchers.Default) { expiry.purgeAndSchedule(); files.count { it.exists() } } }
+        assertEquals(0, purges.first().await(), "files left when the first purge returned")
+        assertEquals(listOf(0, 0), purges.awaitAll())
     }
 }
