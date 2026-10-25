@@ -472,11 +472,12 @@ class FamilyChatEngine(
     /**
      * Deletes the decrypted copies of received attachments (of one conversation, or of all) and marks them as not downloaded,
      * so the messages stay and the files can be fetched again while the server still has them. Returns the bytes freed.
-     * Files of messages you sent (the engine never owns those) and downloads in progress are left alone.
+     * Files of messages you sent (the engine never owns those), downloads in progress and imported messages (their files came
+     * from a history file and the server never had them, so they could not be fetched again) are left alone.
      */
     suspend fun clearDownloadedMedia(conversationId: String? = null): Long {
         var freed = 0L
-        for (m in ctx.store.messagesWithAttachments(conversationId)) {
+        for (m in ctx.store.messagesWithAttachments(conversationId).filter { !it.imported }) {
             val owned = m.attachments.filter { it.downloadState == DownloadState.DONE && ctx.ownsFile(it.localPath) }
             if (owned.isEmpty()) continue
             for (a in owned) freed += ctx.deleteDownloadedFile(a.localPath)
@@ -554,6 +555,8 @@ class FamilyChatEngine(
                 ctx.emit(EngineEvent.MessageChanged(m.conversationId, m.id))
             }
         }
+        // the search index only marks the removed words as deleted until its segments are merged
+        if (removed.isNotEmpty()) ctx.store.compactSearchIndex()
         return removed
     }
 
@@ -631,7 +634,8 @@ class FamilyChatEngine(
     /** Marks everything in the conversation as read (local unread count drops; the server tells the senders). */
     suspend fun markRead(conversationId: String) {
         val c = ctx.store.getConversation(conversationId) ?: return
-        val latest = ctx.store.getMessages(conversationId, 1).lastOrNull { it.seq != null }?.seq
+        // imported history (from a file) never decides how far the conversation is read: its seq is not the server's word
+        val latest = ctx.store.getMessages(conversationId, 50).lastOrNull { it.seq != null && !it.imported }?.seq
             ?: c.lastMessageSeq ?: return
         if (latest <= c.myReadSeq) return
         ctx.store.setMyReadSeq(conversationId, latest)

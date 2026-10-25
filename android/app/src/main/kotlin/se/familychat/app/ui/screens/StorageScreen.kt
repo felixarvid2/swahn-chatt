@@ -71,6 +71,7 @@ data class StorageUiState(
     val loading: Boolean = true,
     val rows: List<StorageRowUi> = emptyList(),
     val mediaBytes: Long = 0,
+    val importedBytes: Long = 0,
     val otherBytes: Long = 0,
     val databaseBytes: Long = 0,
     val cacheBytes: Long = 0,
@@ -78,7 +79,7 @@ data class StorageUiState(
     /** Bytes freed by the last action, shown once ([StorageViewModel.messageShown] clears it). */
     val freed: Long? = null,
 ) {
-    val totalBytes: Long get() = mediaBytes + otherBytes + databaseBytes + cacheBytes
+    val totalBytes: Long get() = mediaBytes + importedBytes + otherBytes + databaseBytes + cacheBytes
 }
 
 @HiltViewModel
@@ -103,7 +104,7 @@ class StorageViewModel @Inject constructor(
     }
 
     private fun StorageUiState.fromReport(report: StorageReport, titles: Map<String, se.familychat.app.ui.model.ConversationItemUi>) = copy(
-        loading = false, busy = false, mediaBytes = report.mediaBytes, otherBytes = report.otherBytes,
+        loading = false, busy = false, mediaBytes = report.mediaBytes, importedBytes = report.importedBytes, otherBytes = report.otherBytes,
         databaseBytes = report.databaseBytes, cacheBytes = report.cacheBytes,
         rows = report.conversations.map { c ->
             val item = titles[c.conversationId]
@@ -252,6 +253,7 @@ private fun TotalCard(state: StorageUiState) {
             }
             HorizontalDivider()
             SizeRow(R.string.storage_media, state.mediaBytes)
+            if (state.importedBytes > 0) SizeRow(R.string.storage_imported_media, state.importedBytes)
             SizeRow(R.string.storage_database, state.databaseBytes)
             SizeRow(R.string.storage_cache, state.cacheBytes)
             SizeRow(R.string.storage_other, state.otherBytes)

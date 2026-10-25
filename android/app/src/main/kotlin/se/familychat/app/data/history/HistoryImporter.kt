@@ -10,6 +10,7 @@ import se.familychat.core.client.LocalStore
 import se.familychat.core.client.MessageStatus
 import se.familychat.core.client.Reaction
 import se.familychat.core.client.StoredMessage
+import se.familychat.core.model.Conversation
 import se.familychat.core.model.Emoji
 import se.familychat.core.model.FamilyChatJson
 import java.io.BufferedInputStream
@@ -44,6 +45,10 @@ data class HistoryLimits(
     /** One line of a `.jsonl` entry. */
     val maxLineBytes: Int = 1024 * 1024,
     val maxEntries: Int = 200_000,
+    /** Lines of `messages.jsonl`, valid or not: an archive cannot make the importer parse an unbounded number of records. */
+    val maxMessageLines: Int = 200_000,
+    /** What the validated messages take in the temporary spool file, and the most `messages.jsonl` itself may unpack to. */
+    val maxSpoolBytes: Long = 1024L * 1024 * 1024,
 )
 
 /**
@@ -52,6 +57,10 @@ data class HistoryLimits(
  * - It only adds. Messages already here (same id) or removed here are left alone; conversations are never created from a
  *   file, only messages of conversations this phone already knows. Imported messages are marked "Importerad", are never
  *   sent anywhere, and touch no session, key, token or read mark.
+ * - A file is not trusted about who said what or when: a message whose sender is not a member of the conversation here is
+ *   dropped, its `seq` is clamped to the conversation's current last sequence number (so it can neither silence later real
+ *   messages nor reorder anything past the present; imported rows are also left out of every unread count and read mark),
+ *   and of the reactions only this account's own are taken.
  * - The file is authenticated all the way to its last byte before anything is added: the archive is unpacked into a spool
  *   (validated messages in a temporary file, media files in a folder of their own), and only when the stream has ended
  *   cleanly are the messages inserted. A wrong passphrase, a changed header or ciphertext, or a file that was cut off
@@ -121,7 +130,8 @@ class HistoryImporter(
         } catch (e: java.security.GeneralSecurityException) {
             throw HistoryException.WrongPassphraseOrDamaged()
         }
-        val zip = ZipInputStream(CountingInput(buffered, Budget(limits.maxPayloadBytes)))
+        // what the archive INFLATES to is counted (per entry and in total), not the bytes it was stored in: a bomb is small
+        val zip = Inflated(ZipInputStream(buffered), Budget(limits.maxPayloadBytes))
         val reading = Unpacking(ownerUserId, runDir, onProgress)
         try {
             spool.outputStream().buffered().use { reading.run(zip, it) }
@@ -144,21 +154,25 @@ class HistoryImporter(
         val media = HashSet<String>()
         var invalid = 0
         var messages = 0
+        private var lines = 0
+        private var spooled = 0L
 
-        fun run(zip: ZipInputStream, spoolOut: OutputStream) {
-            val first = zip.nextEntry ?: throw HistoryException.BadContent("empty archive")
+        fun run(zip: Inflated, spoolOut: OutputStream) {
+            zip.startEntry(limits.maxLineBytes.toLong())
+            val first = zip.nextEntry() ?: throw HistoryException.BadContent("empty archive")
             if (first.name != HistoryEntries.MANIFEST) throw HistoryException.BadContent("no manifest")
             val manifest = decodeManifest(readEntry(zip, limits.maxLineBytes.toLong()))
             if (manifest.ownerUserId != ownerUserId) throw HistoryException.WrongAccount()
             var entries = 1
             while (true) {
-                val entry = zip.nextEntry ?: break
+                val entry = zip.nextEntry() ?: break
                 if (++entries > limits.maxEntries) throw HistoryException.TooLarge()
+                zip.startEntry(if (entry.name == HistoryEntries.MESSAGES) limits.maxSpoolBytes else limits.maxEntryBytes)
                 entry(entry.name, zip, spoolOut)
             }
         }
 
-        private fun entry(name: String, zip: ZipInputStream, spoolOut: OutputStream) {
+        private fun entry(name: String, zip: InputStream, spoolOut: OutputStream) {
             when {
                 name == HistoryEntries.MANIFEST -> throw HistoryException.BadContent("manifest twice")
                 // the names in the list are for people reading the file; nothing is created from them
@@ -174,6 +188,7 @@ class HistoryImporter(
         }
 
         private fun message(line: String, spoolOut: OutputStream) {
+            if (++lines > limits.maxMessageLines) throw HistoryException.TooLarge()
             val record = try {
                 FamilyChatJson.decodeFromString(HistoryMessage.serializer(), line)
             } catch (e: SerializationException) {
@@ -184,7 +199,10 @@ class HistoryImporter(
                 invalid++
                 return
             }
-            spoolOut.write((FamilyChatJson.encodeToString(HistoryMessage.serializer(), checked) + "\n").toByteArray())
+            val bytes = (FamilyChatJson.encodeToString(HistoryMessage.serializer(), checked) + "\n").toByteArray()
+            spooled += bytes.size
+            if (spooled > limits.maxSpoolBytes) throw HistoryException.TooLarge()
+            spoolOut.write(bytes)
             if (++messages % 500 == 0) onProgress(Phase.READING, messages)
         }
     }
@@ -231,19 +249,26 @@ class HistoryImporter(
         var unknown = 0
         var done = 0
         val used = HashSet<String>()
-        val conversations = HashMap<String, Boolean>()
+        var rejected = 0
+        val conversations = HashMap<String, Conversation?>() // a null value is cached too (a conversation this phone does not have)
         val batch = ArrayList<HistoryMessage>(BATCH)
         val me = store.getAccount()?.userId
         suspend fun flush() {
             if (batch.isEmpty()) return
             store.transaction {
                 for (r in batch) {
-                    val known = conversations.getOrPut(r.conversationId) { store.getConversation(r.conversationId) != null }
+                    val conversation = if (r.conversationId in conversations) {
+                        conversations[r.conversationId]
+                    } else {
+                        store.getConversation(r.conversationId).also { conversations[r.conversationId] = it }
+                    }
                     when {
-                        !known -> unknown++
+                        conversation == null -> unknown++
+                        // only what a member of the conversation (here, as the list stands now) could have said
+                        conversation.members.none { it.userId == r.senderUserId } -> rejected++
                         store.getMessage(r.id) != null || store.isLocallyDeleted(r.id) -> already++
                         else -> {
-                            insert(r, me)
+                            insert(r, me, conversation)
                             r.attachments.forEach { a -> a.media?.let(used::add) }
                             imported++
                         }
@@ -264,16 +289,18 @@ class HistoryImporter(
         // media of messages that were not inserted are not wanted
         runDir.listFiles()?.forEach { f -> if (f.path !in used) f.delete() }
         if (runDir.listFiles().isNullOrEmpty()) runDir.delete()
-        return ImportResult(imported, already, unknown, staged.invalid, used.size)
+        return ImportResult(imported, already, unknown, staged.invalid + rejected, used.size)
     }
 
-    private suspend fun insert(r: HistoryMessage, me: String?) {
+    private suspend fun insert(r: HistoryMessage, me: String?, conversation: Conversation) {
         val outgoing = r.senderUserId == me
+        // never past what this phone has seen of the conversation: a huge seq must not mark later real messages as read
+        val seq = (r.seq ?: 0L).coerceIn(0L, (conversation.lastMessageSeq ?: 0L).coerceAtLeast(0L))
         store.upsertMessage(
             StoredMessage(
                 id = r.id, conversationId = r.conversationId, senderUserId = r.senderUserId, senderDeviceId = null,
                 outgoing = outgoing, status = if (outgoing) MessageStatus.SENT else MessageStatus.RECEIVED,
-                seq = r.seq, clientTs = r.clientTs, serverTs = r.serverTs, text = r.text, replyTo = r.replyTo,
+                seq = seq, clientTs = r.clientTs, serverTs = r.serverTs, text = r.text, replyTo = r.replyTo,
                 attachments = r.attachments.map { a ->
                     LocalAttachment(
                         id = "import-${UUID.randomUUID()}", key = null, sha256 = null, size = a.size, mime = a.mime, name = a.name,
@@ -285,6 +312,8 @@ class HistoryImporter(
             ),
         )
         for (reaction in r.reactions) {
+            // only this account's own: a file must not put reactions in other members' names
+            if (reaction.userId != me) continue
             // sequence 0: any real reaction that arrives later, from any phone, replaces it
             store.putReaction(Reaction(r.id, r.conversationId, reaction.userId, reaction.emoji, 0, r.serverTs ?: r.clientTs))
         }
@@ -296,21 +325,42 @@ class HistoryImporter(
 
     private class Budget(var left: Long)
 
-    /** Counts what the archive unpacks to against one shared budget. */
-    private class CountingInput(input: InputStream, private val budget: Budget) : FilterInputStream(input) {
-        override fun read(): Int {
-            val b = super.read()
-            if (b >= 0 && --budget.left < 0) throw LimitExceeded()
-            return b
+    /**
+     * The archive as it is read: counts INFLATED bytes (what [read] returns) against one total budget and against a limit for
+     * the current entry. Reading goes only through this class, also when an entry is skipped, so a bomb cannot unpack unseen.
+     */
+    private class Inflated(private val zip: ZipInputStream, private val budget: Budget) : FilterInputStream(zip) {
+        private var entryLeft = Long.MAX_VALUE
+
+        fun nextEntry(): java.util.zip.ZipEntry? = zip.nextEntry
+
+        fun startEntry(limit: Long) {
+            entryLeft = limit
         }
+
+        private fun count(n: Long) {
+            budget.left -= n
+            entryLeft -= n
+            if (budget.left < 0 || entryLeft < 0) throw LimitExceeded()
+        }
+
+        override fun read(): Int = super.read().also { if (it >= 0) count(1) }
 
         override fun read(buf: ByteArray, off: Int, len: Int): Int {
             val n = super.read(buf, off, len)
-            if (n > 0) {
-                budget.left -= n
-                if (budget.left < 0) throw LimitExceeded()
-            }
+            if (n > 0) count(n.toLong())
             return n
+        }
+
+        override fun skip(n: Long): Long {
+            val buf = ByteArray(8192)
+            var left = n
+            while (left > 0) {
+                val r = read(buf, 0, minOf(left, buf.size.toLong()).toInt())
+                if (r < 0) break
+                left -= r
+            }
+            return n - left
         }
     }
 

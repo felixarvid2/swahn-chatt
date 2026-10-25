@@ -33,9 +33,11 @@ data class StorageReport(
     val databaseBytes: Long,
     /** What "clear cache" can free. */
     val cacheBytes: Long,
+    /** Media of imported messages: not in [conversations] or [mediaBytes], and never cleared (it cannot be downloaded again). */
+    val importedBytes: Long = 0,
 ) {
     /** Everything the app keeps on the phone that this screen knows about. */
-    val totalBytes: Long get() = mediaBytes + otherBytes + databaseBytes + cacheBytes
+    val totalBytes: Long get() = mediaBytes + importedBytes + otherBytes + databaseBytes + cacheBytes
 }
 
 /**
@@ -49,10 +51,15 @@ class StorageUsage @Inject constructor(private val store: LocalStore, private va
     suspend fun report(): StorageReport {
         val seen = HashSet<String>()
         val perConversation = LinkedHashMap<String, LongArray>() // bytes, files
+        var imported = 0L
         for (m in store.messagesWithAttachments()) for (a in m.attachments) {
             val file = a.localPath?.let(::File) ?: continue
             if (a.downloadState != DownloadState.DONE || !file.isFile || !isInside(file, dirs.attachments)) continue
             if (!seen.add(file.canonicalPath)) continue // one file, one count
+            if (m.imported) {
+                imported += file.length()
+                continue
+            }
             val acc = perConversation.getOrPut(m.conversationId) { LongArray(2) }
             acc[0] += file.length(); acc[1]++
         }
@@ -61,9 +68,10 @@ class StorageUsage @Inject constructor(private val store: LocalStore, private va
         return StorageReport(
             conversations = conversations,
             mediaBytes = media,
-            otherBytes = (sizeOf(dirs.attachments) - media).coerceAtLeast(0),
+            otherBytes = (sizeOf(dirs.attachments) - media - imported).coerceAtLeast(0),
             databaseBytes = DB_SUFFIXES.sumOf { File(dirs.database.path + it).let { f -> if (f.isFile) f.length() else 0L } },
             cacheBytes = sizeOf(dirs.cache) + stalePartials().sumOf { it.length() },
+            importedBytes = imported,
         )
     }
 

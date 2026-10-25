@@ -13,7 +13,9 @@ import se.familychat.core.model.AckRequest
 import se.familychat.core.model.Content
 import se.familychat.core.model.ContentType
 import se.familychat.core.model.Conversation
+import se.familychat.core.model.ConversationType
 import se.familychat.core.model.Message
+import se.familychat.core.model.MemberRole
 import se.familychat.core.model.MessageKind
 import se.familychat.core.model.ParsedEvent
 import se.familychat.core.model.ReceiptData
@@ -227,6 +229,13 @@ internal class SyncProcessor(private val ctx: EngineContext, private val directo
      */
     private suspend fun applyTimer(conversation: Conversation, m: Message, c: Content) {
         val seconds = c.seconds ?: return
+        // In a group only an admin sets the timer (as the member list stands here): from anyone else the change is consumed
+        // and ignored, however well it is authenticated. A direct conversation has no roles.
+        if (conversation.type == ConversationType.GROUP &&
+            conversation.members.none { it.userId == m.senderUserId && it.role == MemberRole.ADMIN }
+        ) {
+            return
+        }
         val current = ctx.store.getTimer(conversation.id)
         if (current != null && (current.seq == null || current.seq >= m.seq)) return
         ctx.store.putTimer(ConversationTimer(conversation.id, seconds, m.senderUserId, m.seq, m.serverTs))

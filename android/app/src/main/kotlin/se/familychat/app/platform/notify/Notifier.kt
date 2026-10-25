@@ -16,6 +16,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import se.familychat.app.MainActivity
 import se.familychat.app.R
@@ -94,6 +96,19 @@ class Notifier @Inject constructor(
             }
         }
         scope.launch {
+            // A setting that changes what a notification shows or offers (the reply action, names, text) must reach the ones that
+            // are already posted, not only the next: repost them (quietly) or take them down.
+            combine(prefs.notificationPrivacy, prefs.appLockEnabled) { privacy, locked -> privacy to locked }.drop(1).collect {
+                try {
+                    refreshPosted()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    // never let a notification problem break the collector
+                }
+            }
+        }
+        scope.launch {
             for (r in flushRequests) {
                 delay(DEBOUNCE_MS) // a sync stores several messages in a burst: one notification update for them
                 try {
@@ -111,8 +126,14 @@ class Notifier @Inject constructor(
         notifyNow(synchronized(pending) { pending.toList().also { pending.clear() } })
     }
 
+    /** Posts again, without a new alert, every conversation notification that is up; those with nothing unread are removed. */
+    internal suspend fun refreshPosted() {
+        val up = context.getSystemService(NotificationManager::class.java).activeNotifications.mapTo(HashSet()) { it.id }
+        notifyNow(store.getConversations().map { it.id }.filter { idFor(it) in up }, quiet = true)
+    }
+
     /** Posts (or updates, or removes) the notification of each conversation according to its unread messages. */
-    internal suspend fun notifyNow(ids: Collection<String>) {
+    internal suspend fun notifyNow(ids: Collection<String>, quiet: Boolean = false) {
         for (id in ids) {
             if (foreground.isForeground.value && active.current.value == id) continue // the user is looking at it
             if (db.storeDao().settings(id)?.let { isMuted(it.mutedUntil, System.currentTimeMillis()) } == true) {
@@ -124,12 +145,12 @@ class Notifier @Inject constructor(
                 cancel(id)
                 continue
             }
-            post(id, unread)
+            post(id, unread, quiet)
         }
     }
 
     @android.annotation.SuppressLint("MissingPermission") // checked with areNotificationsEnabled()
-    private suspend fun post(conversationId: String, unread: List<StoredMessage>) {
+    private suspend fun post(conversationId: String, unread: List<StoredMessage>, quiet: Boolean) {
         if (!manager.areNotificationsEnabled()) return
         val conversation = store.getConversation(conversationId) ?: return
         val me = engine.account.value ?: return
@@ -161,7 +182,7 @@ class Notifier @Inject constructor(
         }
 
         val newest = unread.maxOf { it.seq ?: 0L }
-        val alert = newest > (lastNotifiedSeq[conversationId] ?: 0L)
+        val alert = !quiet && newest > (lastNotifiedSeq[conversationId] ?: 0L)
         lastNotifiedSeq[conversationId] = maxOf(newest, lastNotifiedSeq[conversationId] ?: 0L)
         replied.remove(conversationId)
 

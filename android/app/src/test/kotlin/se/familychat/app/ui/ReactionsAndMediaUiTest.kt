@@ -176,6 +176,13 @@ class ReactionsAndMediaUiTest {
         compose.onNode(hasContentDescription("Importerad", substring = true)).assertIsDisplayed()
     }
 
+    @Test fun `a message that says it is forwarded still says it is imported`() {
+        content { MessageBubble(message(forwarded = true, imported = true), BubbleActions(), PlaybackUi()) }
+        compose.onNodeWithText("Vidarebefordrat · Importerad", useUnmergedTree = true).assertIsDisplayed()
+        compose.onNode(hasContentDescription("Importerad", substring = true)).assertIsDisplayed()
+        compose.onNode(hasContentDescription("Vidarebefordrat", substring = true)).assertIsDisplayed()
+    }
+
     // --- several photos in one bubble ----------------------------------------------------------------------------------------------
 
     private fun photo(i: Int, transfer: TransferUi = TransferUi.Remote) =

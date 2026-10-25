@@ -148,13 +148,17 @@ object HistoryFormat {
         val generator = Argon2BytesGenerator().also { it.init(params) }
         val pw = passphraseBytes(passphrase)
         return try {
-            ByteArray(KEY_BYTES).also { generator.generateBytes(pw, it) }
-        } catch (e: OutOfMemoryError) {
-            // the memory block is allocated here; a phone that cannot give 128 MiB refuses the file instead of crashing the app
-            throw HistoryException.UnsupportedParameters("not enough memory for ${header.kdf.memoryKiB / 1024} MiB")
+            guardMemory(header.kdf.memoryKiB) { ByteArray(KEY_BYTES).also { generator.generateBytes(pw, it) } }
         } finally {
             pw.fill(0)
         }
+    }
+
+    /** Runs the key derivation; a phone that cannot give the memory the header asks for refuses the file instead of crashing the app. */
+    internal fun <T> guardMemory(memoryKiB: Int, block: () -> T): T = try {
+        block()
+    } catch (e: OutOfMemoryError) {
+        throw HistoryException.UnsupportedParameters("not enough memory for ${memoryKiB / 1024} MiB")
     }
 
     /** Tink's `AES256_GCM_HKDF_1MB` as a primitive over the derived key. */

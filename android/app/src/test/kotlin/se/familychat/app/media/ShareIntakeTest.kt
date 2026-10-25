@@ -75,6 +75,20 @@ class ShareIntakeTest {
         assertEquals(1, ShareIntake.parse(send(Uri.parse("content://se.familychat.appx/1")), own).uris.size)
     }
 
+    @Test fun `a user id in front of the authority does not get past the own-provider rule`() {
+        // content://0@<authority> reaches the same provider (as user 0): the part before the @ is not the authority
+        for (u in listOf(
+            "content://0@$own.files/share/x.pdf", "content://0@$own/x", "content://10@${own.uppercase()}.files/x",
+            "content://0@0@$own.files/x", "content://%30%40$own.files/x", "content://u:p@$own.files/x",
+        )) {
+            assertEquals(emptyList(), ShareIntake.parse(send(Uri.parse(u)), own).uris, u)
+            assertFalse(ShareIntake.acceptable(Uri.parse(u), own), u)
+        }
+        // another app's provider, also with a user id (work profile), is still fine
+        assertEquals(1, ShareIntake.parse(send(Uri.parse("content://10@com.example.photos/1")), own).uris.size)
+        assertFalse(ShareIntake.acceptable(Uri.parse("content://0@/x"), own), "an empty authority after the user id")
+    }
+
     @Test fun `other actions are ignored, and so is nothing at all`() {
         assertTrue(ShareIntake.parse(Intent(Intent.ACTION_VIEW, Uri.parse("content://a/1")), own).isEmpty)
         assertTrue(ShareIntake.parse(Intent(Intent.ACTION_MAIN), own).isEmpty)

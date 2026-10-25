@@ -69,6 +69,8 @@ class HistoryTest {
     @Test fun `text and metadata make the round trip into a phone that has the conversations`() = runBlocking {
         val file = phone.export()
         val fresh = phone.newPhone()
+        // as on a phone that has these conversations up to the same point (a sequence number is never taken beyond that)
+        fresh.store.upsertConversation(fresh.store.getConversation("c1")!!.copy(lastMessageSeq = 6))
         val result = fresh.import(file)
         assertEquals(ImportResult(imported = 4, alreadyHere = 0, unknownConversation = 0, invalid = 0, mediaFiles = 0), result)
         val m1 = fresh.store.getMessage("m1")!!
@@ -361,7 +363,7 @@ class HistoryTest {
             """"attachments":[{"name":"../../../evil.sh","media":"media/../../evil","mime":"text/x\nbad"}]}"""
         val notJson = "this is not json"
         val badReaction = """{"id":"b6","conversation_id":"c1","sender_user_id":"bob","text":"r",""" +
-            """"reactions":[{"user_id":"bob","emoji":"not an emoji"},{"user_id":"bob","emoji":"👍"}]}"""
+            """"reactions":[{"user_id":"me","emoji":"not an emoji"},{"user_id":"me","emoji":"👍"}]}"""
         val fresh = phone.newPhone()
         val file = buildFile(
             listOf(

@@ -165,6 +165,11 @@ class RoomLocalStore(
         existing
     }
 
+    /** `optimize` merges all segments of the FTS4 index into one, which drops the terms of rows that were deleted. */
+    override suspend fun compactSearchIndex() = withContext(dispatcher) {
+        db.openHelper.writableDatabase.execSQL("INSERT INTO `message_fts`(`message_fts`) VALUES ('optimize')")
+    }
+
     override suspend fun getReaction(messageId: String, userId: String): Reaction? =
         io { dao.reaction(messageId, userId)?.toModel() }
 

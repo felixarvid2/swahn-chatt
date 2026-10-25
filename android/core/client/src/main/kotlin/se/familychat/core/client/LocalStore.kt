@@ -368,6 +368,12 @@ interface LocalStore {
     /** The earliest [StoredMessage.expireAt] of any message that has one, or null. */
     suspend fun nextExpiry(): Long?
 
+    /**
+     * Called after messages were removed for good (disappearing messages): a store with a search index merges it so that the
+     * words of the removed messages do not linger in the file. Nothing to do for a store without one.
+     */
+    suspend fun compactSearchIndex() {}
+
     // --- receipt times and local deletions ----------------------------------------------------------------------------
     /**
      * Remembers when [userId] acknowledged ([deliveredAt]) or read ([readAt]) [messageId]. A time already stored is kept

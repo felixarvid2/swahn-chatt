@@ -103,10 +103,12 @@ abstract class AppDatabase : RoomDatabase() {
         /** Migrations from older versions; every shipped version needs one (see `MigrationTest`). */
         val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
 
-        /** Durable ratchet writes: a lost libsignal step cannot be recovered, so never trade `synchronous` for speed. */
+        /** Durable ratchet writes: a lost libsignal step cannot be recovered, so never trade `synchronous` for speed. Also `secure_delete`. */
         private val durability = object : Callback() {
             override fun onOpen(db: SupportSQLiteDatabase) {
                 db.query("PRAGMA synchronous=FULL").close()
+                // freed pages are overwritten with zeros, so a removed message does not stay readable in the (encrypted) file's free space
+                db.query("PRAGMA secure_delete=ON").close()
             }
         }
 

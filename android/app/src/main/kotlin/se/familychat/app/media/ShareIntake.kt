@@ -84,10 +84,13 @@ object ShareIntake {
         return ShareRequest(text, accepted.take(MAX_FILES), refused + (accepted.size - accepted.take(MAX_FILES).size), truncated)
     }
 
-    /** True for `content://` URIs that are not served by this app. */
+    /**
+     * True for `content://` URIs that are not served by this app. The authority may carry a user id in front
+     * (`content://0@se.familychat.app.fileprovider/...` reaches the same provider), so only what follows the last `@` is compared.
+     */
     fun acceptable(uri: Uri, ownPackage: String): Boolean {
         if (!"content".equals(uri.scheme, ignoreCase = true)) return false
-        val authority = uri.authority?.lowercase() ?: return false
+        val authority = uri.authority?.substringAfterLast('@')?.lowercase() ?: return false
         return authority.isNotEmpty() && authority != ownPackage.lowercase() && !authority.startsWith("${ownPackage.lowercase()}.")
     }
 

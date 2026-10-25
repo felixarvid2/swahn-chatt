@@ -130,7 +130,8 @@ Risks of libsignal that we accept and mitigate:
   lock-screen (public) version of a notification never shows message text.
 - **Inline reply:** sent through the normal outbox. Its broadcast receiver is not exported, and its PendingIntent
   is the only mutable one (explicit component). The reply action is hidden when notifications show
-  "Ingen information" and while the app lock is on.
+  "Ingen information" and while the app lock is on. A reply that arrives after either was switched on is dropped,
+  and changing the settings reposts or removes notifications already shown.
 - **App lock and screenshot blocking** (`FLAG_SECURE`) are UI gates only. The database key does not depend on the
   lock, so they protect against someone holding the unlocked phone, not against a forensic attacker.
 
@@ -151,11 +152,12 @@ Risks of libsignal that we accept and mitigate:
   not decrypt".
 - **Reactions and disappearing-message timers** are encrypted, bound content like edits. A reaction is bound to
   its target and its author. A timer change applies only when it arrives as encrypted `timer` content from a
-  member (an admin in groups). The server's `disappearing_seconds` and `expires_at` only drive server-side pruning:
+  member. In groups the receiving phone also requires that the sender is an admin in its local member list. The server's `disappearing_seconds` and `expires_at` only drive server-side pruning:
   a client never deletes local history because the server says so. Expiry starts when the message is first shown
-  on the device and removes the text, files and search index rows.
+  on the device and removes the text, files and search index rows. The search index is then merged and the
+  database overwrites deleted pages (`secure_delete`), so purged words do not linger.
 - **Share target:** FamilyChat accepts `ACTION_SEND`/`ACTION_SEND_MULTIPLE` from other apps. Shared items are
-  untrusted: only `content://` URIs are read (never `file://` or the app's own provider), copies are size-limited
+  untrusted: only `content://` URIs are read (never `file://` or the app's own provider, also with a `0@` user prefix), copies are size-limited
   and never read past the limit, names are sanitised, and the app lock must be unlocked before conversations are
   shown.
 - **Forwarding** re-encrypts the content for the target conversation and re-uploads attachments under fresh keys.
@@ -166,6 +168,12 @@ Risks of libsignal that we accept and mitigate:
   identity material (tested). Imports are verified completely before anything is merged. Imported messages are
   marked "Importerad", are never re-sent and only go into existing conversations of the same account. Expiring
   messages are not exported. The file is as strong as its passphrase, so use a long one.
+- **Import trusts nothing in the file.** A message is taken only if its sender is a member of that conversation on
+  this phone, and its `seq` is clamped to the conversation's last known one. Imported rows never count for unread
+  counts, read marks, notifications or "latest message". "Importerad" is always shown. Only this account's own
+  reactions are imported. Limits count decompressed bytes per entry and in total, with at most 200,000 message
+  lines. The header may ask for at most 128 MiB and 6 passes, and running out of memory is a refusal, not a crash.
+  Imported media is never removed by "clear downloaded media".
 
 ## Keys on the phone
 

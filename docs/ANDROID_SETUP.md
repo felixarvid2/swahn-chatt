@@ -342,5 +342,19 @@ the notification arrives (ntfy) and that the conversation opens with the message
   (64 MiB, 3 passes, 1 lane, random 16-byte salt) from a passphrase of at least 12 characters that is never stored, then Tink
   AES256_GCM_HKDF_1MB streaming encryption of a ZIP with the full header as associated data. No keys, tokens or sessions are
   included. Messages that are about to expire are left out. Losing the passphrase means losing the file.
+  What an import accepts from a file (it is authentic, but not trusted): a header asks for at most 128 MiB and 6 passes (an
+  export uses 64 MiB and 3; a phone that cannot give the memory refuses the file); what the archive *inflates* to is counted,
+  per entry and in total (a ZIP bomb is stopped at the limit, not by its stored size), with at most 200,000 message lines and
+  1 GiB of validated messages. A message is taken only if its sender is a member of that conversation on this phone, its
+  sequence number is clamped to the conversation's last known one (so it can never mark later real messages as read or sort
+  after them), and only this account's own reactions come along. Imported messages are left out of unread counts, read marks
+  and notifications, and always show *Importerad*, also when they say they were forwarded. *Rensa all nedladdad media* skips
+  imported media (it cannot be downloaded again); the storage screen lists it as *Importerad media*.
+- **Security rules added after review**: a disappearing-messages change in a *group* is only applied when its sender is an
+  administrator in the member list on this phone; an inline reply from a notification is dropped when the app lock or
+  "no information" notifications were switched on after the notification was posted, and changing either setting reposts or
+  removes the notifications that are up; the share target refuses `content://<user>@<own authority>/...` too; after
+  disappearing messages are removed the search index is merged (`optimize`) and the database overwrites deleted pages
+  (`secure_delete`), so the removed words do not stay in the file.
 - Instrumented tests: `HistoryAndContentInstrumentedTest` runs the production Argon2id/Tink parameters on the device; its R8
   keep rules are in `app/proguard-test-rules.pro`.

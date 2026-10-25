@@ -83,7 +83,7 @@ class InMemoryLocalStore : LocalStore {
     override suspend fun unreadCount(conversationId: String) = sync {
         val mine = readSeq[conversationId] ?: 0L
         messages.values.count {
-            it.conversationId == conversationId && !it.outgoing && !it.deleted && !it.isSystem && (it.seq ?: 0) > mine
+            it.conversationId == conversationId && !it.outgoing && !it.deleted && !it.isSystem && !it.imported && (it.seq ?: 0) > mine
         }
     }
 

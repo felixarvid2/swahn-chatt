@@ -364,7 +364,7 @@
     <string name="storage_freed">Freed %1$s</string>
     <string name="storage_clear_all_media">Clear all downloaded media</string>
     <string name="storage_clear_cache">Clear cache</string>
-    <string name="storage_clear_hint">Messages stay. Cleared media can be downloaded again as long as it is still on the server. Attachments you sent yourself are not touched.</string>
+    <string name="storage_clear_hint">Messages stay. Cleared media can be downloaded again as long as it is still on the server. Attachments you sent yourself and imported media are not touched.</string>
     <string name="storage_per_conversation">Downloaded media per conversation</string>
     <string name="storage_no_media">No downloaded media.</string>
     <string name="storage_row_detail">%1$s · %2$d files</string>
@@ -378,6 +378,7 @@
     <string name="storage_clear_confirm">Clear</string>
     <string name="storage_total">The app uses in total</string>
     <string name="storage_media">Downloaded media</string>
+    <string name="storage_imported_media">Imported media (not cleared)</string>
     <string name="storage_database">Messages (database)</string>
     <string name="storage_cache">Cache</string>
     <string name="storage_other">Profile pictures and other</string>

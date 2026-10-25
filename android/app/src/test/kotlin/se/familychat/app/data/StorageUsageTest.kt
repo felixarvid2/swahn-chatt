@@ -51,6 +51,20 @@ class StorageUsageTest {
         assertEquals(0L, r.otherBytes)
     }
 
+    @Test fun `media of imported messages is shown on its own and is not part of what can be cleared`() = runBlocking {
+        message("m1", "c1", att("a1", file(dirs.attachments, "a1", 1000)))
+        val importedFile = att("a2", file(dirs.attachments, "a2", 300))
+        store.upsertMessage(
+            StoredMessage("imp", "c1", "u2", null, false, MessageStatus.RECEIVED, 1, 1, 1, null, null, listOf(importedFile), imported = true),
+        )
+        val r = usage.report()
+        assertEquals(listOf(ConversationStorage("c1", 1000, 1)), r.conversations, "the conversation's row (what clearing frees) has no imported media")
+        assertEquals(1000L, r.mediaBytes)
+        assertEquals(300L, r.importedBytes)
+        assertEquals(0L, r.otherBytes, "and it is not 'other' either")
+        assertEquals(1300L, r.totalBytes)
+    }
+
     @Test fun `files outside the download folder, missing files and unfinished downloads are not counted`() = runBlocking {
         val own = file(File(root, "outgoing"), "sent.jpg", 9999) // the phone's own copy of something it sent
         val busy = att("busy", file(dirs.attachments, "busy", 70), DownloadState.DOWNLOADING)

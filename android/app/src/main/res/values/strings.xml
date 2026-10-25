@@ -364,7 +364,7 @@
     <string name="storage_freed">Frigjorde %1$s</string>
     <string name="storage_clear_all_media">Rensa all nedladdad media</string>
     <string name="storage_clear_cache">Rensa cache</string>
-    <string name="storage_clear_hint">Meddelandena finns kvar. Rensad media kan hämtas igen så länge den ligger kvar på servern. Bilagor du själv skickat berörs inte.</string>
+    <string name="storage_clear_hint">Meddelandena finns kvar. Rensad media kan hämtas igen så länge den ligger kvar på servern. Bilagor du själv skickat och importerad media berörs inte.</string>
     <string name="storage_per_conversation">Nedladdad media per konversation</string>
     <string name="storage_no_media">Ingen nedladdad media.</string>
     <string name="storage_row_detail">%1$s · %2$d filer</string>
@@ -378,6 +378,7 @@
     <string name="storage_clear_confirm">Rensa</string>
     <string name="storage_total">Appen använder totalt</string>
     <string name="storage_media">Nedladdad media</string>
+    <string name="storage_imported_media">Importerad media (rensas inte)</string>
     <string name="storage_database">Meddelanden (databas)</string>
     <string name="storage_cache">Cache</string>
     <string name="storage_other">Profilbilder och övrigt</string>

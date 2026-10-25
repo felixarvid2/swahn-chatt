@@ -26,11 +26,27 @@ class ReplyReceiver : BroadcastReceiver() {
     @Inject lateinit var work: WorkScheduler
     @Inject @ApplicationScope lateinit var scope: CoroutineScope
 
-    override fun onReceive(context: Context, intent: Intent) {
+    override fun onReceive(context: Context, intent: Intent) = reply(intent)
+
+    /** The work of [onReceive] once Hilt has injected the fields (called directly by the tests). */
+    internal fun reply(intent: Intent) {
         if (intent.action != ACTION) return
         val id = intent.getStringExtra(EXTRA_CONVERSATION) ?: return
         val text = RemoteInput.getResultsFromIntent(intent)?.getCharSequence(KEY_TEXT)?.toString()?.trim().orEmpty()
         if (text.isEmpty()) return
+        if (!notifier.replyAllowed()) {
+            // The notification can outlive the setting that took the reply away (app lock on, or "no information"): a reply that
+            // arrives now is dropped, not sent as the user. The notification is posted again, without the reply action.
+            val blocked = goAsync()
+            scope.launch {
+                try {
+                    runCatching { notifier.notifyNow(listOf(id), quiet = true) }
+                } finally {
+                    blocked?.finish()
+                }
+            }
+            return
+        }
         val pending = goAsync()
         scope.launch {
             try {

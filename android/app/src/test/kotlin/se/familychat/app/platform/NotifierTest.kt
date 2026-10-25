@@ -3,6 +3,9 @@ package se.familychat.app.platform
 import android.app.Notification
 import android.app.NotificationManager
 import android.content.Context
+import android.content.Intent
+import android.os.Bundle
+import androidx.core.app.RemoteInput
 import androidx.core.app.NotificationCompat
 import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.CoroutineScope
@@ -214,6 +217,69 @@ class NotifierTest {
         store.upsertMessage(incoming("m1", "direct", "bob", 1, "Hej"))
         notifier.notifyNow(listOf("direct"))
         assertEquals(1, conversationNotifications().single().actions.size)
+    }
+
+    private fun waitFor(what: String, check: () -> Boolean) {
+        val end = System.currentTimeMillis() + 5_000
+        while (!check()) {
+            check(System.currentTimeMillis() < end) { "timed out: $what" }
+            Thread.sleep(25)
+        }
+    }
+
+    private fun replyIntent(text: String) = Intent(ReplyReceiver.ACTION).putExtra(ReplyReceiver.EXTRA_CONVERSATION, "direct").also {
+        RemoteInput.addResultsToIntent(
+            arrayOf(RemoteInput.Builder(ReplyReceiver.KEY_TEXT).build()), it, Bundle().apply { putCharSequence(ReplyReceiver.KEY_TEXT, text) },
+        )
+    }
+
+    private fun outgoingCount() = runBlocking { store.getMessages("direct", 100).count { it.outgoing } }
+
+    @Test fun `an old reply action does nothing once the app lock is on, and the notification comes back without the action`() = runBlocking<Unit> {
+        store.upsertMessage(incoming("m1", "direct", "bob", 1, "Hej"))
+        notifier.notifyNow(listOf("direct"))
+        assertEquals(2, conversationNotifications().single().actions.size)
+        prefs.setAppLockEnabled(true) // after the notification was posted
+        val receiver = ReplyReceiver().also { it.notifier = notifier; it.scope = scope }
+        receiver.reply(replyIntent("Svar utan upplåsning"))
+        waitFor("the notification is posted again") { conversationNotifications().singleOrNull()?.actions?.size == 1 }
+        assertEquals(0, outgoingCount(), "nothing was sent")
+        assertEquals(1, store.unreadCount("direct"), "and nothing was marked read")
+    }
+
+    @Test fun `an old reply action does nothing once the notifications name nobody`() = runBlocking<Unit> {
+        store.upsertMessage(incoming("m1", "direct", "bob", 1, "Hej"))
+        notifier.notifyNow(listOf("direct"))
+        prefs.setNotificationPrivacy(NotificationPrivacy.HIDDEN)
+        ReplyReceiver().also { it.notifier = notifier; it.scope = scope }.reply(replyIntent("Svar"))
+        waitFor("the notification is posted again") {
+            conversationNotifications().singleOrNull()?.let { titleOf(it) == context.getString(se.familychat.app.R.string.app_name) } == true
+        }
+        assertEquals(1, conversationNotifications().single().actions.size)
+        assertEquals(0, outgoingCount())
+    }
+
+    @Test fun `turning the app lock on or the details off changes the notifications that are already up`() = runBlocking<Unit> {
+        store.upsertMessage(incoming("m1", "direct", "bob", 1, "Hemlig text"))
+        notifier.start()
+        Thread.sleep(300) // the collectors are subscribed before the settings change
+        notifier.notifyNow(listOf("direct"))
+        assertEquals(2, conversationNotifications().single().actions.size)
+        prefs.setAppLockEnabled(true)
+        waitFor("the reply action is gone") { conversationNotifications().singleOrNull()?.actions?.size == 1 }
+        prefs.setAppLockEnabled(false)
+        waitFor("the reply action is back") { conversationNotifications().singleOrNull()?.actions?.size == 2 }
+        prefs.setNotificationPrivacy(NotificationPrivacy.HIDDEN)
+        waitFor("the text is gone") {
+            conversationNotifications().singleOrNull()?.let { n ->
+                val texts = NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(n)!!.messages.map { it.text.toString() }
+                texts.none { it.contains("Hemlig") } && n.actions.size == 1
+            } == true
+        }
+        // a conversation that was read in the meantime has no notification to bring back
+        store.setMyReadSeq("direct", 1)
+        prefs.setNotificationPrivacy(NotificationPrivacy.FULL)
+        waitFor("the read conversation's notification is removed") { conversationNotifications().isEmpty() }
     }
 
     @Test fun `a muted conversation is not notified but keeps its unread count, an expired mute does not count`() = runBlocking<Unit> {
