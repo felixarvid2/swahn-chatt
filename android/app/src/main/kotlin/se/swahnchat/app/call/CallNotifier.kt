@@ -96,7 +96,9 @@ class CallNotifier @Inject constructor(
         val name = callerName(call.peerUserId)
         val shownName = name ?: context.getString(R.string.call_incoming_title)
         val person = Person.Builder().setName(shownName).setImportant(true).build()
-        val kind = context.getString(if (call.video) R.string.call_kind_video else R.string.call_kind_voice)
+        val baseKind = context.getString(if (call.video) R.string.call_kind_video else R.string.call_kind_voice)
+        // a call via a new, unverified device says so in the subtitle (the name still follows the privacy setting)
+        val kind = if (call.peerDeviceNew) context.getString(R.string.call_kind_new_device, baseKind) else baseKind
         val open = CallActivity.showIntent(context)
         val builder = NotificationCompat.Builder(context, CHANNEL_CALLS)
             .setSmallIcon(R.drawable.ic_notification)

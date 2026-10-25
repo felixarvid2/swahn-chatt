@@ -352,13 +352,20 @@ Risks of libsignal that we accept and mitigate:
 
 Audio/video calls are WebRTC between the phones; media is DTLS-SRTP, end to end (the relay only forwards encrypted
 packets). Signalling (offer, answer, ICE candidates, hangup, busy) is ordinary end-to-end encrypted content in
-messages of kind `call`, so the server never sees SDP, which also means it sees no codecs, call type or the phones'
-addresses in signalling. What the server does learn is metadata: who signalled whom and when (a `call` message), how
-many, and that a push marked urgent was sent.
+messages of kind `call`, so the server never sees SDP: it sees no codecs and no addresses of the phones in signalling.
+It does learn metadata: who signalled whom and when (a `call` message), how many, and that a push marked urgent was
+sent. The size of the envelopes and the number and timing of the call messages also reveal roughly whether it was a
+video call (a larger offer and answer, more candidates), whether it was answered, and how long it lasted (the
+hangup arrives when it ended); the call type is not hidden from an operator who looks at that pattern.
 
 - `call` messages: direct conversations only, full device-set envelopes, no attachments or targets, no effect on
-  `last_message_*`, unread counts or history, 60 per minute per sender, and **deleted with their envelopes 10
-  minutes after sending** (`SWAHNCHAT_CALL_RETENTION_SECONDS`), delivered or not.
+  `last_message_*`, unread counts or history, 60 per minute per sender, and **deleted with their envelopes by
+  the hourly maintenance job once they are older than 10 minutes** (`SWAHNCHAT_CALL_RETENTION_SECONDS`), delivered or not, so
+  they stay on the server for 10 to 70 minutes. The deletion frees pages inside the SQLite file; the server does not
+  set `secure_delete`, so the old ciphertext stays in those free pages (and, until a checkpoint, in the WAL) until they are
+  reused or the weekly database maintenance (`SWAHNCHAT_DB_MAINTENANCE_DAYS`, default 7) runs `VACUUM`, which it does only when
+  more than 20 % of the pages are free, the disk has room for the copy and no request arrived for a minute (else it is
+  retried hourly). What stays is end-to-end encrypted ciphertext and metadata, never SDP or candidates in the clear.
 - The push for a `call` message is content-free like all pushes (`{"t":"sync"}`); it only adds `Priority: 5` and
   `Urgency: high` headers so the phone is woken at once. A `{"t":"call"}` body was rejected on purpose: the header
   already tells the push server (your own ntfy) "urgent", and nothing more should leak to a third-party distributor.
@@ -366,18 +373,21 @@ many, and that a push marked urgent was sent.
   `base64(HMAC-SHA1(secret, username))`, valid one hour, handed only to authenticated users (30 requests per minute).
   HMAC-SHA1 is what coturn defines; it is a keyed MAC here, not a hash used for collision resistance. The shared
   secret (`SWAHNCHAT_TURN_SECRET`, at least 32 bytes) is never logged or printed by `check-config`; a leaked credential
-  works for at most its lifetime. coturn limits allocations per user (10) and in total (40), restricts relays to UDP
-  ports 49160-49200, and has no CLI or web admin.
+  works for at most its lifetime. coturn limits allocations per user (10 per user per 10-minute window: the TURN username is
+  stable per user within the window) and in total (40), restricts relays to UDP ports 49160-49200, and has no CLI or web
+  admin.
 - **TURN sees IP addresses**, and the peers see each other's unless the app forces relay-only candidates. In a direct
   connection the other party learns your current IP (a stalker-style risk when calling someone you do not trust); with
   relay-only the callee sees only the relay's address, at the price of the server's bandwidth and latency. The TURN
   server sees both phones' IPs and traffic volume and timing, never the content.
-- The relay must not become a tunnel into the server's network: coturn runs with `denied-peer-ip` for loopback,
-  link-local, RFC 1918, ULA and `0.0.0.0/8`, with multicast peers off, **and for the Tailscale range
-  `100.64.0.0/10` (+ `fd7a:115c:a1e0::/48`) by default**. Anyone holding a credential could otherwise ask the relay to
-  reach every other host on the tailnet that the Pi can reach. Allowing it (`TURN_ALLOW_TAILNET_PEERS=true`) is only
-  needed when phones reach each other through the relay while on the tailnet; most of the time tailnet phones connect
-  directly and do not need it.
+- The relay must not become a tunnel into the server's network: coturn denies by default all IPv4 peers that are
+  private, loopback, link-local, CGNAT (which includes the Tailscale range `100.64.0.0/10`) or multicast, and **all IPv6
+  peers**. Only public IPv4 peers are allowed. The Pi's own public address stays reachable through the relay (relay-to-relay
+  calls need it), so a service that listens on all interfaces of the Pi is reachable from a credential holder through the
+  relay: only public services should listen on all interfaces, everything else should bind to loopback or a private address.
+  Otherwise anyone holding a credential could ask the relay to reach every other host on the tailnet that the Pi can
+  reach. Allowing the tailnet range (`TURN_ALLOW_TAILNET_PEERS=true`) is only needed when phones reach each other through
+  the relay while on the tailnet; most of the time tailnet phones connect directly and do not need it.
 - Opening the TURN ports to the internet exposes a UDP/TCP service that only answers authenticated requests, but it
   can still be probed and, with a leaked credential, used for free bandwidth until it expires. Prefer reaching it
   over Tailscale; for a public setup forward only 3478 (and 5349 with TLS) plus the relay range.
@@ -387,15 +397,38 @@ many, and that a push marked urgent was sent.
 What the Android app does around a call, and what it does not protect.
 
 - **Who can ring.** An incoming call rings only when the offer comes from the other member of that direct conversation, from a
-  device the app lists and pinned, decrypts, is under 60 seconds old and has not been seen before. A device that is still waiting
-  for your approval (a new device next to verified ones) cannot ring you: its signal fails to decrypt and is dropped, covered by a
-  test. Approving a new device stays mandatory and is not changed by calls.
+  device the app lists and pinned, decrypts, is under 60 seconds old by the server's clock, carries a `sent_at` within 5 minutes
+  of the phone's own clock and has not been seen before. A device that is still waiting for your approval (a new device next to
+  verified ones) cannot ring you: its signal fails to decrypt and is dropped, covered by a test. Approving a new device stays
+  mandatory and is not changed by calls.
+  - **Trust on first use, made visible.** A device added to the other person's account (for example with a stolen password) is pinned
+    as approved by contacts who never verified that person (only a contact who verified one of their devices must approve a new
+    one), so it can ring you as that person, and in a call the first device to answer wins. The app does not change that model but
+    shows it: when the device the call is locked on to (the offering device for a call you receive, the first answering one for
+    a call you place) is not verified and was created less than 7 days ago, the call screen shows "Samtalet går via en ny enhet hos
+    {namn} som inte är verifierad. Jämför säkerhetsnumret om du är osäker." and the incoming-call notification adds "– ny enhet" to
+    its subtitle (the name still follows the privacy setting). Verifying the safety number of the person's devices removes the
+    warning and, for contacts you verified, blocks unknown new devices altogether. Without that check a call from a new device of
+    someone you never verified cannot be told from the real person by the app.
+  - **A server that delays or replays.** The 60 s age check uses the server's own timestamp, so a compromised server could hold an
+    offer back and release it with a fresh timestamp. Offers therefore also carry the sender's clock (`sent_at`, inside the
+    encrypted content, set by every sender); the receiver drops an offer without it or more than 5 minutes from its own clock.
+    That narrows a delayed offer to the clock tolerance, it does not remove it (a server can still delay by up to 5 minutes), and
+    it assumes phones whose clocks are roughly right.
+  - **Ring and BUSY limits.** While you are in a call, the same person gets at most one BUSY answer per 10 seconds and further offers
+    from them are ignored until then; when idle, at most 3 incoming calls per person ring per 60 seconds and the rest are ignored
+    (no ring, no BUSY). This limits a contact (or a hijacked account) that floods you with calls, at the price that a legitimate
+    fourth call within a minute is not shown.
 - **Lock screen.** An incoming call can take over a locked screen (a full-screen notification, Android's own permission on 14+) and shows
   only the call: answer, decline, mute, speaker, camera, hang up. From there the app opens no chat and no other screen: the way "back to the
   chat" is not offered while the phone or the app lock is locked, the call screen just closes and the call goes on. The
   notification privacy setting applies: with "hidden" the notification, a missed-call notification and the call screen on a locked phone
   or locked app say "Inkommande samtal" / "Missat samtal" without a name. Pictures are not put into the notification. Answering from a
-  locked phone needs no unlock: whoever holds the phone can answer a call, as with any phone call.
+  locked phone needs no unlock: whoever holds the phone can answer a call, as with any phone call. The call screen follows the
+  phone's lock state while it is shown (screen off, screen on, unlock), so a name that was visible when the phone was unlocked
+  disappears when it locks.
+- **Permissions.** `MANAGE_OWN_CALLS` is declared only because the phone-call foreground service type requires it; the app has no
+  Telecom integration.
 - **Microphone and camera.** Asked when a call is placed or answered, never earlier. A foreground service (phone call, microphone, plus
   camera for video) runs only while a call does; Android's microphone and camera indicators show it. It is started from the visible
   call screen, never from the background. Without the camera permission a video call is a voice call.

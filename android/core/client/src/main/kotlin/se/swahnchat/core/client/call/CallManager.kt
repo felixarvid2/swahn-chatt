@@ -19,6 +19,7 @@ import se.swahnchat.core.model.CallAction
 import se.swahnchat.core.model.CallSignal
 import se.swahnchat.core.model.IceCandidate
 import java.util.UUID
+import kotlin.math.abs
 import java.util.concurrent.ConcurrentLinkedQueue
 
 /** The durations of a call, in milliseconds; tests use the defaults with virtual time. */
@@ -82,6 +83,9 @@ class CallManager(
 
         @Volatile var session: MediaSession? = null
 
+        /** The device we are locked on to is unverified and new (see [CallState.InCall.peerDeviceNew]). */
+        var peerDeviceNew = false
+
         /** True once the remote description is set, so remote candidates can be added. */
         var remoteReady = false
         val pendingRemote = ArrayList<Pair<Origin, IceCandidate>>()
@@ -106,6 +110,10 @@ class CallManager(
 
     @Volatile private var active: Active? = null
     private val seen = LinkedHashSet<String>()
+
+    /** Per peer user: when we last answered an offer with BUSY, and when offers last rang this phone. */
+    private val lastBusy = HashMap<String, Long>()
+    private val rings = HashMap<String, ArrayDeque<Long>>()
     private var lingerJob: Job? = null
     private var collector: Job? = null
 
@@ -202,19 +210,44 @@ class CallManager(
         val sdp = s.sdp
         val acceptable = !e.fromSelf && sdp != null && s.callId !in seen && // offers only come from the other member, once
             signalling.serverNow() - e.serverTs <= MAX_SIGNAL_AGE_MS &&
+            sentAtPlausible(s.sentAt) &&
             signalling.peerOf(e.conversationId) == e.fromUserId
         if (!acceptable) return
         checkNotNull(sdp)
         seen += s.callId
         if (seen.size > MAX_SEEN) seen.remove(seen.first())
+        val now = clock()
         if (active != null) {
-            scope.launch { sendQuietly(e.conversationId, CallSignal(s.callId, CallAction.BUSY, s.video)) }
+            // at most one BUSY per peer user per window, further offers are ignored until it has passed
+            val last = lastBusy[e.fromUserId]
+            if (last != null && now - last < BUSY_WINDOW_MS) return
+            lastBusy.values.removeAll { now - it >= BUSY_WINDOW_MS }
+            lastBusy[e.fromUserId] = now
+            scope.launch { sendQuietly(e.conversationId, signal(s.callId, CallAction.BUSY, s.video)) }
             return
         }
+        // at most MAX_RINGS rings per peer user per window; the rest is ignored (neither rings nor answers BUSY)
+        val recent = rings.getOrPut(e.fromUserId) { ArrayDeque() }
+        while (recent.isNotEmpty() && now - recent.first() >= RING_WINDOW_MS) recent.removeFirst()
+        if (recent.size >= MAX_RINGS) return
+        recent.addLast(now)
+        rings.values.removeAll { it.isEmpty() }
         val a = Active(s.callId, e.conversationId, e.fromUserId, s.video, outgoing = false, phase = Phase.RINGING_IN)
         a.offerSdp = sdp
         a.locked = Origin(e.fromUserId, e.fromDeviceId)
-        begin(a, CallState.Incoming(a.callId, a.conversationId, a.peerUserId, a.video))
+        a.peerDeviceNew = isNewDevice(e.fromUserId, e.fromDeviceId)
+        begin(a, CallState.Incoming(a.callId, a.conversationId, a.peerUserId, a.video, a.peerDeviceNew))
+    }
+
+    /** The sender's clock must be within [MAX_CLOCK_SKEW_MS] of ours; an offer without it is dropped. */
+    private fun sentAtPlausible(sentAt: Long?) = sentAt != null && abs(clock() - sentAt) <= MAX_CLOCK_SKEW_MS
+
+    private suspend fun isNewDevice(userId: String, deviceId: String): Boolean = try {
+        signalling.isNewUnverifiedDevice(userId, deviceId)
+    } catch (c: CancellationException) {
+        throw c
+    } catch (ex: Exception) {
+        true // when it cannot be told, warn
     }
 
     /** Our own other devices: they only matter while this phone rings. */
@@ -229,11 +262,12 @@ class CallManager(
     }
 
     /** The caller locks on to the first answer; the answer of any other device is ignored from then on. */
-    private fun onAnswer(a: Active, e: CallSignalEvent) {
+    private suspend fun onAnswer(a: Active, e: CallSignalEvent) {
         val sdp = e.signal.sdp
         if (!a.outgoing || a.locked != null || a.phase != Phase.RINGING_OUT || sdp == null) return
         a.locked = Origin(e.fromUserId, e.fromDeviceId)
         a.ringJob?.cancel()
+        a.peerDeviceNew = isNewDevice(e.fromUserId, e.fromDeviceId)
         enterConnecting(a)
         a.remoteJob = scope.launch {
             try {
@@ -291,7 +325,7 @@ class CallManager(
 
     private fun enterConnecting(a: Active) {
         a.phase = Phase.CONNECTING
-        _state.value = CallState.Connecting(a.callId, a.conversationId, a.peerUserId, a.video, a.outgoing)
+        _state.value = CallState.Connecting(a.callId, a.conversationId, a.peerUserId, a.video, a.outgoing, a.peerDeviceNew)
         a.connectJob = scope.launch {
             delay(timings.connectMs)
             lock.withLock { if (active === a) end(a, EndReason.FAILED, CallAction.HANGUP) }
@@ -303,7 +337,7 @@ class CallManager(
             val session = createSession(a) ?: return
             val offer = session.createOffer()
             if (active !== a) return
-            signalling.send(a.conversationId, CallSignal(a.callId, CallAction.OFFER, a.video, sdp = offer))
+            signalling.send(a.conversationId, signal(a.callId, CallAction.OFFER, a.video, sdp = offer))
             lock.withLock { if (active === a) startIce(a) }
         } catch (c: CancellationException) {
             throw c
@@ -320,7 +354,7 @@ class CallManager(
                 if (active !== a) return
                 remoteDescriptionSet(a)
             }
-            signalling.send(a.conversationId, CallSignal(a.callId, CallAction.ANSWER, a.video, sdp = answer))
+            signalling.send(a.conversationId, signal(a.callId, CallAction.ANSWER, a.video, sdp = answer))
             lock.withLock { if (active === a) startIce(a) }
         } catch (c: CancellationException) {
             throw c
@@ -377,7 +411,7 @@ class CallManager(
                 a.phase = Phase.CONNECTED
                 val now = clock()
                 a.connectedAt = now
-                _state.value = CallState.Connected(a.callId, a.conversationId, a.peerUserId, a.video, a.outgoing, now)
+                _state.value = CallState.Connected(a.callId, a.conversationId, a.peerUserId, a.video, a.outgoing, now, a.peerDeviceNew)
             }
             MediaConnectionState.FAILED -> end(a, EndReason.FAILED, CallAction.HANGUP)
             else -> Unit
@@ -412,7 +446,7 @@ class CallManager(
         }
         a.iceSignalsSent++
         try {
-            signalling.send(a.conversationId, CallSignal(a.callId, CallAction.ICE, a.video, candidates = batch))
+            signalling.send(a.conversationId, signal(a.callId, CallAction.ICE, a.video, candidates = batch))
         } catch (c: CancellationException) {
             throw c
         } catch (ex: Exception) {
@@ -451,7 +485,7 @@ class CallManager(
         if (notify != null) {
             scope.launch {
                 setup?.join()
-                sendQuietly(a.conversationId, CallSignal(a.callId, notify, a.video))
+                sendQuietly(a.conversationId, signal(a.callId, notify, a.video))
             }
         }
         callNotice(a, reason)?.let { notice ->
@@ -499,6 +533,15 @@ class CallManager(
         }
     }
 
+    /** A signal stamped with our clock, which the receiver checks for offers. */
+    private fun signal(
+        callId: String,
+        action: String,
+        video: Boolean,
+        sdp: String? = null,
+        candidates: List<IceCandidate>? = null,
+    ) = CallSignal(callId, action, video, sdp = sdp, candidates = candidates, sentAt = clock())
+
     private suspend fun sendQuietly(conversationId: String, signal: CallSignal) {
         try {
             signalling.send(conversationId, signal)
@@ -512,6 +555,10 @@ class CallManager(
     private companion object {
         const val MAX_SIGNAL_AGE_MS = 60_000L
         const val MAX_SEEN = 64
+        const val MAX_CLOCK_SKEW_MS = 5 * 60_000L
+        const val BUSY_WINDOW_MS = 10_000L
+        const val RING_WINDOW_MS = 60_000L
+        const val MAX_RINGS = 3
         const val MAX_ICE_PER_SIGNAL = 50
         const val MAX_ICE_SIGNALS = 20
         const val MAX_PENDING_REMOTE = 200

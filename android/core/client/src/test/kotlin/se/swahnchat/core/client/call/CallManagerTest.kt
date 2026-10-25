@@ -48,8 +48,17 @@ class CallManagerTest {
             val session get() = media.last
 
             /** Injects an event as if [from] had sent [signal] (bypassing the other manager). */
-            fun receive(from: Phone, signal: CallSignal, conversation: String = AB, serverTs: Long = net.now(), fromSelf: Boolean = from.user == user) {
-                signalling.flow.tryEmit(CallSignalEvent(conversation, from.user, from.device, fromSelf, serverTs, signal))
+            fun receive(
+                from: Phone,
+                signal: CallSignal,
+                conversation: String = AB,
+                serverTs: Long = net.now(),
+                fromSelf: Boolean = from.user == user,
+                stamp: Boolean = true,
+            ) {
+                // like the sender's CallManager, unless a test wants an unstamped signal
+                val sent = if (stamp && signal.sentAt == null) signal.copy(sentAt = net.now()) else signal
+                signalling.flow.tryEmit(CallSignalEvent(conversation, from.user, from.device, fromSelf, serverTs, sent))
             }
         }
 
@@ -698,5 +707,132 @@ class CallManagerTest {
         a.manager.startCall(AB, video = false)
         testScope.runCurrent()
         assertTrue(a.signalling.notices.isEmpty())
+    }
+
+    // --- hardening: new devices, sent_at, BUSY and ring throttles -------------------------------------------------------
+
+    @Test
+    fun `a call via a new unverified device is flagged for the callee through every state`() = world {
+        val a = phone("a", "a1")
+        val b = phone("b", "b1")
+        b.signalling.newDevice = { user, device -> user == "a" && device == "a1" }
+        val id = a.manager.startCall(AB, video = false)
+        testScope.runCurrent()
+        assertEquals(CallState.Incoming(id, AB, "a", false, peerDeviceNew = true), b.state)
+        assertEquals(CallState.Outgoing(id, AB, "b", false), a.state)
+        b.manager.accept()
+        testScope.runCurrent()
+        assertTrue(assertIs<CallState.Connecting>(b.state).peerDeviceNew)
+        a.session.state(MediaConnectionState.CONNECTED)
+        b.session.state(MediaConnectionState.CONNECTED)
+        testScope.runCurrent()
+        assertTrue(assertIs<CallState.Connected>(b.state).peerDeviceNew)
+        assertEquals(false, assertIs<CallState.Connected>(a.state).peerDeviceNew)
+    }
+
+    @Test
+    fun `the caller is warned about the first answering device when that one is new and unverified`() = world {
+        val a = phone("a", "a1")
+        val b1 = phone("b", "b1")
+        val b2 = phone("b", "b2")
+        a.signalling.newDevice = { _, device -> device == "b2" }
+        val id = a.manager.startCall(AB, video = false)
+        testScope.runCurrent()
+        assertEquals(false, assertIs<CallState.Outgoing>(a.state).peerDeviceNew)
+        b2.manager.accept()
+        testScope.runCurrent()
+        assertTrue(assertIs<CallState.Connecting>(a.state).peerDeviceNew)
+        a.session.state(MediaConnectionState.CONNECTED)
+        testScope.runCurrent()
+        assertTrue(assertIs<CallState.Connected>(a.state).peerDeviceNew)
+        assertEquals(id, (a.state as CallState.Connected).callId)
+        assertIs<CallState.Ended>(b1.state)
+    }
+
+    @Test
+    fun `a verified or older device is not flagged`() = world {
+        val a = phone("a", "a1")
+        val b = phone("b", "b1")
+        connect(a, b) // by default the directory says: not new (verified, or older than seven days)
+        assertEquals(false, assertIs<CallState.Connected>(a.state).peerDeviceNew)
+        assertEquals(false, assertIs<CallState.Connected>(b.state).peerDeviceNew)
+    }
+
+    @Test
+    fun `an offer without sent_at or more than five minutes from our clock is dropped`() = world {
+        val a = phone("a", "a1")
+        val b = phone("b", "b1")
+        val skewed = listOf(
+            "00000000-0000-4000-8000-0000000000b1" to null,
+            "00000000-0000-4000-8000-0000000000b2" to net.now() - 5 * 60_000 - 1,
+            "00000000-0000-4000-8000-0000000000b3" to net.now() + 5 * 60_000 + 1,
+        )
+        for ((id, sentAt) in skewed) {
+            b.receive(a, offer(id).copy(sentAt = sentAt), stamp = false)
+            testScope.runCurrent()
+            assertEquals(CallState.Idle, b.state, "sent_at $sentAt")
+        }
+        b.receive(a, offer("00000000-0000-4000-8000-0000000000b4").copy(sentAt = net.now() - 5 * 60_000), stamp = false)
+        testScope.runCurrent()
+        assertIs<CallState.Incoming>(b.state)
+    }
+
+    @Test
+    fun `every signal a manager sends carries sent_at from its clock`() = world {
+        val a = phone("a", "a1")
+        val b = phone("b", "b1")
+        testScope.advanceTimeBy(1_234)
+        val id = connect(a, b)
+        a.session.candidate(1)
+        testScope.advanceTimeBy(300)
+        a.manager.hangup()
+        testScope.runCurrent()
+        val all = a.signalling.sent + b.signalling.sent
+        assertTrue(all.size >= 4)
+        for (s in all) assertEquals(s.at, s.signal.sentAt, "${s.signal.action} is stamped with the send time")
+        assertTrue(id.isNotEmpty())
+    }
+
+    @Test
+    fun `while in a call a peer gets one busy per ten seconds and further offers are ignored`() = world {
+        val a = phone("a", "a1")
+        val b = phone("b", "b1")
+        val d = phone("d", "d1")
+        connect(a, b)
+        b.receive(d, offer("00000000-0000-4000-8000-0000000000c1"), conversation = BD)
+        testScope.runCurrent()
+        assertEquals(1, b.signalling.sentActions(CallAction.BUSY).size)
+        testScope.advanceTimeBy(5_000)
+        b.receive(d, offer("00000000-0000-4000-8000-0000000000c2"), conversation = BD)
+        testScope.runCurrent()
+        assertEquals(1, b.signalling.sentActions(CallAction.BUSY).size)
+        testScope.advanceTimeBy(5_000) // ten seconds after the first busy
+        b.receive(d, offer("00000000-0000-4000-8000-0000000000c3"), conversation = BD)
+        testScope.runCurrent()
+        assertEquals(2, b.signalling.sentActions(CallAction.BUSY).size)
+        assertIs<CallState.Connected>(b.state)
+    }
+
+    @Test
+    fun `an incoming call rings at most three times per peer per minute, the rest is ignored silently`() = world {
+        val a = phone("a", "a1")
+        val b = phone("b", "b1")
+        val ids = (1..5).map { "00000000-0000-4000-8000-0000000000d$it" }
+        for (id in ids.take(3)) {
+            b.receive(a, offer(id))
+            testScope.runCurrent()
+            assertIs<CallState.Incoming>(b.state)
+            b.manager.reject()
+            testScope.runCurrent()
+            testScope.advanceTimeBy(5_000) // Ended lingers, then Idle
+        }
+        b.receive(a, offer(ids[3]))
+        testScope.runCurrent()
+        assertEquals(CallState.Idle, b.state)
+        assertEquals(0, b.signalling.sentActions(CallAction.BUSY).size)
+        testScope.advanceTimeBy(45_000) // the first ring is now older than 60 s
+        b.receive(a, offer(ids[4]))
+        testScope.runCurrent()
+        assertIs<CallState.Incoming>(b.state)
     }
 }

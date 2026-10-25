@@ -549,6 +549,9 @@
     <string name="call_ended_missed">Missat samtal</string>
     <string name="call_ended_elsewhere">Besvarades på en annan enhet</string>
     <string name="call_ended_failed">Samtalet kunde inte kopplas</string>
+    <string name="call_new_device_warning">Samtalet går via en ny enhet hos %1$s som inte är verifierad. Jämför säkerhetsnumret om du är osäker.</string>
+    <string name="call_new_device_warning_anonymous">Samtalet går via en ny enhet hos den andra personen som inte är verifierad. Jämför säkerhetsnumret om du är osäker.</string>
+    <string name="call_kind_new_device">%1$s – ny enhet</string>
     <string name="call_mute">Stäng av mikrofonen</string>
     <string name="call_unmute">Slå på mikrofonen</string>
     <string name="call_speaker_on">Högtalare på</string>

@@ -33,6 +33,7 @@ import androidx.lifecycle.lifecycleScope
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import se.swahnchat.app.MainActivity
 import se.swahnchat.app.R
@@ -62,6 +63,9 @@ class CallActivity : ComponentActivity() {
     private var starting by mutableStateOf(false)
     private var pending: CallLaunch? = null
 
+    /** The keyguard state, kept current while the activity is started (the name must go when the phone locks). */
+    private val keyguardWatcher by lazy { KeyguardWatcher(this) }
+
     private val permissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { onPermissions(it) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -83,11 +87,21 @@ class CallActivity : ComponentActivity() {
             val loader: suspend (String) -> java.io.File? = remember(vm) { { id -> vm.avatarFile(id) } }
             SwahnChatTheme(darkTheme = dark) {
                 CompositionLocalProvider(LocalAvatarLoader provides loader) {
-                    CallRoute(vm, starting = starting, onFinish = ::finish, onBack = ::leave)
+                    CallRoute(vm, keyguardWatcher.locked, starting = starting, onFinish = ::finish, onBack = ::leave)
                 }
             }
         }
         if (savedInstanceState == null) handle(intent)
+    }
+
+    override fun onStart() {
+        super.onStart()
+        keyguardWatcher.start()
+    }
+
+    override fun onStop() {
+        keyguardWatcher.stop()
+        super.onStop()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -215,15 +229,14 @@ class CallActivity : ComponentActivity() {
 
 /** The state of the call as the screen shows it; the last call is remembered for the moment after it ended. */
 @Composable
-private fun CallRoute(vm: CallViewModel, starting: Boolean, onFinish: () -> Unit, onBack: () -> Unit) {
+private fun CallRoute(vm: CallViewModel, keyguardState: StateFlow<Boolean>, starting: Boolean, onFinish: () -> Unit, onBack: () -> Unit) {
     val state by vm.state.collectAsStateWithLifecycle()
     val muted by vm.muted.collectAsStateWithLifecycle()
     val speaker by vm.speakerOn.collectAsStateWithLifecycle()
     val peer by vm.peer.collectAsStateWithLifecycle()
     val appLocked by vm.appLocked.collectAsStateWithLifecycle()
     val session by vm.session.collectAsStateWithLifecycle()
-    val context = androidx.compose.ui.platform.LocalContext.current
-    val keyguardLocked = context.getSystemService(KeyguardManager::class.java).isKeyguardLocked
+    val keyguardLocked by keyguardState.collectAsStateWithLifecycle()
 
     // the call and the person are remembered for the moment after it ended (the state then only says why)
     val last = remember { arrayOfNulls<CallState.InCall>(1) }
@@ -247,7 +260,7 @@ private fun CallRoute(vm: CallViewModel, starting: Boolean, onFinish: () -> Unit
     val shown = if (vm.mayShowCaller(keyguardLocked, appLocked)) peer ?: lastPeer[0] else null
     val screen = toScreenState(
         state, last[0], shown?.name ?: stringResource(R.string.call_incoming_title), shown?.avatar ?: AvatarUi(""),
-        elapsed, muted, speaker, cameraOn, localTrack != null, remoteTrack != null,
+        elapsed, muted, speaker, cameraOn, localTrack != null, remoteTrack != null, nameShown = shown != null,
     ) ?: return
     val scope = rememberCoroutineScope()
     val actions = remember(vm) {
@@ -289,6 +302,7 @@ internal fun toScreenState(
     cameraOn: Boolean,
     hasLocalVideo: Boolean,
     hasRemoteVideo: Boolean,
+    nameShown: Boolean = true,
 ): CallScreenState? {
     val phase = when (state) {
         is CallState.Incoming -> CallPhase.INCOMING
@@ -302,5 +316,7 @@ internal fun toScreenState(
     return CallScreenState(
         phase, video, name, avatar, elapsedSeconds, muted, speakerOn, cameraOn, hasLocalVideo, hasRemoteVideo,
         endedTextRes((state as? CallState.Ended)?.reason ?: EndReason.HANGUP_LOCAL),
+        peerDeviceNew = ((state as? CallState.InCall) ?: last)?.peerDeviceNew == true,
+        nameShown = nameShown,
     )
 }

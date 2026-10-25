@@ -70,6 +70,10 @@ data class CallScreenState(
     val hasRemoteVideo: Boolean = false,
     /** Why the call ended, shown for a moment in [CallPhase.ENDED]. */
     @StringRes val endedText: Int = R.string.call_ended,
+    /** The call goes via a new, unverified device of the other person: a warning row is shown (not once the call has ended). */
+    val peerDeviceNew: Boolean = false,
+    /** [name] is the real name (false: hidden by the privacy setting, the warning then says "the other person"). */
+    val nameShown: Boolean = true,
 )
 
 class CallScreenActions(
@@ -106,6 +110,7 @@ fun CallScreen(
         if (state.hasRemoteVideo) remoteVideo()
         Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing).padding(horizontal = 16.dp, vertical = 8.dp)) {
             TopRow(state, actions, content)
+            if (state.peerDeviceNew && state.phase != CallPhase.ENDED) NewDeviceWarning(state)
             Column(Modifier.weight(1f).fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
                 if (!state.hasRemoteVideo) CallerBlock(state, content)
             }
@@ -135,6 +140,18 @@ private fun TopRow(state: CallScreenState, actions: CallScreenActions, content: 
                 Text(statusText(state), color = content, style = MaterialTheme.typography.bodySmall)
             }
         }
+    }
+}
+
+/** The call is locked on to a device added recently and never verified: said plainly, with what to do about it. */
+@Composable
+private fun NewDeviceWarning(state: CallScreenState) {
+    val text = if (state.nameShown) stringResource(R.string.call_new_device_warning, state.name) else stringResource(R.string.call_new_device_warning_anonymous)
+    Surface(
+        color = MaterialTheme.colorScheme.errorContainer, contentColor = MaterialTheme.colorScheme.onErrorContainer,
+        shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+    ) {
+        Text(text, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(12.dp))
     }
 }
 

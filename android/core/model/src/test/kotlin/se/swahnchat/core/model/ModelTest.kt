@@ -250,6 +250,18 @@ class DtoTest {
     }
 
     @Test
+    fun `a call signal carries sent_at on the wire and still decodes without it`() {
+        val offer = callContent(CallSignal(CALL_ID, CallAction.OFFER, sdp = SDP, sentAt = 1_700_000_000_123))
+        val back = ContentCodec.decode(ContentCodec.encode(offer))
+        assertEquals(1_700_000_000_123, back.call!!.sentAt)
+        val wire = SwahnChatJson.parseToJsonElement(SwahnChatJson.encodeToString(Content.serializer(), offer)).jsonObject["call"]!!.jsonObject
+        assertEquals("1700000000123", wire["sent_at"]!!.jsonPrimitive.content)
+        // a signal from a sender that does not set it decodes with null (the receiver then drops an offer)
+        val old = ContentCodec.decode(ContentCodec.encode(callContent(CallSignal(CALL_ID, CallAction.OFFER, sdp = SDP))))
+        assertNull(old.call!!.sentAt)
+    }
+
+    @Test
     fun `a call signal needs a call, a uuid call_id, a known action and no target or content`() {
         fun fails(c: Content) = assertFailsWith<IllegalArgumentException> { ContentCodec.decode(ContentCodec.encode(c)) }
         val ok = callContent(CallSignal(CALL_ID, CallAction.HANGUP))

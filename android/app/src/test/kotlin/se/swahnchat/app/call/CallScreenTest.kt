@@ -10,6 +10,7 @@ import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -51,6 +52,24 @@ class CallScreenTest {
         assertEquals(listOf("answer", "decline"), taken)
         compose.onAllNodesWithContentDescription("Avsluta").assertCountEquals(0)
         compose.onAllNodesWithContentDescription("Stäng av mikrofonen").assertCountEquals(0)
+    }
+
+    @Test fun `a call via a new unverified device shows the warning with the name`() {
+        val warning = "Samtalet går via en ny enhet hos Bertil Ek som inte är verifierad. Jämför säkerhetsnumret om du är osäker."
+        content { CallScreen(state(CallPhase.INCOMING).copy(peerDeviceNew = true), CallScreenActions()) }
+        compose.onNodeWithText(warning).assertIsDisplayed()
+    }
+
+    @Test fun `an ordinary device gets no warning`() {
+        content { CallScreen(state(CallPhase.CONNECTED), CallScreenActions()) }
+        compose.onAllNodesWithText("Jämför säkerhetsnumret", substring = true).assertCountEquals(0)
+    }
+
+    @Test fun `the warning does not name the caller when the name is hidden`() {
+        content { CallScreen(state(CallPhase.INCOMING).copy(name = "Inkommande samtal", peerDeviceNew = true, nameShown = false), CallScreenActions()) }
+        compose.onNodeWithText(
+            "Samtalet går via en ny enhet hos den andra personen som inte är verifierad. Jämför säkerhetsnumret om du är osäker.",
+        ).assertIsDisplayed()
     }
 
     @Test fun `an outgoing call rings and offers only to end it, a connecting one says so`() {
@@ -133,6 +152,11 @@ class CallScreenTest {
         val ended = screen(CallState.Ended("c", EndReason.REJECTED), last = CallState.Outgoing("c", "x", "bob", true))!!
         assertEquals(CallPhase.ENDED, ended.phase)
         assertTrue(ended.video)
+        val flagged = screen(CallState.Incoming("c", "x", "bob", false, peerDeviceNew = true))!!
+        assertTrue(flagged.peerDeviceNew)
+        val lastFlagged = CallState.Connecting("c", "x", "bob", false, true, peerDeviceNew = true)
+        assertTrue(screen(CallState.Ended("c", EndReason.HANGUP_REMOTE), last = lastFlagged)!!.peerDeviceNew)
+        assertEquals(false, screen(CallState.Connected("c", "x", "bob", true, true, 1))!!.peerDeviceNew)
         assertEquals(se.swahnchat.app.R.string.call_ended_rejected, ended.endedText)
         for (reason in EndReason.entries) endedTextRes(reason) // every reason has a text
     }

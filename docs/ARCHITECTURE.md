@@ -203,7 +203,14 @@ Client data flow:
   (`Idle`, `Outgoing`, `Incoming`, `Connecting`, `Connected`, `Ended(reason)` which falls back to `Idle`). All devices of
   the callee ring; the caller locks onto the first answering device and ignores other devices' answers and candidates;
   an answer or reject on another own device ends the ringing (`ANSWERED_ELSEWHERE`/`REJECTED`) without sending. A second
-  offer is answered with `busy`. Offers are accepted only from the other member, once per call id, and not when stale.
+  offer is answered with `busy` (at most once per peer user per 10 s, further offers from that peer are ignored until then);
+  when idle, at most 3 offers per peer user ring per 60 s, the rest is ignored without BUSY. Offers are accepted only from the
+  other member, once per call id, and not when stale: older than 60 s by the server's clock, or without `sent_at` / more than
+  5 minutes from the local clock (`CallSignal.sentAt`, set by every sender, inside the encrypted content).
+  `CallState.Incoming/Outgoing/Connecting/Connected` carry `peerDeviceNew`: the device the call is locked on to (callee: the
+  offering device; caller: the first answering device) is unverified and its `Device.createdAt` is less than 7 days old
+  (`CallSignalling.isNewUnverifiedDevice`, answered by the engine from the local device list and the verified flag, true
+  for an unknown device); the call screen and the incoming notification show it.
   Local ICE candidates go out in batches (one signal per 250 ms, at most 50 candidates, at most 20 signals per call; a
   failed batch is dropped, the call goes on). Timeouts: ringing 45 s (`NO_ANSWER`/`MISSED`), connecting 30 s (`FAILED`
   plus hangup). Every end path closes the `MediaSession` and cancels the call's jobs.
@@ -230,6 +237,8 @@ All of it is in `se.swahnchat.app.call`; the core knows none of it.
   side. An audio call opens no camera. `factory.current` is the session of the call in progress; its `remoteVideoTrack`,
   `localVideoTrack`, `setCameraEnabled` (stops the capture, which frees the camera) and `switchCamera` are the app-only API of the
   call screen. **Not supported: upgrading an audio call to video during the call.**
+  `WebRtcMediaSession` checks its closed flag under its lock before every call into the `PeerConnection` (the suspend
+  operations then throw `CancellationException`, the candidate paths just stop); the lock is released before the call itself.
 - **Audio** (`CallAudio`). `MODE_IN_COMMUNICATION` and transient audio focus (voice communication) from connecting to the end, restored
   afterwards. A headset (Bluetooth first, then wired) always wins; otherwise the speaker toggle chooses (Android 12+:
   `setCommunicationDevice`; before: `isSpeakerphoneOn` and the SCO link). Video calls start on the speaker, voice calls on the earpiece,
@@ -255,6 +264,10 @@ All of it is in `se.swahnchat.app.call`; the core knows none of it.
   locked (the activity then just closes; with the notification privacy "hidden" the caller's name is not shown there either).
   `decideLaunch` closes the activity when it is started with nothing to show (for example Answer after the process died while ringing).
   Direct conversations have the two call buttons in their top bar; while a call is up, `MainActivity` shows a slim bar that returns to it.
+  `KeyguardWatcher` (registered in `onStart`, removed in `onStop`) turns `ACTION_SCREEN_OFF`/`SCREEN_ON`/`USER_PRESENT` into a
+  state the screen reads, so the name is hidden again when the phone locks while the screen is up. A call with `peerDeviceNew`
+  shows a warning row (`call_new_device_warning`) in every phase but the ended one, and the incoming notification's subtitle gets
+  "– ny enhet". `MANAGE_OWN_CALLS` stays in the manifest only because `FOREGROUND_SERVICE_PHONE_CALL` requires it.
   Settings: "Koppla samtal via servern" (`AppPrefs.callsRelayOnly`, read by `CallManager` for every new media session).
 - **Honest limits.** The ring worker is expedited with `RUN_AS_NON_EXPEDITED_WORK_REQUEST`, so when the expedited quota is spent it runs as
   ordinary work and the process can be killed in the middle of the ring. There is no Telecom/`ConnectionService` integration yet: no
