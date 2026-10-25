@@ -374,6 +374,41 @@ interface UiDao {
     )
     fun pagedMessages(conversationId: String): PagingSource<Int, MessageEntity>
 
+    /**
+     * The messages of a conversation that carry photos or videos ("Media och filer"), newest first, as a Paging source. Messages that are
+     * deleted, scheduled or notices are not in it, so a message that expires or is deleted leaves the gallery when its row goes. The
+     * attachment list is JSON written by one serializer without spaces, so `"kind":"image"` is a reliable token.
+     */
+    @Query(
+        "SELECT * FROM messages WHERE conversationId = :conversationId AND deleted = 0 AND systemType IS NULL AND scheduledAt IS NULL " +
+            "AND (attachments LIKE '%\"kind\":\"image\"%' OR attachments LIKE '%\"kind\":\"video\"%') " +
+            "ORDER BY COALESCE(seq, $MAX_LONG) DESC, clientTs DESC, id DESC",
+    )
+    fun pagedMediaMessages(conversationId: String): PagingSource<Int, MessageEntity>
+
+    /** As [pagedMediaMessages] for files (documents; voice messages are not files here). */
+    @Query(
+        "SELECT * FROM messages WHERE conversationId = :conversationId AND deleted = 0 AND systemType IS NULL AND scheduledAt IS NULL " +
+            "AND attachments LIKE '%\"kind\":\"file\"%' " +
+            "ORDER BY COALESCE(seq, $MAX_LONG) DESC, clientTs DESC, id DESC",
+    )
+    fun pagedFileMessages(conversationId: String): PagingSource<Int, MessageEntity>
+
+    /** As [pagedMediaMessages] for messages whose text may hold a web address; the addresses are found in Kotlin ([findLinks]). */
+    @Query(
+        "SELECT * FROM messages WHERE conversationId = :conversationId AND deleted = 0 AND systemType IS NULL AND scheduledAt IS NULL " +
+            "AND text LIKE '%http%' ORDER BY COALESCE(seq, $MAX_LONG) DESC, clientTs DESC, id DESC",
+    )
+    fun pagedLinkMessages(conversationId: String): PagingSource<Int, MessageEntity>
+
+    /** The same photo and video messages in one go (newest first), for the viewer's swipe between neighbours. */
+    @Query(
+        "SELECT * FROM messages WHERE conversationId = :conversationId AND deleted = 0 AND systemType IS NULL AND scheduledAt IS NULL " +
+            "AND (attachments LIKE '%\"kind\":\"image\"%' OR attachments LIKE '%\"kind\":\"video\"%') " +
+            "ORDER BY COALESCE(seq, $MAX_LONG) DESC, clientTs DESC, id DESC",
+    )
+    suspend fun mediaMessages(conversationId: String): List<MessageEntity>
+
     @Query(
         "SELECT id, outgoing FROM messages WHERE conversationId = :conversationId AND imported = 0 " +
             "ORDER BY COALESCE(seq, $MAX_LONG) DESC, clientTs DESC, id DESC LIMIT 1",

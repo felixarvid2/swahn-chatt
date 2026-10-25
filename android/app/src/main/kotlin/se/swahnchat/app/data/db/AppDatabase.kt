@@ -9,9 +9,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import androidx.sqlite.db.SupportSQLiteOpenHelper
 
 /**
- * The one database of the app. Version 6 (1: first release; 2: `drafts`; 3: `message_fts` search index, `conversation_settings`;
+ * The one database of the app. Version 7 (1: first release; 2: `drafts`; 3: `message_fts` search index, `conversation_settings`;
  * 4: `message_receipts`, `local_deletions`; 5: `reactions`, `conversation_timers`, columns for forwarded / imported /
- * disappearing messages and timer notices).
+ * disappearing messages and timer notices; 6: poll votes, starred messages, mentions, polls, scheduled messages; 7: `location` columns).
  *
  * Schema changes: bump [version], add a `Migration` to [MIGRATIONS], and extend `MigrationTest` (the exported schema JSON
  * files in `app/schemas/` are the test fixtures: commit the new one).
@@ -37,7 +37,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun uiDao(): UiDao
 
     companion object {
-        const val VERSION = 6
+        const val VERSION = 7
         const val FILE_NAME = "swahnchat.db"
 
         /** 1 -> 2: the unsent composer text per conversation. Nothing else changes, so no existing row is touched. */
@@ -125,8 +125,19 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * 6 -> 7: shared positions. Two nullable `location` columns (JSON) on `messages` and `outbox`; no existing row is rewritten
+         * and the search index and its triggers do not involve the new column.
+         */
+        val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `messages` ADD COLUMN `location` TEXT")
+                db.execSQL("ALTER TABLE `outbox` ADD COLUMN `location` TEXT")
+            }
+        }
+
         /** Migrations from older versions; every shipped version needs one (see `MigrationTest`). */
-        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
 
         /** Durable ratchet writes: a lost libsignal step cannot be recovered, so never trade `synchronous` for speed. Also `secure_delete`. */
         private val durability = object : Callback() {

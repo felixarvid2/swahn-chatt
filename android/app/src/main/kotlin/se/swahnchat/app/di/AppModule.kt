@@ -12,6 +12,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import se.swahnchat.app.BuildConfig
 import se.swahnchat.app.data.StorageDirs
+import se.swahnchat.app.location.LocationSource
+import se.swahnchat.app.location.PlatformLocationSource
+import se.swahnchat.app.media.AttachmentPreparer
+import se.swahnchat.app.media.Media3VideoTranscoder
+import se.swahnchat.app.media.VideoCompressor
+import se.swahnchat.app.media.VideoTranscoder
 import se.swahnchat.app.data.db.AppDatabase
 import se.swahnchat.app.data.db.RoomLocalStore
 import se.swahnchat.app.data.db.RoomProtocolStorage
@@ -28,6 +34,18 @@ import javax.inject.Singleton
 @Module
 @InstallIn(SingletonComponent::class)
 object AppModule {
+    /** The one position source: the platform LocationManager (no Google Play services). */
+    @Provides @Singleton
+    fun locationSource(impl: PlatformLocationSource): LocationSource = impl
+
+    /** Video compression before upload: Media3 Transformer behind the [VideoTranscoder] interface; temp files in the staging folder. */
+    @Provides @Singleton
+    fun videoTranscoder(impl: Media3VideoTranscoder): VideoTranscoder = impl
+
+    @Provides @Singleton
+    fun videoCompressor(preparer: AttachmentPreparer, transcoder: VideoTranscoder): VideoCompressor =
+        VideoCompressor(transcoder, tempDir = { preparer.compressDir }, outputDir = { preparer.outgoingDir })
+
     @Provides @Singleton @ApplicationScope
     fun applicationScope(): CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 

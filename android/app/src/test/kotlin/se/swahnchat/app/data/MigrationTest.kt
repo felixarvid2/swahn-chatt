@@ -364,12 +364,54 @@ class MigrationTest {
         }
     }
 
-    @Test fun `the whole chain from version 2 reaches version 6 with the data intact`() {
+    @Test fun `version 6 to 7 keeps every row, old messages are no position, and a position round-trips`() {
+        helper.createDatabase("migration-v6-v7", 6).use { fillVersion5(it) }
+        // validated against 7.json
+        helper.runMigrationsAndValidate("migration-v6-v7", 7, true, AppDatabase.MIGRATION_6_7).use { db ->
+            fun count(table: String) = db.query("SELECT COUNT(*) FROM $table").use { it.moveToFirst(); it.getLong(0) }
+            assertEquals(2L, count("messages"))
+            assertEquals(1L, count("outbox"))
+            db.query("SELECT location, text FROM messages WHERE id = 'm1'").use { c ->
+                assertTrue(c.moveToFirst()); assertTrue(c.isNull(0)); assertEquals("hej 1", c.getString(1))
+            }
+            db.query("SELECT location, text FROM outbox WHERE messageId = 'p1'").use { c ->
+                assertTrue(c.moveToFirst()); assertTrue(c.isNull(0)); assertEquals("väntar", c.getString(1))
+            }
+            assertEquals(listOf("m1", "m2"), matches(db, "hej")) // the search index survived the ALTERs
+            db.execSQL("UPDATE messages SET location = '{\"lat\":59.3,\"lon\":18.0,\"accuracy_m\":12.0}' WHERE id = 'm1'")
+            assertEquals(listOf("m1", "m2"), matches(db, "hej")) // and the triggers still fire on an update of the new column
+        }
+    }
+
+    @Test fun `the app opens a version 6 file through the real builder and a position is stored, read and removed`() {
+        val context = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
+        helper.createDatabase("swahnchat-upgrade6.db", 6).use { fillVersion5(it) }
+        val db = AppDatabase.build(context, factory = null, name = "swahnchat-upgrade6.db") { it.allowMainThreadQueries() }
+        try {
+            kotlinx.coroutines.runBlocking {
+                val store = se.swahnchat.app.data.db.RoomLocalStore(db)
+                assertEquals(null, store.getMessage("m1")!!.location)
+                val here = se.swahnchat.core.model.LocationSpec(59.3293, 18.0686, 12.0, "Hemma")
+                store.updateMessage("m1") { it.copy(location = here) }
+                assertEquals(here, store.getMessage("m1")!!.location)
+                store.putOutbox(store.getOutboxEntry("p1")!!.copy(location = here))
+                assertEquals(here, store.getOutboxEntry("p1")!!.location)
+                // a row with a position that is out of range reads back as no position
+                db.openHelper.writableDatabase.execSQL("UPDATE messages SET location = '{\"lat\":123,\"lon\":0,\"accuracy_m\":1}' WHERE id = 'm2'")
+                assertEquals(null, store.getMessage("m2")!!.location)
+            }
+        } finally {
+            db.close()
+            context.deleteDatabase("swahnchat-upgrade6.db")
+        }
+    }
+
+    @Test fun `the whole chain from version 2 reaches the current version with the data intact`() {
         helper.createDatabase("migration-v2-v6", 2).use { db ->
             fillVersion1(db)
             db.execSQL("INSERT INTO drafts (conversationId, text, updatedAt) VALUES ('c1', 'Utkast', 5)")
         }
-        helper.runMigrationsAndValidate("migration-v2-v6", 6, true, *AppDatabase.MIGRATIONS).use { db ->
+        helper.runMigrationsAndValidate("migration-v2-v6", AppDatabase.VERSION, true, *AppDatabase.MIGRATIONS).use { db ->
             fun count(table: String) = db.query("SELECT COUNT(*) FROM $table").use { it.moveToFirst(); it.getLong(0) }
             assertEquals(2L, count("messages"))
             assertEquals(1L, count("drafts"))

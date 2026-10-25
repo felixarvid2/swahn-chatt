@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.net.Uri
+import androidx.exifinterface.media.ExifInterface
 import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -68,6 +69,45 @@ class MediaTest {
         val thumbBounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             .also { val b = Base64.getDecoder().decode(thumb); BitmapFactory.decodeByteArray(b, 0, b.size, it) }
         assertTrue(maxOf(thumbBounds.outWidth, thumbBounds.outHeight) <= 160)
+    }
+
+    @Test fun `the location, camera and time stamps of a photo are not sent along`() = runBlocking {
+        val source = write(noisyBitmap(400, 300), "geo.jpg", Bitmap.CompressFormat.JPEG)
+        ExifInterface(source.path).apply {
+            setLatLong(59.3293, 18.0686)
+            setAttribute(ExifInterface.TAG_GPS_ALTITUDE, "12/1")
+            setAttribute(ExifInterface.TAG_MAKE, "Fairphone")
+            setAttribute(ExifInterface.TAG_MODEL, "FP5")
+            setAttribute(ExifInterface.TAG_DATETIME_ORIGINAL, "2026:10:24 14:30:00")
+            setAttribute(ExifInterface.TAG_SOFTWARE, "Camera 1.0")
+            saveAttributes()
+        }
+        val before = ExifInterface(source.path)
+        assertNotNull(before.latLong, "the test picture does carry a position")
+        val out = preparer.prepare(Uri.fromFile(source))
+        val after = ExifInterface(out.file.path)
+        assertNull(after.latLong)
+        for (tag in listOf(
+            ExifInterface.TAG_GPS_LATITUDE, ExifInterface.TAG_GPS_LONGITUDE,
+            ExifInterface.TAG_GPS_ALTITUDE, ExifInterface.TAG_MAKE,
+            ExifInterface.TAG_MODEL, ExifInterface.TAG_DATETIME_ORIGINAL,
+            ExifInterface.TAG_SOFTWARE,
+        )) assertNull(after.getAttribute(tag), tag)
+        // not even as bytes: no Exif segment, no GPS tag name, and the thumbnail is clean too
+        val bytes = out.file.readBytes()
+        assertFalse(String(bytes, Charsets.ISO_8859_1).contains("Exif"), "no Exif segment in the file that is uploaded")
+        val thumb = Base64.getDecoder().decode(out.thumbnailBase64!!)
+        assertFalse(String(thumb, Charsets.ISO_8859_1).contains("Exif"))
+        // a rotated camera picture comes out upright instead (the orientation is applied, not copied)
+        val rotated = write(noisyBitmap(400, 200), "rot.jpg", Bitmap.CompressFormat.JPEG)
+        ExifInterface(rotated.path).apply {
+            setAttribute(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_ROTATE_90.toString())
+            saveAttributes()
+        }
+        val upright = preparer.prepare(Uri.fromFile(rotated))
+        assertEquals(200, upright.width); assertEquals(400, upright.height)
+        val orientation = ExifInterface(upright.file.path).getAttribute(ExifInterface.TAG_ORIENTATION)
+        assertNull(orientation?.takeIf { it != "1" && it != "0" })
     }
 
     @Test fun `a small photo keeps its size and png transparency is flattened onto white`() = runBlocking {

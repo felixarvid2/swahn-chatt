@@ -57,6 +57,7 @@ import se.swahnchat.app.ui.screens.GroupCreateScreen
 import se.swahnchat.app.ui.screens.GroupInfoScreen
 import se.swahnchat.app.ui.screens.HistoryScreen
 import se.swahnchat.app.ui.screens.LoginScreen
+import se.swahnchat.app.ui.screens.MediaGalleryScreen
 import se.swahnchat.app.ui.screens.MediaViewerScreen
 import se.swahnchat.app.ui.screens.NewConversationScreen
 import se.swahnchat.app.ui.screens.ServerSettingsScreen
@@ -78,7 +79,8 @@ object Routes {
     const val GROUP_INFO = "group/{id}"
     const val SETTINGS = "settings"
     const val CONTACT = "contact/{userId}"
-    const val MEDIA = "media/{messageId}/{attachmentId}"
+    const val MEDIA = "media/{messageId}/{attachmentId}?conversation={conversation}"
+    const val GALLERY = "gallery/{conversationId}"
     const val MESSAGE_INFO = "message-info/{messageId}"
     const val STORAGE = "storage"
     const val AUTO_DOWNLOAD = "auto-download"
@@ -92,7 +94,10 @@ object Routes {
     fun search(conversationId: String? = null) = if (conversationId == null) "search" else "search?conversation=$conversationId"
     fun groupInfo(id: String) = "group/$id"
     fun contact(userId: String) = "contact/$userId"
-    fun media(messageId: String, attachmentId: String) = "media/$messageId/$attachmentId"
+    /** [conversationId]: opened from the gallery, so the viewer also swipes to the other photos and videos of that conversation. */
+    fun media(messageId: String, attachmentId: String, conversationId: String? = null) =
+        if (conversationId == null) "media/$messageId/$attachmentId" else "media/$messageId/$attachmentId?conversation=$conversationId"
+    fun gallery(conversationId: String) = "gallery/$conversationId"
     fun messageInfo(messageId: String) = "message-info/$messageId"
     fun forward(messageId: String) = "forward/$messageId"
 
@@ -244,6 +249,7 @@ private fun AppNavHost(nav: androidx.navigation.NavHostController, signedIn: Boo
                     onOpenStarred = { nav.navigate(Routes.starred(it)) },
                     onOpenScheduled = { nav.navigate(Routes.scheduled(it)) },
                     onOpenConversation = { nav.navigate(Routes.conversation(it)) },
+                    onOpenGallery = { nav.navigate(Routes.gallery(it)) },
                 ),
             )
         }
@@ -297,8 +303,24 @@ private fun AppNavHost(nav: androidx.navigation.NavHostController, signedIn: Boo
         }
         composable(
             Routes.MEDIA,
-            arguments = listOf(navArgument("messageId") { type = NavType.StringType }, navArgument("attachmentId") { type = NavType.StringType }),
+            arguments = listOf(
+                navArgument("messageId") { type = NavType.StringType },
+                navArgument("attachmentId") { type = NavType.StringType },
+                navArgument("conversation") { type = NavType.StringType; nullable = true; defaultValue = null },
+            ),
         ) { MediaViewerScreen(onBack = { nav.popBackStack() }) }
+        composable(Routes.GALLERY, arguments = listOf(navArgument("conversationId") { type = NavType.StringType })) { entry ->
+            val conversationId = checkNotNull(entry.arguments?.getString("conversationId"))
+            MediaGalleryScreen(
+                onBack = { nav.popBackStack() },
+                onOpenMedia = { m, a -> nav.navigate(Routes.media(m, a, conversationId)) },
+                onOpenLinkMessage = { messageId ->
+                    // back to the conversation, which scrolls to the message
+                    nav.previousBackStackEntry?.savedStateHandle?.set(JUMP_KEY, messageId)
+                    nav.popBackStack()
+                },
+            )
+        }
     }
 }
 

@@ -173,6 +173,39 @@ an outbox entry with `sendAt` that `SendPipeline.process` leaves alone until due
 (time of writing and disappearing-messages timer are those of that moment), encrypted for the devices of that moment and
 sent. `ScheduledSendWorker` (WorkManager, with an initial delay) and an in-process timer in the engine wake the outbox.
 
+### Positions, gallery, camera and video compression (batch 6)
+
+- **`location`** (content type, sent as an ordinary `message`): `Content.location` is `{lat, lon, accuracy_m, label?}`. The receiver
+  (and `ContentCodec.decode`) accepts it only with `lat` in -90..90, `lon` in -180..180, a finite `accuracy_m` in 0..100000, a label
+  of at most 100 characters, and no text, attachments or target; anything else is dropped like malformed content. It is stored as
+  JSON in `messages.location` / `outbox.location` (Room version 7, two nullable columns), is wiped by "delete for everyone", cannot
+  be edited or forwarded, and is not part of the history export (which only takes messages with text or attachments). There is no
+  live location: one message is one fix.
+- **Getting the fix** (`app/location`): `LocationSource` is an interface; `PlatformLocationSource` uses the platform `LocationManager`
+  (`getCurrentLocation` on API 30+, `requestSingleUpdate` below), GPS then network for "exact", network only for "approximate",
+  30 s timeout; no Google Play services. `LocationShareController` runs the dialog flow (choose, fetch, preview with accuracy, send)
+  and is tested with a fake source. The permissions are requested at the moment of use only (coarse first; fine only for "Exakt
+  position"); if Android grants approximate only, the flow goes on with the approximate fix and the preview shows its accuracy.
+  `geoUri` builds `geo:lat,lon?q=lat,lon(label)` with a percent-encoded label.
+- **Gallery** ("Media och filer", `MediaGalleryScreen`): three Room `PagingSource`s over `messages` of the conversation (photos and
+  videos, `"kind":"file"` attachments, texts containing `http`), newest first, excluding deleted, scheduled and system rows; the
+  attachment list is JSON from one serializer without spaces, so `LIKE '%"kind":"image"%'` is reliable. Messages are expanded to
+  cells in Kotlin (`PagingData.flatMap`), month headers are separators (`monthHeaderBetween`), links come from `findLinks` on the
+  local text. Thumbnails are the existing small JPEGs of the encrypted messages. The viewer takes an optional `conversation` route
+  argument; with it the pages are the whole conversation's photos and videos (`MediaPage(messageId, attachmentId)`), so swiping
+  crosses messages.
+- **Camera**: `rememberCameraActions` wraps `TakePicture` / `CaptureVideo`. The target file is `files/share-staging/<uuid>/photo.jpg`
+  (or `video.mp4`), given to the camera app through the FileProvider (`files-path share-staging/`), then staged as a `file:` URI so
+  the existing staging cleanup applies; CAMERA is requested first (the manifest declares it, so the platform requires it).
+  Photos go through the normal `AttachmentPreparer.prepareImage`, which decodes and re-encodes (EXIF is not copied; tested).
+- **Video compression** (`media/VideoCompression.kt`): `VideoCompressionPolicy` (more than 16 MB or more than 1080p, unless "Skicka i
+  originalkvalitet"), `VideoCompressor` (temp file in `files/compress-staging`, result moved to `outgoing/`, the loser deleted, the
+  original kept when the result is not smaller or the encoder fails) and `VideoTranscoder`, implemented by `Media3VideoTranscoder`
+  (media3-transformer and media3-effect 1.6.1: H.264/AAC MP4, `Presentation` to at most 1280 x 720, 2.5 Mbit/s and 128 kbit/s).
+  Transformer runs on the main looper (its requirement) while the codecs work on their own threads; its listener never throws.
+  The work is in the conversation view model's scope, so it survives a configuration change; the staged files stay in the strip
+  when it is cancelled.
+
 ### App internals (`:app`)
 
 - **Storage.** One Room database, encrypted with SQLCipher, holds `LocalStore` (messages, conversations, outbox, cursor),
@@ -188,7 +221,7 @@ sent. `ScheduledSendWorker` (WorkManager, with an initial delay) and an in-proce
   UnifiedPush wake-up) and `PeriodicSyncWorker` (15 minutes). Notifications are built locally from the decrypted
   messages after a sync, never from the push.
 
-- The Room schema is at version 5 (`reactions`, `conversation_timers`, expiry and `forwarded` columns added in v5;
+- The Room schema is at version 7 (6: polls, stars, mentions, scheduled; 7: `location` columns; the rest of this item describes version 5: `reactions`, `conversation_timers`, expiry and `forwarded` columns added in v5;
   `drafts`; `message_fts` full-text index; `conversation_settings` for
   mute/archive/pin; `message_receipts` with per-member delivered/read times; `local_deletions` tombstones for
   "delete for me"), with tested migrations 1→2→3→4, also run on SQLCipher on API 30/34 emulators in CI. Messages are written with an upsert so the

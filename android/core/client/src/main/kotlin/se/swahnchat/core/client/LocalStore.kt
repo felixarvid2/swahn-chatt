@@ -2,6 +2,7 @@ package se.swahnchat.core.client
 
 import se.swahnchat.core.model.Conversation
 import se.swahnchat.core.model.Device
+import se.swahnchat.core.model.LocationSpec
 import se.swahnchat.core.model.PollOption
 import se.swahnchat.core.model.PollSpec
 import se.swahnchat.core.model.User
@@ -242,6 +243,8 @@ data class StoredMessage(
     val mentions: List<String> = emptyList(),
     /** Set when the message is a poll (the question is [text]). */
     val poll: PollInfo? = null,
+    /** Set when the message is a shared position (it has no text). */
+    val location: LocationSpec? = null,
     /** An outgoing message waiting for its time (epoch ms): it is in the outbox, not sent, until then. Local only. */
     val scheduledAt: Long? = null,
 ) {
@@ -305,6 +308,8 @@ data class OutboxEntry(
     val mentions: List<String> = emptyList(),
     /** A `message` entry that is a poll ([text] is the question). */
     val poll: PollSpec? = null,
+    /** A `message` entry that is a shared position. */
+    val location: LocationSpec? = null,
     /** [OutboxKind.POLL_VOTE]: the chosen option ids (empty: withdrawn). */
     val optionIds: List<Int>? = null,
     /** [OutboxKind.POLL_VOTE]: the creator closes the poll. */

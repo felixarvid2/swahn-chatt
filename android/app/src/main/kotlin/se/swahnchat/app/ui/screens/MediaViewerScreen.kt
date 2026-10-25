@@ -72,6 +72,8 @@ import se.swahnchat.app.media.MediaValidator
 import se.swahnchat.core.client.DownloadState
 import se.swahnchat.core.client.SwahnChatEngine
 import se.swahnchat.core.client.LocalStore
+import se.swahnchat.core.client.StoredMessage
+import se.swahnchat.app.data.ChatRepository
 import java.io.File
 import javax.inject.Inject
 
@@ -83,17 +85,29 @@ sealed interface MediaViewerState {
     data class Ready(val kind: String, val file: File, val mime: String, val name: String) : MediaViewerState
 }
 
-/** The photos and videos of one message, in the order of the message; [start] is the one that was tapped. */
-data class MediaPages(val attachmentIds: List<String>, val start: Int)
+/** One photo or video in the viewer: [attachmentId] of the message [messageId]. */
+data class MediaPage(val messageId: String, val attachmentId: String)
+
+/**
+ * The photos and videos the viewer pages through; [start] is the one that was tapped. From a message that is the media of that
+ * message, from the gallery ("Media och filer") the media of the whole conversation, newest first.
+ */
+data class MediaPages(val items: List<MediaPage>, val start: Int) {
+    val attachmentIds: List<String> = items.map { it.attachmentId }
+}
 
 @HiltViewModel
 class MediaViewerViewModel @Inject constructor(
     savedState: SavedStateHandle,
     private val engine: SwahnChatEngine,
     private val store: LocalStore,
+    private val repo: ChatRepository,
 ) : ViewModel() {
     private val messageId: String = checkNotNull(savedState["messageId"])
     private val attachmentId: String = checkNotNull(savedState["attachmentId"])
+
+    /** Set when the viewer was opened from the gallery: its neighbours are the conversation's other photos and videos. */
+    private val conversationId: String? = savedState["conversation"]
     private val _pages = MutableStateFlow<MediaPages?>(null)
     val pages: StateFlow<MediaPages?> = _pages.asStateFlow()
     private val _states = MutableStateFlow<Map<String, MediaViewerState>>(emptyMap())
@@ -104,25 +118,34 @@ class MediaViewerViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
-            val media = store.getMessage(messageId)?.attachments.orEmpty().filter { it.kind == "image" || it.kind == "video" }
-            val ids = media.map { it.id }.ifEmpty { listOf(attachmentId) }
-            _pages.value = MediaPages(ids, ids.indexOf(attachmentId).coerceAtLeast(0))
+            val items = conversationId?.let { id -> repo.mediaMessages(id).flatMap(::mediaPagesOf) }.orEmpty()
+            val tapped = MediaPage(messageId, attachmentId)
+            _pages.value = if (items.contains(tapped)) {
+                MediaPages(items, items.indexOf(tapped))
+            } else {
+                val ofMessage = mediaPagesOf(store.getMessage(messageId)).ifEmpty { listOf(tapped) }
+                MediaPages(ofMessage, ofMessage.indexOf(tapped).coerceAtLeast(0))
+            }
         }
     }
+
+    private fun mediaPagesOf(message: StoredMessage?): List<MediaPage> =
+        message?.attachments.orEmpty().filter { it.kind == "image" || it.kind == "video" }.map { MediaPage(message!!.id, it.id) }
 
     /** Fetches (if need be), decrypts and checks the attachment shown on a page. */
     fun load(id: String) {
         if (!started.add(id)) return
         viewModelScope.launch {
             val state = try {
-                val attachment = store.getMessage(messageId)?.attachments?.firstOrNull { it.id == id }
+                val owner = _pages.value?.items?.firstOrNull { it.attachmentId == id }?.messageId ?: messageId
+                val attachment = store.getMessage(owner)?.attachments?.firstOrNull { it.id == id }
                 if (attachment == null) {
                     MediaViewerState.Failed
                 } else {
                     val file = if (attachment.downloadState == DownloadState.DONE && attachment.localPath != null && File(attachment.localPath!!).isFile) {
                         File(attachment.localPath!!)
                     } else {
-                        engine.downloadAttachment(messageId, id)
+                        engine.downloadAttachment(owner, id)
                     }
                     val ok = withContext(Dispatchers.Default) { MediaValidator.isValid(file, attachment.kind) }
                     if (ok) MediaViewerState.Ready(attachment.kind, file, attachment.mime, attachment.name ?: file.name) else MediaViewerState.Failed

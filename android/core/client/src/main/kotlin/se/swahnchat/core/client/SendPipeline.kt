@@ -17,6 +17,7 @@ import se.swahnchat.core.model.Content
 import se.swahnchat.core.model.ContentCodec
 import se.swahnchat.core.model.ContentType
 import se.swahnchat.core.model.ConversationType
+import se.swahnchat.core.model.LocationSpec
 import se.swahnchat.core.model.MemberRole
 import se.swahnchat.core.model.Emoji
 import se.swahnchat.core.model.Envelope
@@ -134,6 +135,12 @@ internal class SendPipeline(private val ctx: EngineContext, private val director
         return enqueueMessage(conversationId, q, null, emptyList(), poll = spec)
     }
 
+    /** A position shared once: the sender has seen [location] (and its accuracy) and confirmed it. */
+    suspend fun enqueueLocation(conversationId: String, location: LocationSpec): String {
+        require(location.isValid) { "That position is not valid" }
+        return enqueueMessage(conversationId, null, null, emptyList(), location = location)
+    }
+
     /** A copy of a message of another conversation; [attachments] are copies of the files, uploaded afresh (new keys). */
     suspend fun enqueueForwarded(conversationId: String, text: String?, attachments: List<OutboxAttachment>): String {
         require(!text.isNullOrBlank() || attachments.isNotEmpty()) { "Nothing to forward" }
@@ -151,6 +158,7 @@ internal class SendPipeline(private val ctx: EngineContext, private val director
         mentions: List<String> = emptyList(),
         poll: PollSpec? = null,
         sendAt: Long? = null,
+        location: LocationSpec? = null,
     ): String {
         val account = ctx.requireAccount()
         ctx.store.getConversation(conversationId) ?: throw IllegalArgumentException("Unknown conversation")
@@ -164,7 +172,7 @@ internal class SendPipeline(private val ctx: EngineContext, private val director
             id = id, conversationId = conversationId, senderUserId = account.userId, senderDeviceId = account.deviceId,
             outgoing = true, status = MessageStatus.PENDING, seq = null, clientTs = sendAt ?: ts, serverTs = null,
             text = text, replyTo = replyTo, forwarded = forwarded, expiresIn = expiresIn,
-            mentions = mentions, poll = poll?.let(PollInfo::of), scheduledAt = sendAt,
+            mentions = mentions, poll = poll?.let(PollInfo::of), scheduledAt = sendAt, location = location,
             attachments = attachments.mapIndexed { i, a ->
                 LocalAttachment(
                     id = "local-$id-$i", key = null, sha256 = null, size = File(a.localPath).length(), mime = a.mime,
@@ -176,7 +184,7 @@ internal class SendPipeline(private val ctx: EngineContext, private val director
         val entry = OutboxEntry(
             messageId = id, conversationId = conversationId, kind = MessageKind.MESSAGE, targetMessageId = null,
             text = text, replyTo = replyTo, attachments = attachments, clientTs = ts, createdAt = stamp(),
-            forwarded = forwarded, expiresIn = expiresIn, mentions = mentions, poll = poll, sendAt = sendAt,
+            forwarded = forwarded, expiresIn = expiresIn, mentions = mentions, poll = poll, sendAt = sendAt, location = location,
         )
         ctx.store.transaction {
             ctx.store.upsertMessage(message)
@@ -296,7 +304,7 @@ internal class SendPipeline(private val ctx: EngineContext, private val director
         require(target.outgoing && target.senderUserId == account.userId && !target.deleted && !target.isSystem) {
             "Only your own messages can be edited"
         }
-        require(target.poll == null) { "A poll cannot be edited" }
+        require(target.poll == null && target.location == null) { "A poll or a position cannot be edited" }
         val now = ctx.now()
         val pending = ctx.store.getOutboxEntry(messageId)
         ctx.store.transaction {
@@ -416,7 +424,7 @@ internal class SendPipeline(private val ctx: EngineContext, private val director
                 }
             },
             clientTs = m.clientTs, createdAt = stamp(), forwarded = m.forwarded, expiresIn = m.expiresIn,
-            mentions = m.mentions, poll = m.poll?.toSpec(),
+            mentions = m.mentions, poll = m.poll?.toSpec(), location = m.location,
         )
         ctx.store.transaction {
             ctx.store.updateMessage(m.id) { it.copy(status = MessageStatus.PENDING, failureReason = null) }
@@ -435,7 +443,7 @@ internal class SendPipeline(private val ctx: EngineContext, private val director
     }
 
     private fun wipe(m: StoredMessage) = m.copy(
-        text = null, attachments = emptyList(), deleted = true, replyTo = null, mentions = emptyList(), poll = null,
+        text = null, attachments = emptyList(), deleted = true, replyTo = null, mentions = emptyList(), poll = null, location = null,
         pendingEnvelopeType = null, pendingEnvelopeBody = null, decryptError = null,
     )
 
@@ -772,6 +780,9 @@ internal class SendPipeline(private val ctx: EngineContext, private val director
             )
             else -> if (entry.poll != null) Content(
                 type = ContentType.POLL, text = entry.text, poll = entry.poll, conversationId = entry.conversationId,
+                messageId = entry.messageId, expiresIn = entry.expiresIn,
+            ) else if (entry.location != null) Content(
+                type = ContentType.LOCATION, location = entry.location, conversationId = entry.conversationId,
                 messageId = entry.messageId, expiresIn = entry.expiresIn,
             ) else Content(
                 type = ContentType.TEXT, text = entry.text, attachments = refs, replyTo = entry.replyTo,

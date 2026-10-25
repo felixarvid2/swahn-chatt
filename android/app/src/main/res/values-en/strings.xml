@@ -643,4 +643,46 @@
     <string name="menu_starred">Starred</string>
     <string name="format_help_title">Format text</string>
     <string name="format_help_text">*bold*  _italic_  ~strikethrough~  `code`</string>
+
+    <!-- Batch 6: position, media gallery, camera, video compression -->
+    <string name="attach_location">Location</string>
+    <string name="attach_camera">Camera</string>
+    <string name="attach_record_video">Record video</string>
+    <string name="attachment_location">Location</string>
+    <string name="location_choose_title">Share your location</string>
+    <string name="location_choose_text">Your location is read once and sent encrypted to this conversation. No map service gets to know it, and it does not follow you afterwards. Choose how exact it should be.</string>
+    <string name="location_approximate">Approximate location</string>
+    <string name="location_exact">Exact location</string>
+    <string name="location_fetching">Finding your location…</string>
+    <string name="location_fetching_hint">This can take up to 30 seconds.</string>
+    <string name="location_preview_title">Send this location?</string>
+    <string name="location_preview_note">Everyone in the conversation can see and save it. It is sent once.</string>
+    <string name="location_accuracy">Accuracy: ± %1$s</string>
+    <string name="location_open_map">Open in map app</string>
+    <string name="location_copy">Copy coordinates</string>
+    <string name="location_open_confirm_title">Open in a map app?</string>
+    <string name="location_open_confirm_text">The map app you choose will see this location.</string>
+    <string name="location_open_confirm_action">Choose map app</string>
+    <string name="location_chooser_title">Open the location with</string>
+    <string name="location_no_map_app">There is no map app on this phone.</string>
+    <string name="location_placeholder_description">Location, drawn without a map</string>
+    <string name="location_bubble_description">Location %1$s, accuracy %2$s</string>
+    <string name="location_error_permission">The app has not been allowed to use your location. Allow it in the phone settings if you want to share a location.</string>
+    <string name="location_error_off">Location is switched off. Turn it on in the phone settings and try again.</string>
+    <string name="location_error_timeout">No location was found within 30 seconds. Go outdoors or check that Location is on, and try again.</string>
+    <string name="location_error_unusable">The location could not be used. Try again.</string>
+    <string name="menu_media_files">Media and files</string>
+    <string name="gallery_tab_media">Photos and video</string>
+    <string name="gallery_tab_files">Files</string>
+    <string name="gallery_tab_links">Links</string>
+    <string name="gallery_empty_media">No photos or videos in this conversation yet.</string>
+    <string name="gallery_empty_files">No files in this conversation yet.</string>
+    <string name="gallery_empty_links">No links in this conversation yet.</string>
+    <string name="gallery_link_show_message">Show the message</string>
+    <string name="gallery_link_received">Received</string>
+    <string name="error_camera_permission">The camera needs your permission to take photos and record video. Allow it in the phone settings.</string>
+    <string name="video_send_original">Send in original quality</string>
+    <string name="video_compressing">Compressing video… %1$d %%</string>
+    <string name="video_compressing_n">Compressing video %1$d of %2$d… %3$d %%</string>
+    <string name="video_compress_failed">The video could not be compressed and is sent in original quality.</string>
 </resources>

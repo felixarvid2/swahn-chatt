@@ -443,6 +443,21 @@ abstract class LocalStoreContract {
         assertNull(store.getOutboxEntry("o2")!!.sendAt)
     }
 
+    @Test fun `a shared position round trips on messages and outbox entries`() = runBlocking {
+        store.upsertConversation(conv("g1", members = listOf("u1", "u2")))
+        val here = se.swahnchat.core.model.LocationSpec(59.3293, 18.0686, 12.5, "Hemma")
+        store.upsertMessage(msg("m1", "g1", seq = 1, text = "").copy(text = null, location = here))
+        assertEquals(here, store.getMessage("m1")!!.location)
+        store.upsertMessage(msg("m2", "g1", seq = 2))
+        assertNull(store.getMessage("m2")!!.location)
+        val entry = OutboxEntry("o1", "g1", "message", null, null, null, emptyList(), 1, createdAt = 1, location = here.copy(label = null))
+        store.putOutbox(entry)
+        assertEquals(entry, store.getOutboxEntry("o1"))
+        // deleted for everyone: the position is wiped with the rest of the content
+        store.updateMessage("m1") { it.copy(location = null, deleted = true) }
+        assertNull(store.getMessage("m1")!!.location)
+    }
+
     @Test fun `unread mentions count only unread incoming messages that name the user`() = runBlocking {
         store.upsertConversation(conv("g1", members = listOf("u1", "u2", "u3"), myRead = 1))
         store.upsertMessage(msg("old", "g1", seq = 1).copy(mentions = listOf("u1"))) // read already

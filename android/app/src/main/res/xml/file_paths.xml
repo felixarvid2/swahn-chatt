@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths>
     <cache-path name="shared" path="share/" />
+    <!-- Photos and videos taken with the camera app from the chat are written here (one folder each) and nowhere else -->
+    <files-path name="camera" path="share-staging/" />
 </paths>

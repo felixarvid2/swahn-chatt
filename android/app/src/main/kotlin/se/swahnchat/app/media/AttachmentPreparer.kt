@@ -34,6 +34,9 @@ class AttachmentTooLargeException(val size: Long) : IOException("Attachment is $
 /** A file the user picked and has not sent yet. [kind] is `image`, `video` or `file`. */
 data class PickedFile(val uri: Uri, val name: String?, val mime: String, val kind: String)
 
+/** A file the camera app is asked to write: see [AttachmentPreparer.newCaptureTarget]. */
+data class CaptureTarget(val file: File, val providerUri: Uri, val stagedUri: Uri)
+
 /** The picked file cannot be read or is not usable (for example a broken image). */
 class UnusableAttachmentException(message: String, cause: Throwable? = null) : IOException(message, cause)
 
@@ -55,6 +58,21 @@ class AttachmentPreparer @Inject constructor(@ApplicationContext private val con
     /** Copies of files other apps shared with us, until the user has chosen where they go (see [ShareIntake]). */
     val stagingDir: File get() = File(context.filesDir, "share-staging").also { it.mkdirs() }
 
+    /** Where a video is transcoded to before the result is moved to [outgoingDir]; cleaned with the staging folder. */
+    val compressDir: File get() = File(context.filesDir, "compress-staging").also { it.mkdirs() }
+
+    /**
+     * An empty file for the camera app to write a photo or video into, in its own folder under [stagingDir] (never shared storage).
+     * [providerUri] is what the camera app gets (a FileProvider URI, granted for this one launch); [stagedUri] is what the
+     * app stages and sends from afterwards (a `file:` URI inside [stagingDir], which [deleteStagedCopy] removes with its folder).
+     */
+    fun newCaptureTarget(video: Boolean): CaptureTarget {
+        val dir = File(stagingDir, UUID.randomUUID().toString()).also { it.mkdirs() }
+        val file = File(dir, if (video) "video.mp4" else "photo.jpg")
+        val provider = androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.files", file)
+        return CaptureTarget(file, provider, Uri.fromFile(file))
+    }
+
     /** Deletes the staged copy behind [uri] if it is one of ours (a `file:` URI inside [stagingDir]), and its folder. */
     fun deleteStagedCopy(uri: Uri) {
         if (uri.scheme != "file") return
@@ -67,6 +85,7 @@ class AttachmentPreparer @Inject constructor(@ApplicationContext private val con
     fun cleanupStaging() {
         val cutoff = System.currentTimeMillis() - 24L * 60 * 60 * 1000
         stagingDir.listFiles()?.forEach { if (it.lastModified() < cutoff) it.deleteRecursively() }
+        compressDir.listFiles()?.forEach { if (it.lastModified() < cutoff) it.deleteRecursively() }
     }
 
     suspend fun prepare(uri: Uri): OutgoingAttachment = withContext(Dispatchers.IO) {
@@ -299,6 +318,7 @@ class AttachmentPreparer @Inject constructor(@ApplicationContext private val con
     fun deleteAll() {
         outgoingDir.deleteRecursively()
         stagingDir.deleteRecursively()
+        compressDir.deleteRecursively()
         File(context.cacheDir, "share").deleteRecursively()
     }
 

@@ -167,6 +167,22 @@ Risks of libsignal that we accept and mitigate:
   moment; nothing reaches the server before then. Formatting markers are only interpreted for display; the text on the wire
   and in the search index is the text as typed. A mention notification names the sender and the text only as far as the
   notification privacy setting allows and bypasses the mute of a conversation, not the system's do-not-disturb.
+- **Shared positions.** A position is `location` content inside the Signal-encrypted message: the server sees an ordinary
+  message of unknown content and size, not coordinates. It is read once with the platform `LocationManager` (no Google Play
+  services, no background location, no live sharing), only after the person chose "Position", granted the permission, and saw the
+  coordinates and accuracy in a preview; nothing is sent before "Skicka". The bubble draws a placeholder offline: **no map tile or
+  any other request is made**, so no map provider learns where the people in a chat are. "Öppna i kartapp" asks first ("Kartappen
+  du väljer får se den här positionen.") and then hands a `geo:` URI to the system chooser; from that moment the app the person
+  picked has the position. Receivers drop positions out of range or with long labels. What this does not protect: members can
+  screenshot, copy or write down a position, "delete for everyone" cannot reach those copies, a position that was shown to a map
+  app is in that app's hands, and a position is not part of a history export (so it does not travel to a new phone).
+- **Photos, videos and the camera.** Images are decoded and re-encoded as JPEG before upload, so no EXIF (position, camera model,
+  time stamps) is sent; this is tested with a picture that carries a position, also for the camera's own file. The camera app
+  writes into a private folder of the app (FileProvider URI for that one file) and not into shared storage; the file is deleted
+  when it is removed from the strip or sent. **Videos are different:** the app does not rewrite their container metadata, and
+  the camera app may record the location in the file (and Transformer may carry such an entry over when a video is compressed).
+  Turn off location tagging in the camera app if that matters. The media gallery is a local view of the database; it holds no
+  extra copy of anything and nothing in it is requested from the server.
 - **Share target:** Swahn Chat accepts `ACTION_SEND`/`ACTION_SEND_MULTIPLE` from other apps. Shared items are
   untrusted: only `content://` URIs are read (never `file://` or the app's own provider, also with a `0@` user prefix), copies are size-limited
   and never read past the limit, names are sanitised, and the app lock must be unlocked before conversations are
@@ -492,6 +508,8 @@ metadata and password hashes.
 - A server can withhold, delay or drop messages, and can show a message as deleted before you received it (a
   tombstone without content). It cannot forge, edit, delete or re-route content you did receive.
 - Display names, avatars and device names shown in notices are server data.
+- A shared position can be copied, screenshotted or forwarded by hand by every member; "delete for everyone" only removes the
+  message on phones that still follow the protocol. Videos keep the metadata the camera wrote (see "Photos, videos and the camera").
 - No message history transfer between devices.
 - Rate limiting (including the per-username login counters) is per-process memory and resets on restart.
 - Calls leak IP addresses to the TURN server and, without the relay switch ("Koppla samtal via servern"), to the other party (see "Calls").

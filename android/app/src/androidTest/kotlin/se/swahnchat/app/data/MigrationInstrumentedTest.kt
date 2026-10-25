@@ -229,6 +229,35 @@ class MigrationInstrumentedTest {
         }
     }
 
+    @Test fun version6To7KeepsDataAndAddsTheLocationColumns() {
+        helper.createDatabase("mig-v6-v7", 5).use { fillVersion5(it) }
+        helper.runMigrationsAndValidate("mig-v6-v7", 7, true, *AppDatabase.MIGRATIONS).use { db ->
+            assertEquals(5L, db.count("messages"))
+            db.query("SELECT location FROM messages WHERE id = 'm1'").use { c -> assertTrue(c.moveToFirst()); assertTrue(c.isNull(0)) }
+            db.query("SELECT location FROM outbox WHERE messageId = 'p2'").use { c -> assertTrue(c.moveToFirst()); assertTrue(c.isNull(0)) }
+            assertEquals(listOf("m1", "m2"), db.matches("hej"))
+        }
+    }
+
+    @Test fun theAppsOwnBuilderOpensAVersion5FileOnSqlcipherAndAPositionRoundTrips() {
+        helper.createDatabase("mig-app-v5-loc", 5).use { fillVersion5(it) }
+        val db = AppDatabase.build(appContext, cipherFactory, "mig-app-v5-loc")
+        try {
+            runBlocking {
+                val store = se.swahnchat.app.data.db.RoomLocalStore(db)
+                assertEquals(null, store.getMessage("m1")!!.location)
+                val here = se.swahnchat.core.model.LocationSpec(59.3293, 18.0686, 12.0, "Hemma")
+                store.updateMessage("m1") { it.copy(location = here) }
+                assertEquals(here, store.getMessage("m1")!!.location)
+                store.putOutbox(store.getOutboxEntry("p2")!!.copy(location = here))
+                assertEquals(here, store.getOutboxEntry("p2")!!.location)
+            }
+        } finally {
+            db.close()
+            appContext.deleteDatabase("mig-app-v5-loc")
+        }
+    }
+
     @Test fun theAppsOwnBuilderOpensAVersion4FileOnSqlcipherAndReactionsTimersAndExpiryWork() {
         helper.createDatabase("mig-app-v4", 4).use { fillVersion4(it) }
         val db = AppDatabase.build(appContext, cipherFactory, "mig-app-v4")

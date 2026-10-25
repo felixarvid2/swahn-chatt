@@ -6,7 +6,7 @@ import androidx.compose.runtime.Immutable
 @Immutable
 data class AvatarUi(val name: String, val attachmentId: String? = null)
 
-enum class PreviewKind { NONE, TEXT, PHOTO, VIDEO, VOICE, FILE, DELETED, UNDECRYPTABLE }
+enum class PreviewKind { NONE, TEXT, PHOTO, VIDEO, VOICE, FILE, LOCATION, DELETED, UNDECRYPTABLE }
 
 enum class DeliveryUi { NONE, PENDING, SENT, DELIVERED, READ, FAILED }
 
@@ -146,6 +146,10 @@ data class PollUi(
     val myChoice: List<Int> get() = options.filter { it.mine }.map { it.id }
 }
 
+/** A shared position as the bubble shows it (offline: coordinates and accuracy, never a map from the internet). */
+@Immutable
+data class LocationUi(val lat: Double, val lon: Double, val accuracyM: Double, val label: String?)
+
 @Immutable
 data class MessageUi(
     val id: String,
@@ -195,6 +199,8 @@ data class MessageUi(
     val canStar: Boolean = false,
     /** Written for later and not sent yet: shown dimmed with the time it will go out (epoch ms). */
     val scheduledAt: Long? = null,
+    /** Set when the message is a shared position. */
+    val location: LocationUi? = null,
 )
 
 enum class SystemKind {

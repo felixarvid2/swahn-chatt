@@ -87,6 +87,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import se.swahnchat.app.R
+import se.swahnchat.app.location.formatAccuracy
+import se.swahnchat.app.location.formatCoordinates
 import se.swahnchat.app.ui.model.AttachmentKindUi
 import se.swahnchat.app.ui.model.AttachmentUi
 import se.swahnchat.app.ui.model.ChatRow
@@ -147,6 +149,8 @@ class BubbleActions(
     val onReschedule: (String) -> Unit = {},
     val onSendScheduledNow: (String) -> Unit = {},
     val onCancelScheduled: (String) -> Unit = {},
+    /** The person confirmed that a map app may see this position: hand it to the system chooser. */
+    val onOpenLocation: (lat: Double, lon: Double, label: String?) -> Unit = { _, _, _ -> },
 )
 
 /** Decodes a thumbnail from the message. It is untrusted input: refuse anything that is not a small image. */
@@ -309,7 +313,20 @@ private fun BubbleBody(m: MessageUi, actions: BubbleActions, playback: PlaybackU
         Spacer(Modifier.height(4.dp))
     }
     val poll = m.poll
-    if (poll != null) {
+    val location = m.location
+    var confirmMap by remember { mutableStateOf(false) }
+    if (location != null) {
+        LocationBubbleBody(
+            location, content, onOpen = { confirmMap = true },
+            onCopy = { actions.onCopy(formatCoordinates(location.lat, location.lon)) },
+        )
+        if (confirmMap) {
+            OpenInMapDialog(
+                onConfirm = { confirmMap = false; actions.onOpenLocation(location.lat, location.lon, location.label) },
+                onDismiss = { confirmMap = false },
+            )
+        }
+    } else if (poll != null) {
         PollView(m, poll, content, onVote = { actions.onVote(m.id, it) }, onLongPress = onLongPress)
     } else if (!m.text.isNullOrBlank()) {
         val scheme = MaterialTheme.colorScheme
@@ -375,6 +392,13 @@ private fun MessageMenuItems(m: MessageUi, actions: BubbleActions, canReply: Boo
             text = { Text(stringResource(R.string.action_edit)) },
             leadingIcon = { Icon(Icons.Filled.Edit, null) },
             onClick = { closeMenu(); actions.onEdit(m.id) },
+        )
+    }
+    if (m.location != null && !m.deleted) {
+        DropdownMenuItem(
+            text = { Text(stringResource(R.string.location_copy)) },
+            leadingIcon = { Icon(Icons.Filled.ContentCopy, null) },
+            onClick = { closeMenu(); actions.onCopy(formatCoordinates(m.location.lat, m.location.lon)) },
         )
     }
     if (!m.text.isNullOrBlank() && !m.deleted) {
@@ -562,6 +586,10 @@ fun bubbleDescription(m: MessageUi, time: String): String {
                 }
             }
             if (!m.text.isNullOrBlank()) parts += plainFormatted(m.text)
+            m.location?.let { l ->
+                parts += stringResource(R.string.location_bubble_description, formatCoordinates(l.lat, l.lon), formatAccuracy(l.accuracyM))
+                l.label?.let { parts += it }
+            }
             m.poll?.let { p ->
                 val counts = p.options.map { o -> "${o.text}: ${pluralStringResource(R.plurals.poll_votes, o.count, o.count)}" }
                 parts += counts.joinToString("; ")

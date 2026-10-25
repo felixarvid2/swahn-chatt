@@ -26,8 +26,11 @@ object ContentType {
      */
     const val POLL_VOTE = "poll_vote"
 
+    /** One shared position (sent as an ordinary `message`; see [LocationSpec]). Never live: it is the one fix the sender saw. */
+    const val LOCATION = "location"
+
     /** The types this app version understands; anything else is well-formed content from a newer app (see [ContentCodec]). */
-    val KNOWN: Set<String> = setOf(TEXT, EDIT, DELETE, REACTION, TIMER, CALL, POLL, POLL_VOTE)
+    val KNOWN: Set<String> = setOf(TEXT, EDIT, DELETE, REACTION, TIMER, CALL, POLL, POLL_VOTE, LOCATION)
 }
 
 object AttachmentKind {
@@ -71,6 +74,23 @@ data class PollOption(val id: Int, val text: String)
 data class PollSpec(val options: List<PollOption> = emptyList(), val multiple: Boolean = false)
 
 /**
+ * A position shared once: [lat] and [lon] in degrees, [accuracyM] the radius in metres the phone reported, and an optional
+ * [label] (at most [Content.MAX_LOCATION_LABEL] characters). The ranges are checked by [isValid]; the receiver drops content that fails.
+ */
+@Serializable
+data class LocationSpec(
+    val lat: Double,
+    val lon: Double,
+    @SerialName("accuracy_m") val accuracyM: Double,
+    val label: String? = null,
+) {
+    val isValid: Boolean
+        get() = lat.isFinite() && lon.isFinite() && accuracyM.isFinite() &&
+            lat in -90.0..90.0 && lon in -180.0..180.0 && accuracyM in 0.0..Content.MAX_LOCATION_ACCURACY_M &&
+            (label == null || label.length <= Content.MAX_LOCATION_LABEL)
+}
+
+/**
  * The plaintext of a message (before libsignal encryption): versioned JSON, padded to a multiple of
  * [Padding.BLOCK_SIZE] bytes by [ContentCodec].
  *
@@ -83,7 +103,7 @@ data class PollSpec(val options: List<PollOption> = emptyList(), val multiple: B
  * [remove] true when the reaction is taken back. `type = "timer"`: [seconds] is the new disappearing-messages timer (0: off).
  * `type = "call"`: [call] is the signalling step. `type = "poll"`: [text] is the question and [poll] the options.
  * `type = "poll_vote"`: [targetMessageId] is the poll, [optionIds] the chosen options (empty: the vote is withdrawn), or
- * [close] true when the poll's creator ends it.
+ * [close] true when the poll's creator ends it. `type = "location"`: [location] is the shared position (no text, no attachments).
  *
  * Every field added after version 2 shipped is optional and omitted when null, so older apps ignore it: [expiresIn]
  * (seconds a text message lives on the receiver's phone once displayed), [forwarded], [mentions] (user ids named with `@`
@@ -109,6 +129,7 @@ data class Content(
     val poll: PollSpec? = null,
     @SerialName("option_ids") val optionIds: List<Int>? = null,
     val close: Boolean? = null,
+    val location: LocationSpec? = null,
 ) {
     /** True for a type this app version knows how to apply. */
     val isKnownType: Boolean get() = type in ContentType.KNOWN
@@ -131,6 +152,10 @@ data class Content(
         const val MAX_POLL_OPTION = 100
         const val MIN_POLL_OPTIONS = 2
         const val MAX_POLL_OPTIONS = 10
+
+        /** Longest label of a shared position (characters), and the largest accuracy radius accepted (metres). */
+        const val MAX_LOCATION_LABEL = 100
+        const val MAX_LOCATION_ACCURACY_M = 100_000.0
 
         /** 0 is "off". */
         fun isValidTimer(seconds: Long?): Boolean = seconds != null && (seconds == 0L || seconds in MIN_TIMER_SECONDS..MAX_TIMER_SECONDS)
@@ -182,6 +207,7 @@ object ContentCodec {
             ContentType.CALL -> requireValidCall(content)
             ContentType.POLL -> requireValidPoll(content)
             ContentType.POLL_VOTE -> requireValidPollVote(content)
+            ContentType.LOCATION -> requireValidLocation(content)
             else -> Unit // a newer app's type: well-formed and bound, nothing more is known about it
         }
         return content
@@ -202,6 +228,14 @@ private fun requireValidPoll(content: Content) {
         "poll option ids must be distinct numbers 0..9"
     }
     require(poll.options.all { it.text.isNotBlank() && it.text.length <= Content.MAX_POLL_OPTION }) { "poll option without text, or too long" }
+}
+
+/** The rules for a `location`: a valid position and nothing else (no text, no attachments, no target). */
+private fun requireValidLocation(content: Content) {
+    require(content.targetMessageId == null) { "a location has no target" }
+    require(content.text == null && content.attachments.isEmpty() && content.poll == null) { "a location carries no other content" }
+    val location = requireNotNull(content.location) { "location content without location" }
+    require(location.isValid) { "location out of range, or its label is too long" }
 }
 
 /** The rules for a `poll_vote`: aimed at a poll message; either a list of chosen option ids (maybe empty) or `close`. */

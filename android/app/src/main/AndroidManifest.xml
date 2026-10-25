@@ -8,8 +8,13 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <!-- Audio mode and routing during a call (WebRTC audio device module) -->
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
-    <!-- Only asked for when the person chooses to scan a QR code (safety number, invitation); no photo is taken or kept -->
+    <!-- Asked for when the person scans a QR code (safety number, invitation) or takes a photo or records a video from the chat
+         (the camera app writes into a private folder of ours and the file is sent like any other attachment) -->
     <uses-permission android:name="android.permission.CAMERA" />
+    <!-- Only asked for when the person shares their position: approximate first, exact only if they choose "Exakt position".
+         The position is read once with the platform LocationManager; no Google Play services, no background location. -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <!-- Expedited sync on Android 11 and older runs as a short foreground service (WorkManager) -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
@@ -29,6 +34,7 @@
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
+    <uses-feature android:name="android.hardware.location" android:required="false" />
 
     <application
         android:name=".SwahnChatApp"
