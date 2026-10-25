@@ -1,5 +1,6 @@
 package se.swahnchat.app.call
 
+import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -178,10 +179,23 @@ class WebRtcMediaSession internal constructor(
         suspendCancellableCoroutine<SessionDescription?> { continuation -> start(SdpResultObserver(continuation)) }
     }
 
+    /**
+     * Runs a listener callback on WebRTC's signalling thread. An exception must not get back into the native code: libwebrtc
+     * aborts the whole process when a Java callback throws (Check failed in jvm.cc), so it is logged (class only) and dropped.
+     */
+    @Suppress("TooGenericExceptionCaught")
+    private inline fun deliver(block: () -> Unit) {
+        try {
+            block()
+        } catch (e: Exception) {
+            Log.w(TAG, "call listener failed: ${e.javaClass.simpleName}")
+        }
+    }
+
     private inner class Observer : PeerObserverAdapter() {
         override fun onIceCandidate(candidate: RtcIceCandidate) {
             if (closed) return
-            listener.onLocalCandidate(IceCandidate(candidate.sdpMid, candidate.sdpMLineIndex, candidate.sdp))
+            deliver { listener.onLocalCandidate(IceCandidate(candidate.sdpMid, candidate.sdpMLineIndex, candidate.sdp)) }
         }
 
         override fun onTrack(transceiver: RtpTransceiver) {
@@ -191,20 +205,21 @@ class WebRtcMediaSession internal constructor(
 
         override fun onConnectionChange(state: PeerConnection.PeerConnectionState) {
             if (closed) return
-            listener.onConnectionState(
+            val mapped =
                 when (state) {
                     PeerConnection.PeerConnectionState.NEW, PeerConnection.PeerConnectionState.CONNECTING -> MediaConnectionState.CONNECTING
                     PeerConnection.PeerConnectionState.CONNECTED -> MediaConnectionState.CONNECTED
                     PeerConnection.PeerConnectionState.DISCONNECTED -> MediaConnectionState.DISCONNECTED
                     PeerConnection.PeerConnectionState.FAILED -> MediaConnectionState.FAILED
                     PeerConnection.PeerConnectionState.CLOSED -> MediaConnectionState.CLOSED
-                },
-            )
+                }
+            deliver { listener.onConnectionState(mapped) }
         }
     }
 
     private companion object {
         const val TRACK_ID = "fc-audio"
         const val STREAM_ID = "fc-stream"
+        const val TAG = "WebRtcMediaSession"
     }
 }

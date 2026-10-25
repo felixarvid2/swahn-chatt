@@ -152,6 +152,10 @@ class OwnDeviceOut(DeviceOut):
     last_push_status: int | None = None  # HTTP status of that attempt; 0 = no answer (network error, timeout)
 
 
+class DeviceRename(Req):
+    name: DeviceName
+
+
 class PushTestQueued(BaseModel):
     status: Literal["queued"]
 

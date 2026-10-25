@@ -167,6 +167,7 @@ Bootstrap and server-side administration use the CLI (see `docs/RASPBERRY_PI_SET
 Push delivery: the server retries a push that failed transiently (network error, timeout, `429`, `5xx`) after 5 s, 30 s and 2 min
 (four attempts in all) without delaying anything else, and keeps the outcome per device (visible to the owner and to
 administrators). `404`/`410` from the push server still clears the registered endpoint.
+| PATCH | `/devices/{device_id}` | `{name}` (1-64 characters, stripped) | `200 Device`. Renames one of the caller's own active devices, the calling one included; `404` for anything else (other users' and revoked devices are not revealed). Renaming to the current name changes nothing. A change emits `devices_changed` to the devices of everyone who shares a conversation with the caller (and the caller's other devices), so member lists refresh the name. Audit: `device_renamed` (device id only, never the name). Rate limited to 20 per minute per user (`429`) |
 | DELETE | `/devices/{device_id}` | – | `204`. Only the caller's own devices |
 
 ## End-to-end encryption keys (Signal protocol, see `SECURITY.md`)
