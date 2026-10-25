@@ -15,7 +15,7 @@
 
 # :core:model: construction and property access only. Companion / serializer() are NOT listed: the app rules must keep them.
 -keep,allowobfuscation class se.swahnchat.core.model.** { <init>(...); }
--keepclassmembers,allowobfuscation class se.swahnchat.core.model.** { *** get*(); *** component*(); *** copy(...); boolean is*(); }
+-keepclassmembers,allowobfuscation class se.swahnchat.core.model.** { *** get*(); *** component*(); *** copy(...); *** copy$default(...); boolean is*(); }
 
 # :core:client types the tests build and read through the app's Room store (MigrationInstrumentedTest). RoomLocalStore also needs its
 # constructor with default arguments (the synthetic <init>(..., int, DefaultConstructorMarker) the test's `RoomLocalStore(db)` calls).
