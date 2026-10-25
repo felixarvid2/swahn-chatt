@@ -643,4 +643,46 @@
     <string name="menu_starred">Stjärnmärkta</string>
     <string name="format_help_title">Formatera text</string>
     <string name="format_help_text">*fet*  _kursiv_  ~genomstruken~  `kod`</string>
+
+    <!-- Batch 6: position, media gallery, camera, video compression -->
+    <string name="attach_location">Position</string>
+    <string name="attach_camera">Kamera</string>
+    <string name="attach_record_video">Spela in video</string>
+    <string name="attachment_location">Position</string>
+    <string name="location_choose_title">Dela din position</string>
+    <string name="location_choose_text">Din position hämtas en gång och skickas krypterat till den här konversationen. Ingen karttjänst får veta den, och den följer inte med dig efteråt. Välj hur exakt den ska vara.</string>
+    <string name="location_approximate">Ungefärlig position</string>
+    <string name="location_exact">Exakt position</string>
+    <string name="location_fetching">Hämtar din position…</string>
+    <string name="location_fetching_hint">Det kan ta upp till 30 sekunder.</string>
+    <string name="location_preview_title">Skicka den här positionen?</string>
+    <string name="location_preview_note">Alla i konversationen kan se den och spara den. Den skickas en gång.</string>
+    <string name="location_accuracy">Noggrannhet: ± %1$s</string>
+    <string name="location_open_map">Öppna i kartapp</string>
+    <string name="location_copy">Kopiera koordinater</string>
+    <string name="location_open_confirm_title">Öppna i kartapp?</string>
+    <string name="location_open_confirm_text">Kartappen du väljer får se den här positionen.</string>
+    <string name="location_open_confirm_action">Välj kartapp</string>
+    <string name="location_chooser_title">Öppna positionen med</string>
+    <string name="location_no_map_app">Det finns ingen kartapp på telefonen.</string>
+    <string name="location_placeholder_description">Position, ritad utan karta</string>
+    <string name="location_bubble_description">Position %1$s, noggrannhet %2$s</string>
+    <string name="location_error_permission">Appen har inte fått använda din plats. Tillåt den i telefonens inställningar om du vill dela position.</string>
+    <string name="location_error_off">Plats är avstängd. Slå på den i telefonens inställningar och försök igen.</string>
+    <string name="location_error_timeout">Ingen position hittades inom 30 sekunder. Gå ut under bar himmel eller kontrollera att Plats är på, och försök igen.</string>
+    <string name="location_error_unusable">Positionen gick inte att använda. Försök igen.</string>
+    <string name="menu_media_files">Media och filer</string>
+    <string name="gallery_tab_media">Bilder och video</string>
+    <string name="gallery_tab_files">Filer</string>
+    <string name="gallery_tab_links">Länkar</string>
+    <string name="gallery_empty_media">Inga bilder eller videor i den här konversationen ännu.</string>
+    <string name="gallery_empty_files">Inga filer i den här konversationen ännu.</string>
+    <string name="gallery_empty_links">Inga länkar i den här konversationen ännu.</string>
+    <string name="gallery_link_show_message">Visa meddelandet</string>
+    <string name="gallery_link_received">Mottagen</string>
+    <string name="error_camera_permission">Kameran behöver din tillåtelse för att ta bilder och spela in video. Tillåt den i telefonens inställningar.</string>
+    <string name="video_send_original">Skicka i originalkvalitet</string>
+    <string name="video_compressing">Komprimerar video… %1$d %%</string>
+    <string name="video_compressing_n">Komprimerar video %1$d av %2$d… %3$d %%</string>
+    <string name="video_compress_failed">Videon kunde inte komprimeras och skickas i originalkvalitet.</string>
 </resources>

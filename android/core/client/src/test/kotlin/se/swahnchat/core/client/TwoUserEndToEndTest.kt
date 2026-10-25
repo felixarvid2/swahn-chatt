@@ -488,6 +488,30 @@ class TwoUserEndToEndTest {
     }
 
     @Test
+    fun aSharedPositionTravelsEncryptedThroughTheRealServer() = runBlocking<Unit> {
+        val conv = directChat(alice, bob)
+        eventually(timeout, "bob knows the conversation") { bob.store.getConversation(conv) != null }
+        val label = "Hemma $run"
+        val here = se.swahnchat.core.model.LocationSpec(59.329323, 18.068581, 8.0, label)
+        val id = alice.engine.sendLocation(conv, here)
+        eventually(timeout, "position sent") { alice.store.getMessage(id)!!.status != MessageStatus.PENDING }
+        bob.engine.sync()
+        assertEquals(here, bob.store.getMessage(id)!!.location)
+        assertNull(bob.store.getMessage(id)!!.text)
+        // the server holds an ordinary message whose ciphertext does not contain the coordinates or the label
+        val onServer = alice.rawApi().listMessages(conv, null, 50).single { it.id == id }
+        assertEquals(MessageKind.MESSAGE, onServer.kind)
+        val bytes = onServer.envelope.toString()
+        assertTrue("59.329323" !in bytes && label !in bytes)
+        // deleted for everyone: the position is gone on the other phone too
+        alice.engine.deleteMessage(id)
+        eventually(timeout, "delete sent") { alice.store.getOutbox().isEmpty() }
+        bob.engine.sync()
+        assertNull(bob.store.getMessage(id)!!.location)
+        assertTrue(bob.store.getMessage(id)!!.deleted)
+    }
+
+    @Test
     fun pollWithVotesMentionsAndAScheduledMessageThroughTheRealServer() = runBlocking<Unit> {
         val g = alice.engine.createGroup("Omröstning $run", listOf(bob.userId, carol.userId))
         listOf(bob, carol).forEach { it.engine.refreshDirectory(); it.engine.sync() }

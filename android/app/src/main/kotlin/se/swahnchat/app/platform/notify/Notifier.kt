@@ -303,6 +303,7 @@ class Notifier @Inject constructor(
             "voice" -> context.getString(R.string.attachment_voice)
             else -> context.getString(R.string.attachment_file_named, m.attachments.first().name ?: "")
         }
+        m.location != null -> context.getString(R.string.attachment_location)
         else -> context.getString(R.string.notification_new_message)
     }
 

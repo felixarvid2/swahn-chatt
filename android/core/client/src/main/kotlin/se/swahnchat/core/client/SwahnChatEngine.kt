@@ -31,6 +31,7 @@ import se.swahnchat.core.model.ConversationType
 import se.swahnchat.core.model.CreateConversationRequest
 import se.swahnchat.core.model.CreateInvitationRequest
 import se.swahnchat.core.model.CreatedInvitation
+import se.swahnchat.core.model.LocationSpec
 import se.swahnchat.core.model.LoginRequest
 import se.swahnchat.core.model.MarkReadRequest
 import se.swahnchat.core.model.RedeemInviteRequest
@@ -508,6 +509,13 @@ class SwahnChatEngine(
     suspend fun sendPoll(conversationId: String, question: String, options: List<String>, multiple: Boolean = false): String =
         sender.enqueuePoll(conversationId, question, options, multiple).also { requestOutbox() }
 
+    /**
+     * Shares a position once ([ContentType.LOCATION]): [location] is what the sender saw in the preview and confirmed. It is
+     * encrypted like any message; nothing is sent to a map service. There is no live sharing.
+     */
+    suspend fun sendLocation(conversationId: String, location: LocationSpec): String =
+        sender.enqueueLocation(conversationId, location).also { requestOutbox() }
+
     /** Votes on a poll: [optionIds] replace your earlier vote (empty: withdraw it). Not possible once the poll is closed. */
     suspend fun votePoll(pollId: String, optionIds: List<Int>) {
         sender.enqueueVote(pollId, optionIds)
@@ -707,7 +715,9 @@ class SwahnChatEngine(
         val targets = conversationIds.distinct()
         require(targets.isNotEmpty() && targets.size <= MAX_FORWARD_TARGETS) { "1..$MAX_FORWARD_TARGETS conversations" }
         val source = ctx.store.getMessage(messageId) ?: throw IllegalArgumentException("Unknown message")
-        require(!source.deleted && !source.isSystem && source.decryptError == null && source.poll == null) { "That message cannot be forwarded" }
+        require(!source.deleted && !source.isSystem && source.decryptError == null && source.poll == null && source.location == null) {
+            "That message cannot be forwarded"
+        }
         require(source.status != MessageStatus.PENDING && source.status != MessageStatus.FAILED) { "The message has not been sent yet" }
         for (t in targets) ctx.store.getConversation(t) ?: throw IllegalArgumentException("Unknown conversation")
         val files = source.attachments.map { a ->

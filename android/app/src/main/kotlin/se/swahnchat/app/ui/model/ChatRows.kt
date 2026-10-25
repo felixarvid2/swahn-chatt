@@ -155,6 +155,7 @@ private fun StoredMessage.toUi(ctx: ChatRowContext, replyTarget: StoredMessage?)
         poll = if (deleted) null else pollUi(ctx, sentAndUsable),
         starred = id in ctx.starred, canStar = !deleted && decryptError == null,
         scheduledAt = scheduledAt,
+        location = if (deleted) null else location?.let { LocationUi(it.lat, it.lon, it.accuracyM, it.label) },
     )
 }
 

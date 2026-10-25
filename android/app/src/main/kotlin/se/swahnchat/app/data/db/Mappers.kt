@@ -20,6 +20,7 @@ import se.swahnchat.core.model.Conversation
 import se.swahnchat.core.model.ConversationMember
 import se.swahnchat.core.model.Device
 import se.swahnchat.core.model.Envelope
+import se.swahnchat.core.model.LocationSpec
 import se.swahnchat.core.model.PollOption
 import se.swahnchat.core.model.PollSpec
 import se.swahnchat.core.model.SwahnChatJson
@@ -75,6 +76,14 @@ internal fun PollSpec.toJson(): String = SwahnChatJson.encodeToString(PollSpec.s
 
 internal fun String.toPollSpec(): PollSpec? = try {
     SwahnChatJson.decodeFromString(PollSpec.serializer(), this)
+} catch (e: Exception) {
+    null
+}
+
+internal fun LocationSpec.toJson(): String = SwahnChatJson.encodeToString(LocationSpec.serializer(), this)
+
+internal fun String.toLocationSpec(): LocationSpec? = try {
+    SwahnChatJson.decodeFromString(LocationSpec.serializer(), this).takeIf { it.isValid }
 } catch (e: Exception) {
     null
 }
@@ -181,7 +190,7 @@ internal fun StoredMessage.toEntity(): MessageEntity {
         pendingEnvelopeType = pendingEnvelopeType, pendingEnvelopeBody = pendingEnvelopeBody,
         forwarded = forwarded, imported = imported, expiresIn = expiresIn, expireAt = expireAt,
         systemValue = (sys as? SystemEvent.TimerChanged)?.seconds ?: (sys as? SystemEvent.Call)?.durationSeconds,
-        mentions = mentions.toMentionColumn(), poll = poll?.toJson(), scheduledAt = scheduledAt,
+        mentions = mentions.toMentionColumn(), poll = poll?.toJson(), scheduledAt = scheduledAt, location = location?.toJson(),
     )
 }
 
@@ -206,7 +215,7 @@ internal fun MessageEntity.toModel(): StoredMessage {
         deliveredTo = deliveredTo.toSet(), readBy = readBy.toSet(), systemEvent = sys,
         pendingEnvelopeType = pendingEnvelopeType, pendingEnvelopeBody = pendingEnvelopeBody,
         forwarded = forwarded, imported = imported, expiresIn = expiresIn, expireAt = expireAt,
-        mentions = mentions.toMentionList(), poll = poll?.toPollInfo(), scheduledAt = scheduledAt,
+        mentions = mentions.toMentionList(), poll = poll?.toPollInfo(), scheduledAt = scheduledAt, location = location?.toLocationSpec(),
     )
 }
 
@@ -252,6 +261,7 @@ internal fun OutboxEntry.toEntity() = OutboxEntity(
     attempts = attempts, lastError = lastError, createdAt = createdAt,
     forwarded = forwarded, expiresIn = expiresIn, remove = remove,
     mentions = mentions.toMentionColumn(), poll = poll?.toJson(), optionIds = optionIds?.toIdColumn(), close = close, sendAt = sendAt,
+    location = location?.toJson(),
 )
 
 internal fun OutboxEntity.toModel() = OutboxEntry(
@@ -267,6 +277,7 @@ internal fun OutboxEntity.toModel() = OutboxEntry(
     attempts = attempts, lastError = lastError, createdAt = createdAt,
     forwarded = forwarded, expiresIn = expiresIn, remove = remove,
     mentions = mentions.toMentionList(), poll = poll?.toPollSpec(), optionIds = optionIds?.toIdList(), close = close, sendAt = sendAt,
+    location = location?.toLocationSpec(),
 )
 
 internal fun ReactionEntity.toModel() = Reaction(messageId, conversationId, userId, emoji, seq, at)

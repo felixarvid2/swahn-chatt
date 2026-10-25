@@ -3,7 +3,11 @@ package se.swahnchat.app.ui.components
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -16,6 +20,9 @@ import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.Switch
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -25,6 +32,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
@@ -32,7 +40,9 @@ import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import se.swahnchat.app.R
 import se.swahnchat.app.ui.model.AttachmentKindUi
+import se.swahnchat.app.ui.screens.CompressionUi
 import se.swahnchat.app.ui.screens.StagedUi
+import kotlin.math.roundToInt
 
 /**
  * The files chosen for the next message, above the text field: a small preview each, with a button to take it out again.
@@ -78,6 +88,49 @@ private fun StagedTile(item: StagedUi, onRemove: (String) -> Unit) {
         ) {
             Box(Modifier.size(22.dp).clip(CircleShape).background(MaterialTheme.colorScheme.inverseSurface), contentAlignment = Alignment.Center) {
                 Icon(Icons.Filled.Close, contentDescription = null, tint = MaterialTheme.colorScheme.inverseOnSurface, modifier = Modifier.size(14.dp))
+            }
+        }
+    }
+}
+
+/**
+ * Under the preview strip while a video is staged: the "Skicka i originalkvalitet" switch (videos above 16 MB or 1080p are otherwise
+ * shrunk to 720p before they are uploaded), and, while that happens, the progress with a button to stop it.
+ */
+@Composable
+fun VideoSendOptions(
+    hasVideo: Boolean,
+    original: Boolean,
+    compression: CompressionUi?,
+    onOriginal: (Boolean) -> Unit,
+    onCancel: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    if (!hasVideo) return
+    Column(modifier.padding(horizontal = 16.dp)) {
+        if (compression != null) {
+            val percent = (compression.progress * 100).roundToInt()
+            val label = if (compression.count > 1) {
+                stringResource(R.string.video_compressing_n, compression.index, compression.count, percent)
+            } else {
+                stringResource(R.string.video_compressing, percent)
+            }
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 8.dp)) {
+                Column(Modifier.weight(1f)) {
+                    Text(label, style = MaterialTheme.typography.labelLarge)
+                    LinearProgressIndicator(progress = { compression.progress }, modifier = Modifier.fillMaxWidth().padding(top = 4.dp))
+                }
+                TextButton(onClick = onCancel, modifier = Modifier.heightIn(min = 48.dp)) { Text(stringResource(R.string.action_cancel)) }
+            }
+        } else {
+            val toggleLabel = stringResource(R.string.video_send_original)
+            Row(
+                Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                    .toggleable(value = original, role = Role.Switch, onValueChange = onOriginal),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(toggleLabel, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f).clearAndSetSemantics {})
+                Switch(checked = original, onCheckedChange = null, modifier = Modifier.semantics { contentDescription = toggleLabel })
             }
         }
     }

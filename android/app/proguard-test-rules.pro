@@ -79,3 +79,15 @@
 -keep,allowobfuscation class se.swahnchat.app.call.WebRtcMediaSessionFactory { <init>(...); public *; }
 -keep,allowobfuscation class se.swahnchat.app.call.WebRtcMediaSession { public *; }
 -keep,allowobfuscation class se.swahnchat.core.client.call.** { *; }
+
+# Batch 6: positions and video compression. VideoTranscodeInstrumentedTest drives the real Media3 transcoder and the compressor, and
+# the model tests read LocationSpec (constructor and accessors come from the :core:model rule above).
+-keep,allowobfuscation class se.swahnchat.app.media.Media3VideoTranscoder { <init>(...); public *; }
+-keep,allowobfuscation class se.swahnchat.app.media.VideoCompressor { <init>(...); public *; }
+-keep,allowobfuscation class se.swahnchat.app.media.VideoCompression { *; }
+-keep,allowobfuscation class se.swahnchat.app.media.VideoCompression$* { *; }
+-keep,allowobfuscation class se.swahnchat.app.media.VideoSkip { *; }
+-keep,allowobfuscation class se.swahnchat.app.media.VideoTarget { *; }
+-keep,allowobfuscation class se.swahnchat.app.media.VideoTranscodeException { *; }
+-keep,allowobfuscation interface se.swahnchat.app.media.VideoTranscoder { *; }
+-keep,allowobfuscation class se.swahnchat.core.client.OutgoingAttachment { *; }

@@ -45,6 +45,9 @@ import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Photo
+import androidx.compose.material.icons.filled.PermMedia
+import androidx.compose.material.icons.filled.PhotoCamera
+import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Star
@@ -151,6 +154,7 @@ import se.swahnchat.app.ui.components.PollCreateDialog
 import se.swahnchat.app.ui.components.ScheduleDialog
 import se.swahnchat.app.ui.components.defaultScheduleTime
 import se.swahnchat.app.ui.components.StagedStrip
+import se.swahnchat.app.ui.components.VideoSendOptions
 import se.swahnchat.app.ui.components.dayLabel
 import se.swahnchat.app.ui.components.timerLabel
 import se.swahnchat.app.ui.components.formatDuration
@@ -182,6 +186,8 @@ class ConversationNav(
     val onOpenScheduled: (conversationId: String) -> Unit = {},
     /** Opens another conversation (the direct chat of a tapped mention). */
     val onOpenConversation: (conversationId: String) -> Unit = {},
+    /** "Media och filer": the gallery of this conversation. */
+    val onOpenGallery: (conversationId: String) -> Unit = {},
 )
 
 @Composable
@@ -218,6 +224,8 @@ fun ConversationScreen(
     val micPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (!granted) scope.launch { snackbar.showSnackbar(context.getString(R.string.error_microphone_permission)) }
     }
+
+    val attach = rememberAttachCallbacks(vm, state.locationShare)
 
     val errorText = errorTexts()
     LaunchedEffect(vm) {
@@ -293,6 +301,7 @@ fun ConversationScreen(
             onReschedule = { rescheduleTarget = it },
             onSendScheduledNow = vm::sendScheduledNow,
             onCancelScheduled = { confirmCancelScheduled = it },
+            onOpenLocation = { lat, lon, label -> openInMapApp(context, lat, lon, label) },
         )
     }
 
@@ -352,6 +361,12 @@ fun ConversationScreen(
             onCreatePoll = vm::sendPoll,
             onOpenStarred = { nav.onOpenStarred(vm.conversationId) },
             onOpenScheduled = { nav.onOpenScheduled(vm.conversationId) },
+            onOpenGallery = { nav.onOpenGallery(vm.conversationId) },
+            onTakePhoto = attach.onTakePhoto,
+            onRecordVideo = attach.onRecordVideo,
+            onSharePosition = attach.onSharePosition,
+            onCancelSending = vm::cancelSending,
+            onSendOriginalVideo = vm::setSendOriginalVideo,
         ),
     )
 
@@ -565,6 +580,15 @@ class ConversationCallbacks(
     val onCreatePoll: (question: String, options: List<String>, multiple: Boolean) -> Unit = { _, _, _ -> },
     val onOpenStarred: () -> Unit = {},
     val onOpenScheduled: () -> Unit = {},
+    val onOpenGallery: () -> Unit = {},
+    /** The attach menu's "Kamera", "Spela in video" and "Position". */
+    val onTakePhoto: () -> Unit = {},
+    val onRecordVideo: () -> Unit = {},
+    val onSharePosition: () -> Unit = {},
+    /** Stops the compression of the staged videos (nothing is sent). */
+    val onCancelSending: () -> Unit = {},
+    /** "Skicka i originalkvalitet" on or off. */
+    val onSendOriginalVideo: (Boolean) -> Unit = {},
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -663,6 +687,11 @@ fun ConversationContent(
                                     onClick = { menuOpen = false; callbacks.onSearch() },
                                 )
                             }
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.menu_media_files)) },
+                                leadingIcon = { Icon(Icons.Filled.PermMedia, null) },
+                                onClick = { menuOpen = false; callbacks.onOpenGallery() },
+                            )
                             DropdownMenuItem(
                                 text = { Text(stringResource(R.string.menu_starred)) },
                                 leadingIcon = { Icon(Icons.Filled.Star, null) },
@@ -1019,6 +1048,10 @@ private fun Composer(state: ConversationUiState, callbacks: ConversationCallback
                 }
             }
             StagedStrip(state.staged, callbacks.onUnstage)
+            VideoSendOptions(
+                hasVideo = state.staged.any { it.kind == AttachmentKindUi.VIDEO }, original = state.sendOriginalVideo,
+                compression = state.compression, onOriginal = callbacks.onSendOriginalVideo, onCancel = callbacks.onCancelSending,
+            )
             MentionPicker(state.mentionSuggestions, callbacks.onPickMention)
             val recording = state.recording
             if (recording != null && recording.locked) {
@@ -1052,9 +1085,24 @@ private fun InputRow(state: ConversationUiState, callbacks: ConversationCallback
                         onClick = { attachMenu = false; callbacks.onPickMedia() },
                     )
                     DropdownMenuItem(
+                        text = { Text(stringResource(R.string.attach_camera)) },
+                        leadingIcon = { Icon(Icons.Filled.PhotoCamera, null) },
+                        onClick = { attachMenu = false; callbacks.onTakePhoto() },
+                    )
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.attach_record_video)) },
+                        leadingIcon = { Icon(Icons.Filled.Videocam, null) },
+                        onClick = { attachMenu = false; callbacks.onRecordVideo() },
+                    )
+                    DropdownMenuItem(
                         text = { Text(stringResource(R.string.attach_document)) },
                         leadingIcon = { Icon(Icons.AutoMirrored.Filled.InsertDriveFile, null) },
                         onClick = { attachMenu = false; callbacks.onPickDocument() },
+                    )
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.attach_location)) },
+                        leadingIcon = { Icon(Icons.Filled.LocationOn, null) },
+                        onClick = { attachMenu = false; callbacks.onSharePosition() },
                     )
                     DropdownMenuItem(
                         text = { Text(stringResource(R.string.attach_poll)) },

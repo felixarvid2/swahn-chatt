@@ -28,6 +28,17 @@ import kotlin.test.assertTrue
 class HistoryAndContentInstrumentedTest {
     private val pass = "correct horse battery staple"
 
+    @Test fun aSharedPositionRoundTripsThroughTheCodecAndIsValidatedAfterR8() {
+        val here = se.swahnchat.core.model.LocationSpec(59.3293, 18.0686, 12.0, "Hemma")
+        val c = Content(type = ContentType.LOCATION, location = here, conversationId = "c", messageId = "m")
+        val back = ContentCodec.decode(ContentCodec.encode(c))
+        assertEquals(here, back.location)
+        assertTrue(back.isKnownType)
+        assertFailsWith<IllegalArgumentException> {
+            ContentCodec.decode(ContentCodec.encode(c.copy(location = here.copy(lat = 91.0))))
+        }
+    }
+
     private fun seal(header: HistoryFormat.Header, plain: ByteArray): ByteArray {
         val key = HistoryFormat.deriveKey(pass, header)
         val out = ByteArrayOutputStream()

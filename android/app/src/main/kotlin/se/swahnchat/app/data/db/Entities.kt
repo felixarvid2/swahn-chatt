@@ -132,6 +132,8 @@ data class MessageEntity(
     val poll: String? = null,
     /** Added in version 6: an outgoing message waiting for its time (epoch ms); null: not scheduled. */
     val scheduledAt: Long? = null,
+    /** Added in version 7: the shared position this message is, as JSON ([LocationSpec]); null: not a position. */
+    val location: String? = null,
 )
 
 @Entity(tableName = "outbox")
@@ -166,6 +168,8 @@ data class OutboxEntity(
     @ColumnInfo(defaultValue = "0") val close: Boolean = false,
     /** Added in version 6: a scheduled message is not sent before this time (epoch ms). */
     val sendAt: Long? = null,
+    /** Added in version 7: JSON of the [LocationSpec] of a position message. */
+    val location: String? = null,
 )
 
 /**

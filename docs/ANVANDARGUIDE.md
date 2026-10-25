@@ -192,6 +192,47 @@ telefonen startas om.
 ![Schemalagt meddelande](../android/app/screenshots/50f_scheduled_bubble_light.png)
 ![Schemalagda meddelanden](../android/app/screenshots/50g_scheduled_list_light.png)
 
+### Dela din position
+
+Tryck på gemet och välj *Position*. Appen frågar om du vill dela en **ungefärlig** eller en **exakt** position och ber bara om
+den tillåtelse som behövs för det (Android visar sin vanliga fråga första gången). Telefonen hämtar *en* position, det kan ta
+upp till 30 sekunder, och visar sedan koordinaterna och noggrannheten ("± 8 m") innan något skickas. Först när du trycker
+*Skicka* går den iväg, krypterad som ett vanligt meddelande. Det finns ingen delning i realtid: den som tar emot ser platsen
+du var på, inte var du är sedan. Går det inte (platsen är avstängd, ingen tillåtelse eller ingen signal) får du ett tydligt
+besked i stället.
+
+I meddelandet visas en enkel ritad ruta med en nål, koordinaterna och noggrannheten. **Ingen karta hämtas från internet**, så
+ingen karttjänst får veta var ni är. *Öppna i kartapp* frågar först ("Kartappen du väljer får se den här positionen.") och
+låter dig sedan välja kartapp; *Kopiera koordinater* kopierar siffrorna. Tänk på att den som tar emot kan ta en skärmdump eller
+kopiera koordinaterna: en skickad position går inte att ta tillbaka, bara att ta bort för alla (som andra meddelanden).
+
+![Position i samtalet](../android/app/screenshots/60_location_bubble_light.png)
+
+### Ta ett foto eller spela in en video
+
+Tryck på gemet och välj *Kamera* (foto) eller *Spela in video*. Telefonens egen kameraapp öppnas; när du är nöjd hamnar bilden
+eller filmen bland de valda filerna ovanför textfältet, precis som när du väljer från galleriet, och skickas när du trycker
+*Skicka*. Första gången frågar Android om appen får använda kameran. Bilden sparas inte i telefonens galleri, bara i appens
+egen privata mapp, och tas bort när du plockar bort den eller har skickat den. Platsuppgifter och kameramodell i bilden
+skickas inte med (se *Säkerhet*). Stäng av platstaggning i kameraappen om du också vill slippa den i filmer, se nedan.
+
+### Skicka film: komprimering
+
+En film som är större än 16 MB eller har högre upplösning än 1080p görs mindre innan den skickas (högst 1280 × 720, ungefär
+2,5 Mbit/s): det går snabbare och tar mindre plats hos alla. Medan det pågår visas en förloppsrad med *Avbryt*. Vill du
+skicka filmen som den är, slå på **Skicka i originalkvalitet** under de valda filerna. Blir resultatet inte mindre, eller klarar
+telefonens kodare det inte, skickas originalet (med ett besked). Filmer är begränsade till 100 MB.
+
+### Media och filer
+
+I samtalets meny (de tre prickarna) finns **Media och filer**: *Bilder och video* (rutnät med den nyaste först, uppdelat per
+månad), *Filer* (dokument) och *Länkar* (webbadresser som står i meddelandena). Ett tryck på en bild eller film öppnar den; svep
+åt sidan för att bläddra till de andra i samtalet. Ett tryck på en fil öppnar den i en annan app, och ett tryck på en länk visar
+meddelandet där den står (länken öppnas därifrån, med den vanliga frågan först). Allt hämtas från telefonen: ingenting frågas av
+servern. Meddelanden som tas bort eller försvinner av sig själva försvinner också härifrån.
+
+![Media och filer](../android/app/screenshots/61_gallery_media_light.png)
+
 ## Samtal: ringa, svara och videosamtal
 
 Du kan ringa ett röstsamtal eller videosamtal till en person i ett vanligt samtal mellan två. Det går inte i grupper, och

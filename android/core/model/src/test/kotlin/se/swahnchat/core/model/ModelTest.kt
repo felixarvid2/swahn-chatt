@@ -126,7 +126,7 @@ class ContentForwardCompatibilityTest {
 
     @Test
     fun `well-formed bound content of an unknown type is accepted and marked unknown`() {
-        for (type in listOf("hologram", "pin", "location", "sticker")) {
+        for (type in listOf("hologram", "pin", "geofence", "sticker")) {
             val c = decodeJson("""{"v":2,"type":"$type","text":"x","conversation_id":"c","message_id":"m","target_message_id":"t","poll":{"q":"?"}}""")
             assertEquals(type, c.type)
             assertTrue(!c.isKnownType, type)
@@ -470,5 +470,41 @@ class MentionPollContentTest {
         val c = decodeJson("""{"v":2,"type":"hologram",$bind,"x":1}""")
         assertTrue(!c.isKnownType)
         assertTrue(ContentType.POLL in ContentType.KNOWN && ContentType.POLL_VOTE in ContentType.KNOWN)
+    }
+
+    private fun location(body: String = """"lat":59.3293,"lon":18.0686,"accuracy_m":12.5""", extra: String = "") =
+        """{"v":2,"type":"location","location":{$body},$bind$extra}"""
+
+    @Test
+    fun `a location round-trips, is a known type and omits an unset label`() {
+        val c = Content(
+            type = ContentType.LOCATION, location = LocationSpec(59.3293, 18.0686, 12.5, "Hemma"), conversationId = "c", messageId = "m",
+        )
+        val back = ContentCodec.decode(ContentCodec.encode(c))
+        assertEquals(c, back)
+        assertTrue(back.isKnownType && ContentType.LOCATION in ContentType.KNOWN)
+        val json = SwahnChatJson.encodeToString(Content.serializer(), c.copy(location = LocationSpec(1.0, 2.0, 3.0)))
+        assertTrue("\"accuracy_m\":3.0" in json && "label" !in json, json)
+        assertEquals(null, decodeJson(location()).location?.label)
+    }
+
+    @Test
+    fun `a location needs valid ranges, a short label and nothing else`() {
+        decodeJson(location("\"lat\":90,\"lon\":-180,\"accuracy_m\":0"))
+        decodeJson(location("\"lat\":-90,\"lon\":180,\"accuracy_m\":100000"))
+        decodeJson(location("\"lat\":1,\"lon\":2,\"accuracy_m\":3,\"label\":\"${"x".repeat(100)}\""))
+        fun bad(body: String, extra: String = "") = assertFailsWith<IllegalArgumentException>(body) { decodeJson(location(body, extra)) }
+        bad("\"lat\":90.01,\"lon\":0,\"accuracy_m\":1")
+        bad("\"lat\":-90.01,\"lon\":0,\"accuracy_m\":1")
+        bad("\"lat\":0,\"lon\":180.5,\"accuracy_m\":1")
+        bad("\"lat\":0,\"lon\":-181,\"accuracy_m\":1")
+        bad("\"lat\":0,\"lon\":0,\"accuracy_m\":-1")
+        bad("\"lat\":0,\"lon\":0,\"accuracy_m\":100000.5")
+        bad("\"lat\":1,\"lon\":2,\"accuracy_m\":3,\"label\":\"${"x".repeat(101)}\"")
+        bad("\"lat\":1,\"lon\":2,\"accuracy_m\":3", ""","target_message_id":"t"""")
+        bad("\"lat\":1,\"lon\":2,\"accuracy_m\":3", ""","text":"hi"""")
+        assertFailsWith<IllegalArgumentException> { decodeJson("""{"v":2,"type":"location",$bind}""") }
+        assertTrue(!LocationSpec(Double.NaN, 0.0, 1.0).isValid && !LocationSpec(0.0, Double.POSITIVE_INFINITY, 1.0).isValid)
+        assertTrue(!LocationSpec(0.0, 0.0, Double.NaN).isValid)
     }
 }

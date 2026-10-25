@@ -466,6 +466,7 @@ private fun previewLine(item: ConversationItemUi): String {
         PreviewKind.VIDEO -> stringResource(R.string.attachment_video)
         PreviewKind.VOICE -> stringResource(R.string.attachment_voice)
         PreviewKind.FILE -> item.previewText ?: stringResource(R.string.attachment_file)
+        PreviewKind.LOCATION -> "\uD83D\uDCCD ${item.previewText ?: stringResource(R.string.attachment_location)}"
         PreviewKind.DELETED -> stringResource(R.string.message_deleted)
         PreviewKind.UNDECRYPTABLE -> stringResource(R.string.message_undecryptable)
     }

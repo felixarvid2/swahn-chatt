@@ -52,6 +52,11 @@ import se.swahnchat.app.data.UiError
 import se.swahnchat.app.data.toUiError
 import se.swahnchat.app.media.AttachmentPreparer
 import se.swahnchat.app.media.AttachmentTooLargeException
+import se.swahnchat.app.media.VideoCompression
+import se.swahnchat.app.media.VideoCompressor
+import se.swahnchat.app.location.LocationSource
+import se.swahnchat.app.ui.components.LocationShareUi
+import se.swahnchat.core.model.LocationSpec
 import se.swahnchat.app.media.MediaValidator
 import se.swahnchat.app.media.UnusableAttachmentException
 import se.swahnchat.app.media.VoicePlayer
@@ -125,6 +130,12 @@ data class ConversationUiState(
     val safety: SafetyUi = SafetyUi(),
     /** Photos, videos and files chosen but not sent yet; they go out as one message with the text as caption. */
     val staged: List<StagedUi> = emptyList(),
+    /** Set while the videos of [staged] are compressed on their way out; the strip shows the progress and a cancel button. */
+    val compression: CompressionUi? = null,
+    /** "Skicka i originalkvalitet": videos are sent as they are, without compression. Only offered while a video is staged. */
+    val sendOriginalVideo: Boolean = false,
+    /** The step of the "Position" flow that is on screen, if any. */
+    val locationShare: LocationShareUi? = null,
     /** The disappearing-messages timer in seconds (0: off). */
     val timerSeconds: Long = 0,
     /** The screen is in the foreground; the clocks of disappearing messages only start while it is. */
@@ -138,6 +149,10 @@ data class ConversationUiState(
     /** Messages of this conversation that wait for their time. */
     val scheduledCount: Int = 0,
 )
+
+/** A video is being shrunk before it goes out: [progress] 0..1 of the video number [index] (from 1) of [count]. */
+@Immutable
+data class CompressionUi(val progress: Float, val index: Int, val count: Int)
 
 /** One chosen file in the preview strip above the composer. */
 @Immutable
@@ -181,6 +196,8 @@ class ConversationViewModel @Inject constructor(
     private val work: WorkScheduler,
     private val prefs: AppPrefs,
     private val connectivity: ConnectivityMonitor,
+    private val locationSource: LocationSource,
+    private val compressor: VideoCompressor,
     connectionStatus: ConnectionStatus,
     calls: CallManager,
     @ApplicationScope private val appScope: CoroutineScope,
@@ -199,6 +216,9 @@ class ConversationViewModel @Inject constructor(
     private val validating = ConcurrentHashMap.newKeySet<String>()
     private val resumed = MutableStateFlow(false)
     private val staged = MutableStateFlow<List<StagedUi>>(emptyList())
+    private val sendOriginal = MutableStateFlow(false)
+    private val compression = MutableStateFlow<CompressionUi?>(null)
+    private var sendJob: Job? = null
     private val displayedIds = HashSet<String>()
     private val pagerStart = MutableStateFlow(PagerStart(null, 0))
     /** Messages above this sequence number count as "new" in the jump-to-bottom button; null while the list is at the bottom. */
@@ -211,6 +231,8 @@ class ConversationViewModel @Inject constructor(
     val effects: SharedFlow<ConversationEffect> = _effects.asSharedFlow()
 
     val playback: StateFlow<PlaybackUi> = player.state
+
+    private val locationShare = LocationShareController(locationSource, viewModelScope) { _effects.tryEmit(ConversationEffect.Notice(it)) }
 
     /** The unread state at the moment of opening; computed before anything marks the conversation read. */
     private val anchor: Deferred<OpenAnchor> = viewModelScope.async {
@@ -288,14 +310,20 @@ class ConversationViewModel @Inject constructor(
         val typingNames: List<String>, val otherUserId: String?, val iAmAdmin: Boolean,
     )
 
-    private val composer = combine<Any?, Composer>(draft, replyTo, editing, recording, sending, staged, resumed) { v ->
+    private val composer = combine<Any?, Composer>(
+        draft, replyTo, editing, recording, sending, staged, resumed, compression, sendOriginal, locationShare.state,
+    ) { v ->
         @Suppress("UNCHECKED_CAST")
-        Composer(v[0] as String, v[1] as String?, v[2] as String?, v[3] as RecordingUi?, v[4] as Boolean, v[5] as List<StagedUi>, v[6] as Boolean)
+        Composer(
+            v[0] as String, v[1] as String?, v[2] as String?, v[3] as RecordingUi?, v[4] as Boolean, v[5] as List<StagedUi>, v[6] as Boolean,
+            v[7] as CompressionUi?, v[8] as Boolean, v[9] as LocationShareUi?,
+        )
     }
 
     private class Composer(
         val draft: String, val replyTo: String?, val editing: String?, val recording: RecordingUi?, val sending: Boolean,
-        val staged: List<StagedUi>, val resumed: Boolean,
+        val staged: List<StagedUi>, val resumed: Boolean, val compression: CompressionUi?, val sendOriginal: Boolean,
+        val locationShare: LocationShareUi?,
     )
 
     /** Everything around the list that comes from the database or the connection. */
@@ -342,7 +370,8 @@ class ConversationViewModel @Inject constructor(
             draft = c.draft, recording = c.recording, sending = c.sending, loaded = true,
             latestId = ar.latest?.id, latestOutgoing = ar.latest?.outgoing == true, newMessages = ar.newMessages,
             openUnread = ar.openUnread, connection = ar.connection, safety = ar.safety,
-            staged = c.staged, resumed = c.resumed, timerSeconds = ar.timer, canSetTimer = !h.isGroup || h.iAmAdmin, callActive = ar.callActive,
+            staged = c.staged, compression = c.compression, sendOriginalVideo = c.sendOriginal, locationShare = c.locationShare,
+            resumed = c.resumed, timerSeconds = ar.timer, canSetTimer = !h.isGroup || h.iAmAdmin, callActive = ar.callActive,
             mentionSuggestions = if (!h.isGroup || c.editing != null) {
                 emptyList()
             } else {
@@ -631,10 +660,18 @@ class ConversationViewModel @Inject constructor(
         val items = staged.value
         if (items.isEmpty() || sending.value) return
         sending.value = true
-        viewModelScope.launch {
+        sendJob = viewModelScope.launch {
             val prepared = ArrayList<OutgoingAttachment>()
             try {
-                for (item in items) prepared += preparer.prepare(item.uri)
+                val videos = items.count { it.kind == AttachmentKindUi.VIDEO }
+                var videoNumber = 0
+                for (item in items) {
+                    prepared += preparer.prepare(item.uri)
+                    if (item.kind == AttachmentKindUi.VIDEO && prepared.last().kind == "video") {
+                        videoNumber++
+                        prepared[prepared.lastIndex] = shrink(prepared.last(), videoNumber, videos)
+                    }
+                }
                 val caption = draft.value.trim().ifEmpty { null }
                 engine.sendAttachments(conversationId, prepared, caption, replyTo.value, sendAt)
                 draft.value = ""
@@ -656,8 +693,62 @@ class ConversationViewModel @Inject constructor(
                 prepared.forEach { it.file.delete() }
                 _effects.tryEmit(ConversationEffect.Error(e.toUiError(), e.message))
             } finally {
+                compression.value = null
+                sendJob = null
                 sending.value = false
             }
+        }
+    }
+
+    /** Compresses one staged video (unless the person asked for the original) and reports progress; on a failed encoder the original goes. */
+    private suspend fun shrink(video: OutgoingAttachment, number: Int, count: Int): OutgoingAttachment {
+        compression.value = CompressionUi(0f, number, count)
+        val result = compressor.compress(video, sendOriginal.value) { p -> compression.value = CompressionUi(p.coerceIn(0f, 1f), number, count) }
+        if (result is VideoCompression.Failed) _effects.tryEmit(ConversationEffect.Notice(se.swahnchat.app.R.string.video_compress_failed))
+        compression.value = null
+        return result.attachment
+    }
+
+    /** An empty file for the camera app (photo or video) inside the private staging folder. */
+    fun newCaptureTarget(video: Boolean) = preparer.newCaptureTarget(video)
+
+    /** The camera app was closed without a picture: removes the empty file and its folder. */
+    fun discardCapture(staged: Uri) = preparer.deleteStagedCopy(staged)
+
+    /** A short message for the snackbar. */
+    fun notice(message: Int) {
+        _effects.tryEmit(ConversationEffect.Notice(message))
+    }
+
+    /** "Avbryt" on the compression progress: stops the transcode; the files stay in the preview strip and nothing is sent. */
+    fun cancelSending() {
+        sendJob?.cancel()
+    }
+
+    /** "Skicka i originalkvalitet". */
+    fun setSendOriginalVideo(original: Boolean) {
+        sendOriginal.value = original
+    }
+
+    // --- position -------------------------------------------------------------------------------------------------------
+
+    /** The attach menu's "Position". */
+    fun openLocation() = locationShare.open()
+
+    /** The permission is held: get the fix. */
+    fun fetchLocation(precise: Boolean) = locationShare.fetch(precise)
+
+    /** The permission was refused. */
+    fun locationPermissionDenied() = locationShare.permissionDenied()
+
+    fun cancelLocation() = locationShare.cancel()
+
+    /** The person looked at the position and accuracy in the preview and pressed "Skicka". */
+    fun sendLocation(location: LocationSpec) {
+        locationShare.close()
+        launchEngine {
+            engine.sendLocation(conversationId, location)
+            work.enqueueOutbox()
         }
     }
 

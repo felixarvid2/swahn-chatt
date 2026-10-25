@@ -67,6 +67,7 @@ data class StarredRowUi(
     val text: String?,
     val attachmentKind: AttachmentKindUi?,
     val isPoll: Boolean = false,
+    val isLocation: Boolean = false,
 )
 
 data class StarredState(val loaded: Boolean = false, val rows: List<StarredRowUi> = emptyList())
@@ -92,7 +93,7 @@ class StarredViewModel @Inject constructor(savedState: SavedStateHandle, repo: C
                     chatAvatar = chat?.avatar ?: AvatarUi("?"),
                     senderName = if (m.senderUserId == account?.userId) null else users[m.senderUserId]?.displayName ?: "?",
                     time = m.serverTs ?: m.clientTs, text = m.text,
-                    attachmentKind = m.attachments.firstOrNull()?.let { attachmentKindOf(it.kind) }, isPoll = m.poll != null,
+                    attachmentKind = m.attachments.firstOrNull()?.let { attachmentKindOf(it.kind) }, isPoll = m.poll != null, isLocation = m.location != null,
                 )
             },
         )
@@ -159,6 +160,7 @@ private fun StarredRow(row: StarredRowUi, showChat: Boolean, time: String, onCli
     val who = row.senderName ?: stringResource(R.string.starred_own_message)
     val body = when {
         row.isPoll -> "📊 ${plainFormatted(row.text.orEmpty())}"
+        row.isLocation -> "📍 ${stringResource(R.string.attachment_location)}"
         !row.text.isNullOrBlank() -> plainFormatted(row.text)
         row.attachmentKind != null -> stringResource(
             when (row.attachmentKind) {

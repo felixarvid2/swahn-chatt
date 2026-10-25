@@ -142,14 +142,14 @@ internal class SyncProcessor(private val ctx: EngineContext, private val directo
             var invisible = false
             decryptAndWrite(
                 m.senderUserId, m.senderDeviceId.takeIf { deviceKnown }, envelope.type, envelope.body,
-                // Text, a poll, a timer change, or a type of a newer app (which is consumed and not shown); never another known type.
+                // Text, a poll, a position, a timer change, or a type of a newer app (which is consumed and not shown); never another known type.
                 check = { c ->
                     member && isBoundToEvent(c, m) &&
-                        (c.type == ContentType.TEXT || c.type == ContentType.POLL || c.type == ContentType.TIMER || !c.isKnownType)
+                        (c.type in SHOWN_TYPES || c.type == ContentType.TIMER || !c.isKnownType)
                 },
             ) { r ->
                 when (r) {
-                    is Decrypted.Ok -> if (r.content.type != ContentType.TEXT && r.content.type != ContentType.POLL) {
+                    is Decrypted.Ok -> if (r.content.type !in SHOWN_TYPES) {
                         invisible = true
                         consume(m, r.content)
                     } else write(
@@ -157,6 +157,7 @@ internal class SyncProcessor(private val ctx: EngineContext, private val directo
                             text = r.content.text, replyTo = r.content.replyTo,
                             mentions = validMentions(m.conversationId, r.content),
                             poll = r.content.poll?.takeIf { r.content.type == ContentType.POLL }?.let(PollInfo::of),
+                            location = r.content.location?.takeIf { r.content.type == ContentType.LOCATION },
                             forwarded = r.content.forwarded == true, expiresIn = validExpiry(r.content.expiresIn),
                             attachments = r.content.attachments.map { a ->
                                 LocalAttachment(
@@ -483,7 +484,7 @@ internal class SyncProcessor(private val ctx: EngineContext, private val directo
 
     private suspend fun applyEdit(m: Message) = applyChange(m, ContentType.EDIT) { target, content ->
         ctx.store.updateMessage(target.id) { cur ->
-            if (cur.deleted) cur
+            if (cur.deleted || cur.location != null) cur
             else cur.copy(text = content.text, edited = true, editedAt = m.serverTs, decryptError = null)
         }
         true
@@ -494,7 +495,8 @@ internal class SyncProcessor(private val ctx: EngineContext, private val directo
         applyChange(m, ContentType.DELETE) { target, _ ->
             ctx.store.updateMessage(target.id) {
                 it.copy(
-                    text = null, replyTo = null, attachments = emptyList(), deleted = true, decryptError = null, mentions = emptyList(), poll = null,
+                    text = null, replyTo = null, attachments = emptyList(), deleted = true, decryptError = null, mentions = emptyList(),
+                    poll = null, location = null,
                     pendingEnvelopeType = null, pendingEnvelopeBody = null,
                 )
             }
@@ -579,7 +581,7 @@ internal class SyncProcessor(private val ctx: EngineContext, private val directo
             val done = decryptAndWrite(
                 userId, deviceId.takeIf { deviceKnown }, type, body,
                 check = { c ->
-                    member && (c.type == ContentType.TEXT || c.type == ContentType.POLL) && c.conversationId == m.conversationId &&
+                    member && c.type in SHOWN_TYPES && c.conversationId == m.conversationId &&
                         c.messageId == m.id && c.targetMessageId == null
                 },
             ) { r ->
@@ -590,6 +592,7 @@ internal class SyncProcessor(private val ctx: EngineContext, private val directo
                             text = r.content.text, replyTo = r.content.replyTo, decryptError = null,
                             mentions = mentions,
                             poll = r.content.poll?.takeIf { r.content.type == ContentType.POLL }?.let(PollInfo::of),
+                            location = r.content.location?.takeIf { r.content.type == ContentType.LOCATION },
                             forwarded = r.content.forwarded == true, expiresIn = validExpiry(r.content.expiresIn),
                             pendingEnvelopeType = null, pendingEnvelopeBody = null,
                             attachments = r.content.attachments.map { a ->
@@ -616,6 +619,9 @@ internal class SyncProcessor(private val ctx: EngineContext, private val directo
 
     companion object {
         const val PAGE_SIZE = 200
+
+        /** The content types that become a message in the list (a timer change becomes a notice, other known types are applied and not shown). */
+        private val SHOWN_TYPES = setOf(ContentType.TEXT, ContentType.POLL, ContentType.LOCATION)
 
         /** A call signal older than this (server clock) is dropped instead of ringing; the server keeps them for much longer. */
         const val CALL_SIGNAL_MAX_AGE_MS = 60_000L

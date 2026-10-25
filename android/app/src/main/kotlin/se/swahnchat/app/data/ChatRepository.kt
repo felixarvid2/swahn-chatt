@@ -87,6 +87,7 @@ class ChatRepository @Inject constructor(
             else -> PreviewKind.FILE to m.attachments.first().name
         }
         m.poll != null -> PreviewKind.TEXT to "\uD83D\uDCCA ${m.text.orEmpty()}"
+        m.location != null -> PreviewKind.LOCATION to m.location?.label
         else -> PreviewKind.TEXT to m.text
     }
 
@@ -97,6 +98,14 @@ class ChatRepository @Inject constructor(
 
     /** The messages of a conversation, newest first, in pages (the conversation screen's list). */
     fun pagedMessages(conversationId: String): PagingSource<Int, MessageEntity> = ui.pagedMessages(conversationId)
+
+    /** Photos and videos, files, and messages with web addresses of a conversation, newest first, in pages ("Media och filer"). */
+    fun pagedMedia(conversationId: String): PagingSource<Int, MessageEntity> = ui.pagedMediaMessages(conversationId)
+    fun pagedFiles(conversationId: String): PagingSource<Int, MessageEntity> = ui.pagedFileMessages(conversationId)
+    fun pagedLinks(conversationId: String): PagingSource<Int, MessageEntity> = ui.pagedLinkMessages(conversationId)
+
+    /** All photo and video messages of a conversation, newest first (the viewer's neighbours). */
+    suspend fun mediaMessages(conversationId: String): List<StoredMessage> = ui.mediaMessages(conversationId).map { it.toModel() }
 
     /** One message, again whenever it changes (null: it does not exist, or was deleted on this phone). */
     fun message(id: String): Flow<StoredMessage?> = ui.observeMessage(id).map { it?.toModel() }
