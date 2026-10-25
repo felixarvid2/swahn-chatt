@@ -5,9 +5,13 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody
+import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
+import okhttp3.ResponseBody
 import retrofit2.HttpException
+import retrofit2.Response as RetrofitResponse
 import se.familychat.core.model.*
 import java.io.File
 import java.io.FileOutputStream
@@ -76,12 +80,16 @@ internal class RetrofitFamilyChatApi(
         name: String?,
         avatarAttachmentId: String?,
         clearAvatar: Boolean,
+        disappearingSeconds: Long?,
+        clearDisappearing: Boolean,
     ): Conversation {
         val body = JsonObject(
             buildMap {
                 name?.let { put("name", JsonPrimitive(it)) }
                 if (clearAvatar) put("avatar_attachment_id", JsonNull)
                 else avatarAttachmentId?.let { put("avatar_attachment_id", JsonPrimitive(it)) }
+                if (clearDisappearing) put("disappearing_seconds", JsonNull)
+                else disappearingSeconds?.let { put("disappearing_seconds", JsonPrimitive(it)) }
             },
         )
         return call { raw.updateConversation(id, body) }
@@ -104,6 +112,28 @@ internal class RetrofitFamilyChatApi(
 
     override suspend fun uploadAttachment(body: RequestBody, purpose: String, sha256Hex: String?) =
         call { raw.uploadAttachment(purpose, sha256Hex, body) }
+
+    override suspend fun startUpload(request: StartUploadRequest) = call { raw.startUpload(request) }
+    override suspend fun uploadStatus(uploadId: String) = call { raw.uploadStatus(uploadId) }
+
+    override suspend fun uploadChunk(uploadId: String, offset: Long, bytes: ByteArray): UploadProgress {
+        val body = bytes.toRequestBody("application/octet-stream".toMediaType())
+        val response = raw.uploadChunk(uploadId, offset, body)
+        return withContext(Dispatchers.IO) {
+            response.use { r ->
+                if (!r.isSuccessful) throw mapHttpException(HttpException(r))
+                val text = r.body()?.string().orEmpty()
+                when (r.code()) {
+                    201 -> UploadProgress.Finished(FamilyChatJson.decodeFromString(UploadedAttachment.serializer(), text))
+                    else -> UploadProgress.Partial(
+                        r.headers()["Upload-Offset"]?.toLongOrNull()
+                            ?: text.takeIf { it.isNotBlank() }?.let { FamilyChatJson.decodeFromString(UploadOffset.serializer(), it).offset }
+                            ?: throw IOException("Upload answer without offset"),
+                    )
+                }
+            }
+        }
+    }
 
     override suspend fun downloadAttachment(id: String, target: File, onProgress: ((Long) -> Unit)?): Long {
         val existing = if (target.exists()) target.length() else 0L
@@ -151,6 +181,14 @@ internal class RetrofitFamilyChatApi(
         val RANGE_START = Regex("""bytes\s+(\d+)-""")
     }
 }
+
+private inline fun <T> RetrofitResponse<ResponseBody>.use(block: (RetrofitResponse<ResponseBody>) -> T): T =
+    try {
+        block(this)
+    } finally {
+        body()?.close()
+        errorBody()?.close()
+    }
 
 internal fun mapHttpException(e: HttpException): ApiException {
     val resp = e.response()

@@ -19,8 +19,8 @@ android {
         applicationId = "se.familychat.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "0.2.0"
+        versionCode = 4
+        versionName = "0.4.0"
         // libsignal ships arm64 for phones and x86_64 for emulators (see SECURITY.md)
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -147,6 +147,7 @@ dependencies {
     // Android builds of the libraries :core:* only compile against.
     implementation(libs.libsignal.android)
     implementation(libs.tink.android)
+    implementation(libs.bouncycastle.bcprov)
 
     coreLibraryDesugaring(libs.desugar.jdk.libs)
 

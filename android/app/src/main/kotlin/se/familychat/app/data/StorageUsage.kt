@@ -16,6 +16,8 @@ data class StorageDirs(
     val cache: File,
     /** The SQLCipher database file; `-wal`, `-shm` and `-journal` next to it count too. */
     val database: File,
+    /** Copies of files waiting to be sent or already sent from this phone (`AttachmentPreparer.outgoingDir`); also where forwards are copied. */
+    val outgoing: File? = null,
 )
 
 /** Downloaded media of one conversation. */

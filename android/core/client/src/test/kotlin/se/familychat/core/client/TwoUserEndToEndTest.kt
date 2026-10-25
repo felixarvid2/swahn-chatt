@@ -41,7 +41,7 @@ import kotlin.test.assertTrue
 class TwoUserEndToEndTest {
 
     /** One independent phone using the real network stack. */
-    class Phone(val label: String) {
+    class Phone(val label: String, resumableThreshold: Long = 8L * 1024 * 1024) {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val store = InMemoryLocalStore()
         val protocol = InMemoryProtocolStorage()
@@ -49,7 +49,9 @@ class TwoUserEndToEndTest {
         val dir: File = Files.createTempDirectory("fc-e2e-$label").toFile().also { it.deleteOnExit() }
         val engine = FamilyChatEngine(
             store, protocol, tokens,
-            EngineConfig(deviceName = "$label phone", attachmentDir = File(dir, "att"), tempDir = File(dir, "tmp"), allowInsecureLan = true),
+            EngineConfig(deviceName = "$label phone", attachmentDir = File(dir, "att"), tempDir = File(dir, "tmp"), allowInsecureLan = true,
+                resumableUploadThreshold = resumableThreshold, uploadChunkBytes = 512 * 1024,
+            ),
             scope,
         )
         val userId get() = engine.account.value!!.userId
@@ -358,6 +360,68 @@ class TwoUserEndToEndTest {
         // sanity: the scan does see readable server-side metadata (so a pass is not vacuous)
         val all = blobs.filter { it.name.startsWith(db.name) }.joinToString("") { String(it.readBytes(), Charsets.ISO_8859_1) }
         assertTrue(all.contains("alice_$run"), "scan should see usernames in the database")
+    }
+
+    @Test
+    fun reactionAndEncryptedTimerReachTheOtherPhone() = runBlocking<Unit> {
+        val conv = directChat(alice, bob)
+        bob.engine.sync()
+        val id = alice.engine.sendText(conv, "reagera på mig ${UUID.randomUUID()}")
+        eventually(timeout, "sent") { alice.store.getMessage(id)!!.status != MessageStatus.PENDING }
+        bob.engine.sync()
+
+        bob.engine.react(id, "\uD83D\uDC4D")
+        eventually(timeout, "reaction sent") { bob.store.getOutbox().isEmpty() }
+        alice.engine.sync()
+        assertEquals(listOf("\uD83D\uDC4D"), alice.engine.reactionsOf(id).map { it.emoji })
+        // a reaction is not a message: nothing visible was added
+        assertTrue(alice.store.getMessages(conv, 1000).none { it.text?.contains("\uD83D\uDC4D") == true })
+        bob.engine.react(id, "\uD83D\uDC4D") // toggles off
+        eventually(timeout, "removal sent") { bob.store.getOutbox().isEmpty() }
+        alice.engine.sync()
+        assertTrue(alice.engine.reactionsOf(id).none { it.emoji != null })
+
+        // the timer travels as encrypted content and as a PATCH; the receiver adopts the encrypted one
+        alice.engine.setDisappearingTimer(conv, 3600)
+        eventually(timeout, "timer sent") { alice.store.getOutbox().isEmpty() }
+        bob.engine.sync()
+        assertEquals(3600L, bob.engine.disappearingTimer(conv))
+        eventually(timeout, "server timer patched") { alice.rawApi().listConversations().first { it.id == conv }.disappearingSeconds == 3600L }
+        val timed = alice.engine.sendText(conv, "försvinner")
+        eventually(timeout, "timed sent") { alice.store.getMessage(timed)!!.status != MessageStatus.PENDING }
+        alice.engine.setDisappearingTimer(conv, 0) // clears: PATCH with explicit null
+        eventually(timeout, "timer cleared") { alice.store.getOutbox().isEmpty() }
+        bob.engine.sync()
+        assertEquals(0L, bob.engine.disappearingTimer(conv))
+        eventually(timeout, "server timer cleared") { alice.rawApi().listConversations().first { it.id == conv }.disappearingSeconds == null }
+        assertNotNull(bob.store.getMessage(timed))
+    }
+
+    @Test
+    fun largeAttachmentGoesUpResumablyAndForwardsToAnotherConversation() = runBlocking<Unit> {
+        val big = Phone("alice-big", resumableThreshold = 256 * 1024).also { phones += it }
+        big.engine.login(url, "alice_$run", "alice-password-1")
+        big.approveAllPending(); alice.approveAllPending()
+        val conv = directChat(alice, bob)
+        bob.engine.sync()
+        big.engine.sync()
+        val data = Random(7).nextBytes(1_300_000)
+        val file = File(big.dir, "big.bin").apply { writeBytes(data) }
+        val id = big.engine.sendAttachments(conv, listOf(OutgoingAttachment(file, "application/octet-stream", "file", "big.bin")))
+        eventually(timeout * 4, "big attachment sent") { big.store.getMessage(id)!!.status != MessageStatus.PENDING }
+        bob.engine.sync()
+        val att = bob.store.getMessage(id)!!.attachments.single()
+        assertContentEquals(data, bob.engine.downloadAttachment(id, att.id).readBytes())
+
+        // bob forwards it to carol with fresh keys
+        val toCarol = bob.engine.createDirect(carol.userId).id
+        carol.engine.refreshDirectory()
+        val copies = bob.engine.forwardMessage(id, listOf(toCarol))
+        eventually(timeout * 4, "forward sent") { bob.store.getOutbox().isEmpty() }
+        carol.engine.sync()
+        val copy = carol.store.getMessage(copies.single())!!
+        assertTrue(copy.forwarded)
+        assertContentEquals(data, carol.engine.downloadAttachment(copy.id, copy.attachments.single().id).readBytes())
     }
 
     private fun indexOf(haystack: ByteArray, needle: ByteArray): Int {

@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Backup
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Info
@@ -123,6 +124,7 @@ class SettingsCallbacks(
     val onOpenOwnSafety: () -> Unit = {},
     val onOpenStorage: () -> Unit = {},
     val onOpenAutoDownload: () -> Unit = {},
+    val onOpenHistory: () -> Unit = {},
     val onCopy: (String) -> Unit = {},
     val onShare: (String) -> Unit = {},
 )
@@ -133,6 +135,7 @@ fun SettingsScreen(
     onOpenSafety: (userId: String) -> Unit = {},
     onOpenStorage: () -> Unit = {},
     onOpenAutoDownload: () -> Unit = {},
+    onOpenHistory: () -> Unit = {},
     vm: SettingsViewModel = hiltViewModel(),
 ) {
     val state by vm.state.collectAsStateWithLifecycle()
@@ -161,7 +164,7 @@ fun SettingsScreen(
                 { context.startActivity(Intent(Settings.ACTION_APP_LOCALE_SETTINGS, Uri.fromParts("package", context.packageName, null))) }
             } else null,
             onOpenOwnSafety = { onOpenSafety(state.userId) },
-            onOpenStorage = onOpenStorage, onOpenAutoDownload = onOpenAutoDownload,
+            onOpenStorage = onOpenStorage, onOpenAutoDownload = onOpenAutoDownload, onOpenHistory = onOpenHistory,
             onCopy = { copyInvitation(context, it) },
             onShare = { code ->
                 val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, context.getString(R.string.invitation_share_text, code))
@@ -273,6 +276,7 @@ fun SettingsContent(state: SettingsUiState, cb: SettingsCallbacks, modifier: Mod
                 onClick = cb.onOpenAutoDownload,
             )
             SettingRow(Icons.Filled.Storage, stringResource(R.string.storage), stringResource(R.string.storage_hint), onClick = cb.onOpenStorage)
+            SettingRow(Icons.Filled.Backup, stringResource(R.string.history_title), stringResource(R.string.history_hint), onClick = cb.onOpenHistory)
 
             // --- appearance ---
             Section(R.string.settings_appearance)

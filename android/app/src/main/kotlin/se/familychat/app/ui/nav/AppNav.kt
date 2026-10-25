@@ -50,8 +50,10 @@ import se.familychat.app.ui.screens.StorageScreen
 import se.familychat.app.ui.screens.ConversationNav
 import se.familychat.app.ui.screens.ConversationScreen
 import se.familychat.app.ui.screens.ConversationsScreen
+import se.familychat.app.ui.screens.ForwardScreen
 import se.familychat.app.ui.screens.GroupCreateScreen
 import se.familychat.app.ui.screens.GroupInfoScreen
+import se.familychat.app.ui.screens.HistoryScreen
 import se.familychat.app.ui.screens.LoginScreen
 import se.familychat.app.ui.screens.MediaViewerScreen
 import se.familychat.app.ui.screens.NewConversationScreen
@@ -76,6 +78,8 @@ object Routes {
     const val MESSAGE_INFO = "message-info/{messageId}"
     const val STORAGE = "storage"
     const val AUTO_DOWNLOAD = "auto-download"
+    const val FORWARD = "forward/{messageId}"
+    const val HISTORY = "history"
 
     /** [jump]: a message to scroll to on opening (from the search). */
     fun conversation(id: String, jump: String? = null) = if (jump == null) "conversation/$id" else "conversation/$id?jump=$jump"
@@ -84,6 +88,7 @@ object Routes {
     fun contact(userId: String) = "contact/$userId"
     fun media(messageId: String, attachmentId: String) = "media/$messageId/$attachmentId"
     fun messageInfo(messageId: String) = "message-info/$messageId"
+    fun forward(messageId: String) = "forward/$messageId"
 }
 
 /** The window: a persistent red strip on top while the connection is insecure, then the app. */
@@ -194,6 +199,7 @@ private fun AppNavHost(nav: androidx.navigation.NavHostController, signedIn: Boo
                     onOpenGroupInfo = { nav.navigate(Routes.groupInfo(it)) },
                     onOpenContact = { nav.navigate(Routes.contact(it)) },
                     onOpenMessageInfo = { nav.navigate(Routes.messageInfo(it)) },
+                    onForward = { nav.navigate(Routes.forward(it)) },
                 ),
             )
         }
@@ -223,10 +229,22 @@ private fun AppNavHost(nav: androidx.navigation.NavHostController, signedIn: Boo
                 onOpenSafety = { nav.navigate(Routes.contact(it)) },
                 onOpenStorage = { nav.navigate(Routes.STORAGE) },
                 onOpenAutoDownload = { nav.navigate(Routes.AUTO_DOWNLOAD) },
+                onOpenHistory = { nav.navigate(Routes.HISTORY) },
             )
         }
         composable(Routes.STORAGE) { StorageScreen(onBack = { nav.popBackStack() }) }
+        composable(Routes.HISTORY) { HistoryScreen(onBack = { nav.popBackStack() }) }
         composable(Routes.AUTO_DOWNLOAD) { AutoDownloadScreen(onBack = { nav.popBackStack() }) }
+        composable(Routes.FORWARD, arguments = listOf(navArgument("messageId") { type = NavType.StringType })) {
+            ForwardScreen(
+                onBack = { nav.popBackStack() },
+                // one target: go there; several: back to where the message was
+                onForwarded = { targets ->
+                    if (targets.size == 1) nav.navigate(Routes.conversation(targets.single())) { popUpTo(Routes.CONVERSATIONS) }
+                    else nav.popBackStack()
+                },
+            )
+        }
         composable(Routes.MESSAGE_INFO, arguments = listOf(navArgument("messageId") { type = NavType.StringType })) {
             MessageInfoScreen(onBack = { nav.popBackStack() })
         }

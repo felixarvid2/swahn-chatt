@@ -106,7 +106,9 @@ internal class SyncProcessor(private val ctx: EngineContext, private val directo
             }
             MessageKind.EDIT -> applyEdit(m)
             MessageKind.DELETE -> applyDelete(m)
-            else -> Unit
+            MessageKind.REACTION -> applyReaction(m)
+            // A kind from a newer server or app: consume it like any message, so the ratchet moves on, and show nothing.
+            else -> applyUnknownKind(m)
         }
     }
 
@@ -133,14 +135,23 @@ internal class SyncProcessor(private val ctx: EngineContext, private val directo
             val deviceKnown = resolveSender(m.senderUserId, m.senderDeviceId)
             val member = deviceKnown && senderIsMember(m.conversationId, m.senderUserId)
             var rejected = false
+            var invisible = false
             decryptAndWrite(
                 m.senderUserId, m.senderDeviceId.takeIf { deviceKnown }, envelope.type, envelope.body,
-                check = { c -> member && isBoundTo(c, m, ContentType.TEXT) },
+                // Text, a timer change, or a type of a newer app (which is consumed and not shown); never another known type.
+                check = { c ->
+                    member && isBoundToEvent(c, m) &&
+                        (c.type == ContentType.TEXT || c.type == ContentType.TIMER || !c.isKnownType)
+                },
             ) { r ->
                 when (r) {
-                    is Decrypted.Ok -> write(
+                    is Decrypted.Ok -> if (r.content.type != ContentType.TEXT) {
+                        invisible = true
+                        consume(m, r.content)
+                    } else write(
                         base.copy(
                             text = r.content.text, replyTo = r.content.replyTo,
+                            forwarded = r.content.forwarded == true, expiresIn = validExpiry(r.content.expiresIn),
                             attachments = r.content.attachments.map { a ->
                                 LocalAttachment(
                                     id = a.id, key = a.key, sha256 = a.sha256, size = a.size, mime = a.mime, name = a.name, kind = a.kind,
@@ -162,7 +173,7 @@ internal class SyncProcessor(private val ctx: EngineContext, private val directo
                     )
                 }
             }
-            if (rejected) return
+            if (rejected || invisible) return
         }
         ctx.emit(EngineEvent.MessageReceived(m.conversationId, m.id, fromSelfOtherDevice = mine))
     }
@@ -187,6 +198,95 @@ internal class SyncProcessor(private val ctx: EngineContext, private val directo
         /** Decrypted, but the content is not bound to this event or its sender is not allowed to send it. */
         data object Rejected : Decrypted
         data class Failed(val error: DecryptError) : Decrypted
+    }
+
+    /** Conversation, message id and target of the content are the ones of the event (the type is checked by the caller). */
+    private fun isBoundToEvent(c: Content, m: Message): Boolean =
+        c.conversationId == m.conversationId && c.messageId == m.id && c.targetMessageId == m.targetMessageId
+
+    /** `expires_in` is the sender's word, but only the range the timer settings allow is believed. */
+    private fun validExpiry(seconds: Long?): Long? =
+        seconds?.takeIf { it in Content.MIN_TIMER_SECONDS..Content.MAX_TIMER_SECONDS }
+
+    /**
+     * Content that is consumed and shows no message: a timer change from a member, or a type of a newer app. A tombstone
+     * remembers the event so a replay is skipped before decryption (decrypting twice would end in a "could not decrypt" row).
+     * Runs inside the decrypt transaction.
+     */
+    private suspend fun consume(m: Message, c: Content) {
+        ctx.store.deleteMessageLocally(m.id, m.conversationId, ctx.now())
+        val conversation = ctx.store.getConversation(m.conversationId) ?: return
+        if (c.type == ContentType.TIMER) applyTimer(conversation, m, c)
+        else directory.postNotice(conversation, "sys-update-${m.conversationId}", SystemEvent.UpdateRequired, seq = m.seq, at = m.serverTs)
+    }
+
+    /**
+     * A timer change from a member, authenticated like an edit (bound content, sender is a member). The newest by server
+     * order wins; our own unsent change stays until it is sent. This is the only thing that sets the phone's timer: the
+     * server's `disappearing_seconds` is never read for it.
+     */
+    private suspend fun applyTimer(conversation: Conversation, m: Message, c: Content) {
+        val seconds = c.seconds ?: return
+        val current = ctx.store.getTimer(conversation.id)
+        if (current != null && (current.seq == null || current.seq >= m.seq)) return
+        ctx.store.putTimer(ConversationTimer(conversation.id, seconds, m.senderUserId, m.seq, m.serverTs))
+        if ((current?.seconds ?: 0L) != seconds) {
+            directory.postNotice(conversation, "sys-timer-${m.id}", SystemEvent.TimerChanged(m.senderUserId, seconds), seq = m.seq, at = m.serverTs)
+        }
+        ctx.emit(EngineEvent.ConversationChanged(conversation.id))
+    }
+
+    /** A kind this version does not know. Decrypts (the ratchet must advance) and drops, whatever the content says. */
+    private suspend fun applyUnknownKind(m: Message) {
+        val envelope = m.envelope ?: return
+        val deviceKnown = resolveSender(m.senderUserId, m.senderDeviceId)
+        val member = deviceKnown && senderIsMember(m.conversationId, m.senderUserId)
+        var fresh = false
+        decryptAndWrite(
+            m.senderUserId, m.senderDeviceId.takeIf { deviceKnown }, envelope.type, envelope.body,
+            check = { c -> member && isBoundToEvent(c, m) && !c.isKnownType },
+        ) { r ->
+            if (r is Decrypted.Ok) {
+                fresh = true
+                ctx.store.getConversation(m.conversationId)?.let {
+                    directory.postNotice(it, "sys-update-${m.conversationId}", SystemEvent.UpdateRequired, seq = m.seq, at = m.serverTs)
+                }
+            }
+        }
+        if (fresh) ctx.emit(EngineEvent.ConversationChanged(m.conversationId))
+    }
+
+    /**
+     * A reaction: encrypted content from a member, bound to the event and to the target, which must be a message of this
+     * conversation. Unlike an edit the sender need not be the author of the target. The ciphertext is always decrypted, even
+     * if the target is unknown (a first prekey message that is dropped unread would leave the session unset).
+     */
+    private suspend fun applyReaction(m: Message) {
+        val envelope = m.envelope ?: return
+        val account = ctx.requireAccount()
+        if (m.senderDeviceId == account.deviceId) return
+        val target = m.targetMessageId?.let { ctx.store.getMessage(it) }
+        val targetOk = target != null && target.conversationId == m.conversationId && !target.deleted && !target.isSystem
+        val deviceKnown = resolveSender(m.senderUserId, m.senderDeviceId)
+        val member = deviceKnown && senderIsMember(m.conversationId, m.senderUserId)
+        val changed = decryptAndWrite(
+            m.senderUserId, m.senderDeviceId.takeIf { deviceKnown }, envelope.type, envelope.body,
+            check = { c -> member && targetOk && c.type == ContentType.REACTION && isBoundToEvent(c, m) },
+        ) { r ->
+            val c = (r as? Decrypted.Ok)?.content ?: return@decryptAndWrite false
+            val emoji = if (c.remove == true) null else c.emoji
+            // The reactor is the sender of the event, bound by the check above (a member), never a field of the content.
+            storeReaction(Reaction(m.targetMessageId!!, m.conversationId, m.senderUserId, emoji, m.seq, m.serverTs))
+        }
+        if (changed == true) ctx.emit(EngineEvent.MessageChanged(m.conversationId, m.targetMessageId!!))
+    }
+
+    /** Latest by server order wins; a reaction of ours that is not sent yet stays on top until it is. */
+    private suspend fun storeReaction(r: Reaction): Boolean {
+        val current = ctx.store.getReaction(r.messageId, r.userId)
+        if (current != null && (current.seq == null || current.seq >= (r.seq ?: 0))) return false
+        ctx.store.putReaction(r)
+        return true
     }
 
     /** The content must be the one the sender wrote for exactly this event: type, conversation, message id, target. */
@@ -309,6 +409,7 @@ internal class SyncProcessor(private val ctx: EngineContext, private val directo
                     pendingEnvelopeType = null, pendingEnvelopeBody = null,
                 )
             }
+            ctx.store.removeReactions(target.id)
             wiped = target
             true
         }
@@ -395,6 +496,7 @@ internal class SyncProcessor(private val ctx: EngineContext, private val directo
                     when (r) {
                         is Decrypted.Ok -> it.copy(
                             text = r.content.text, replyTo = r.content.replyTo, decryptError = null,
+                            forwarded = r.content.forwarded == true, expiresIn = validExpiry(r.content.expiresIn),
                             pendingEnvelopeType = null, pendingEnvelopeBody = null,
                             attachments = r.content.attachments.map { a ->
                                 LocalAttachment(

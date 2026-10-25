@@ -6,7 +6,13 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -27,6 +33,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -76,6 +83,9 @@ sealed interface MediaViewerState {
     data class Ready(val kind: String, val file: File, val mime: String, val name: String) : MediaViewerState
 }
 
+/** The photos and videos of one message, in the order of the message; [start] is the one that was tapped. */
+data class MediaPages(val attachmentIds: List<String>, val start: Int)
+
 @HiltViewModel
 class MediaViewerViewModel @Inject constructor(
     savedState: SavedStateHandle,
@@ -84,26 +94,45 @@ class MediaViewerViewModel @Inject constructor(
 ) : ViewModel() {
     private val messageId: String = checkNotNull(savedState["messageId"])
     private val attachmentId: String = checkNotNull(savedState["attachmentId"])
-    private val _state = MutableStateFlow<MediaViewerState>(MediaViewerState.Loading)
-    val state: StateFlow<MediaViewerState> = _state.asStateFlow()
+    private val _pages = MutableStateFlow<MediaPages?>(null)
+    val pages: StateFlow<MediaPages?> = _pages.asStateFlow()
+    private val _states = MutableStateFlow<Map<String, MediaViewerState>>(emptyMap())
+
+    /** Per photo or video: loading, failed, or ready. A page loads when it is first shown. */
+    val states: StateFlow<Map<String, MediaViewerState>> = _states.asStateFlow()
+    private val started = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
     init {
         viewModelScope.launch {
-            _state.value = try {
-                val attachment = store.getMessage(messageId)?.attachments?.firstOrNull { it.id == attachmentId }
-                    ?: return@launch run { _state.value = MediaViewerState.Failed }
-                val file = if (attachment.downloadState == DownloadState.DONE && attachment.localPath != null && File(attachment.localPath!!).isFile) {
-                    File(attachment.localPath!!)
+            val media = store.getMessage(messageId)?.attachments.orEmpty().filter { it.kind == "image" || it.kind == "video" }
+            val ids = media.map { it.id }.ifEmpty { listOf(attachmentId) }
+            _pages.value = MediaPages(ids, ids.indexOf(attachmentId).coerceAtLeast(0))
+        }
+    }
+
+    /** Fetches (if need be), decrypts and checks the attachment shown on a page. */
+    fun load(id: String) {
+        if (!started.add(id)) return
+        viewModelScope.launch {
+            val state = try {
+                val attachment = store.getMessage(messageId)?.attachments?.firstOrNull { it.id == id }
+                if (attachment == null) {
+                    MediaViewerState.Failed
                 } else {
-                    engine.downloadAttachment(messageId, attachmentId)
+                    val file = if (attachment.downloadState == DownloadState.DONE && attachment.localPath != null && File(attachment.localPath!!).isFile) {
+                        File(attachment.localPath!!)
+                    } else {
+                        engine.downloadAttachment(messageId, id)
+                    }
+                    val ok = withContext(Dispatchers.Default) { MediaValidator.isValid(file, attachment.kind) }
+                    if (ok) MediaViewerState.Ready(attachment.kind, file, attachment.mime, attachment.name ?: file.name) else MediaViewerState.Failed
                 }
-                val ok = withContext(Dispatchers.Default) { MediaValidator.isValid(file, attachment.kind) }
-                if (ok) MediaViewerState.Ready(attachment.kind, file, attachment.mime, attachment.name ?: file.name) else MediaViewerState.Failed
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
                 MediaViewerState.Failed
             }
+            _states.value = _states.value + (id to state)
         }
     }
 
@@ -121,7 +150,8 @@ class MediaViewerViewModel @Inject constructor(
 
 @Composable
 fun MediaViewerScreen(onBack: () -> Unit, vm: MediaViewerViewModel = hiltViewModel()) {
-    val state by vm.state.collectAsStateWithLifecycle()
+    val pages by vm.pages.collectAsStateWithLifecycle()
+    val states by vm.states.collectAsStateWithLifecycle()
     val context = LocalContext.current
     var pendingSave by remember { mutableStateOf<File?>(null) }
     val save = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("*/*")) { uri ->
@@ -129,24 +159,53 @@ fun MediaViewerScreen(onBack: () -> Unit, vm: MediaViewerViewModel = hiltViewMod
         if (uri != null && file != null) vm.saveTo(context, file, uri)
     }
     Box(Modifier.fillMaxSize().background(Color.Black)) {
-        when (val s = state) {
+        val p = pages
+        if (p == null) {
+            CircularProgressIndicator(Modifier.align(Alignment.Center), color = Color.White)
+        } else {
+            val pager = rememberPagerState(initialPage = p.start, pageCount = { p.attachmentIds.size })
+            HorizontalPager(pager, modifier = Modifier.fillMaxSize(), beyondViewportPageCount = 0, key = { p.attachmentIds[it] }) { page ->
+                val id = p.attachmentIds[page]
+                LaunchedEffect(id) { vm.load(id) }
+                MediaPage(states[id] ?: MediaViewerState.Loading, active = pager.currentPage == page)
+            }
+            val current = states[p.attachmentIds[pager.currentPage]] as? MediaViewerState.Ready
+            if (p.attachmentIds.size > 1) {
+                Text(
+                    stringResource(R.string.media_position, pager.currentPage + 1, p.attachmentIds.size), color = Color.White,
+                    style = MaterialTheme.typography.titleSmall,
+                    modifier = Modifier.statusBarsPadding().padding(top = 20.dp).align(Alignment.TopCenter),
+                )
+            }
+            current?.let { ready ->
+                Row(Modifier.statusBarsPadding().padding(8.dp).align(Alignment.TopEnd)) {
+                    ViewerButton({
+                        pendingSave = ready.file
+                        save.launch(ready.name)
+                    }) { Icon(Icons.Filled.Download, stringResource(R.string.action_save_to_device)) }
+                    ViewerButton({ openFile(context, ready.file.absolutePath, ready.mime, ready.name) }) { Icon(Icons.Filled.Share, stringResource(R.string.action_share)) }
+                }
+            }
+        }
+        Row(Modifier.statusBarsPadding().padding(8.dp).align(Alignment.TopStart)) {
+            ViewerButton(onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back)) }
+        }
+    }
+}
+
+@Composable
+private fun MediaPage(state: MediaViewerState, active: Boolean) {
+    Box(Modifier.fillMaxSize()) {
+        when (state) {
             MediaViewerState.Loading -> CircularProgressIndicator(Modifier.align(Alignment.Center), color = Color.White)
             MediaViewerState.Failed -> Column(Modifier.align(Alignment.Center)) {
                 Icon(Icons.Filled.BrokenImage, contentDescription = null, tint = Color.White, modifier = Modifier.size(48.dp).align(Alignment.CenterHorizontally))
                 Text(stringResource(R.string.attachment_invalid), color = Color.White, modifier = Modifier.padding(top = 8.dp))
             }
-            is MediaViewerState.Ready -> if (s.kind == "video") VideoPlayer(s.file) else ZoomableImage(s.file)
-        }
-        Row(Modifier.statusBarsPadding().padding(8.dp).align(Alignment.TopStart)) {
-            ViewerButton(onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back)) }
-        }
-        (state as? MediaViewerState.Ready)?.let { ready ->
-            Row(Modifier.statusBarsPadding().padding(8.dp).align(Alignment.TopEnd)) {
-                ViewerButton({
-                    pendingSave = ready.file
-                    save.launch(ready.name)
-                }) { Icon(Icons.Filled.Download, stringResource(R.string.action_save_to_device)) }
-                ViewerButton({ openFile(context, ready.file.absolutePath, ready.mime, ready.name) }) { Icon(Icons.Filled.Share, stringResource(R.string.action_share)) }
+            is MediaViewerState.Ready -> if (state.kind == "video") {
+                if (active) VideoPlayer(state.file)
+            } else {
+                ZoomableImage(state.file)
             }
         }
     }
@@ -167,9 +226,21 @@ private fun ZoomableImage(file: File) {
     Box(
         Modifier.fillMaxSize()
             .pointerInput(Unit) {
-                detectTransformGestures { _, pan, zoom, _ ->
-                    scale = (scale * zoom).coerceIn(1f, 6f)
-                    offset = if (scale == 1f) Offset.Zero else offset + pan
+                // Pinch to zoom, and pan while zoomed. A single finger on a picture that is not zoomed is left alone
+                // (not consumed), so the pager can take it and swipe to the next picture.
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false)
+                    do {
+                        val event = awaitPointerEvent()
+                        val multi = event.changes.count { it.pressed } > 1
+                        if (multi || scale > 1f) {
+                            val zoom = event.calculateZoom()
+                            val pan = event.calculatePan()
+                            scale = (scale * zoom).coerceIn(1f, 6f)
+                            offset = if (scale == 1f) Offset.Zero else offset + pan
+                            event.changes.forEach { if (it.positionChanged()) it.consume() }
+                        }
+                    } while (event.changes.any { it.pressed })
                 }
             }
             .pointerInput(Unit) {

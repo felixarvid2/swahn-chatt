@@ -55,12 +55,17 @@ interface FamilyChatApi {
     suspend fun createConversation(request: CreateConversationRequest): Conversation
     suspend fun getConversation(id: String): Conversation
 
-    /** Group admins only. Only non-null arguments are sent; [clearAvatar] sends `avatar_attachment_id: null`. */
+    /**
+     * Group admins only (a direct chat: any member for [disappearingSeconds]). Only non-null arguments are sent;
+     * [clearAvatar] sends `avatar_attachment_id: null`, [clearDisappearing] sends `disappearing_seconds: null`.
+     */
     suspend fun updateConversation(
         id: String,
         name: String? = null,
         avatarAttachmentId: String? = null,
         clearAvatar: Boolean = false,
+        disappearingSeconds: Long? = null,
+        clearDisappearing: Boolean = false,
     ): Conversation
 
     suspend fun addMembers(id: String, request: AddMembersRequest): Conversation
@@ -90,6 +95,18 @@ interface FamilyChatApi {
         purpose: String = AttachmentPurpose.MESSAGE,
         sha256Hex: String? = null,
     ): UploadedAttachment
+
+    /** Starts a resumable upload of [request].size bytes (`POST /attachments/uploads`). */
+    suspend fun startUpload(request: StartUploadRequest): UploadSession
+
+    /** Where the upload stands (`GET /attachments/uploads/{id}`); use it to continue after a broken request. */
+    suspend fun uploadStatus(uploadId: String): UploadSession
+
+    /**
+     * Sends [bytes] (at most 8 MiB) at [offset]. Throws [ApiException.OffsetMismatch] when the server expects another
+     * offset. Returns [UploadProgress.Finished] with the attachment (whose id is the upload id) after the last byte.
+     */
+    suspend fun uploadChunk(uploadId: String, offset: Long, bytes: ByteArray): UploadProgress
 
     /**
      * Downloads attachment [id] into [target], resuming with a `Range` request when [target] already holds a

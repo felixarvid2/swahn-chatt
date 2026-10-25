@@ -19,6 +19,8 @@ class InMemoryLocalStore : LocalStore {
     private val receipts = HashMap<Pair<String, String>, ReceiptTimes>()
     private val receiptConversation = HashMap<String, String>() // message id -> conversation id
     private val tombstones = HashMap<String, String>() // message id -> conversation id
+    private val reactions = HashMap<Pair<String, String>, Reaction>() // (message id, user id)
+    private val timers = HashMap<String, ConversationTimer>()
 
     private inline fun <T> sync(block: () -> T): T = synchronized(lock, block)
 
@@ -28,6 +30,7 @@ class InMemoryLocalStore : LocalStore {
     override suspend fun clearAll() = sync {
         account = null; meta.clear(); users.clear(); devices.clear(); conversations.clear(); readSeq.clear()
         messages.clear(); outbox.clear(); cursor = 0; receipts.clear(); receiptConversation.clear(); tombstones.clear()
+        reactions.clear(); timers.clear()
     }
 
     override suspend fun getMeta(key: String) = sync { meta[key] }
@@ -72,6 +75,8 @@ class InMemoryLocalStore : LocalStore {
         receipts.keys.removeAll { it.first in gone }
         receiptConversation.keys.removeAll(gone)
         tombstones.values.removeAll { it == id }
+        reactions.values.removeAll { it.conversationId == id }
+        timers.remove(id)
         Unit
     }
 
@@ -131,8 +136,26 @@ class InMemoryLocalStore : LocalStore {
         tombstones[id] = conversationId
         receipts.keys.removeAll { it.first == id }
         receiptConversation.remove(id)
+        reactions.keys.removeAll { it.first == id }
         messages.remove(id)
     }
+
+    override suspend fun getReaction(messageId: String, userId: String) = sync { reactions[messageId to userId] }
+    override suspend fun putReaction(reaction: Reaction) = sync { reactions[reaction.messageId to reaction.userId] = reaction; Unit }
+    override suspend fun removeReaction(messageId: String, userId: String) = sync { reactions.remove(messageId to userId); Unit }
+    override suspend fun removeReactions(messageId: String) = sync { reactions.keys.removeAll { it.first == messageId }; Unit }
+    override suspend fun getReactions(messageId: String) =
+        sync { reactions.values.filter { it.messageId == messageId && it.emoji != null }.sortedWith(compareBy({ it.at }, { it.userId })) }
+
+    override suspend fun getTimer(conversationId: String) = sync { timers[conversationId] }
+    override suspend fun putTimer(timer: ConversationTimer) = sync { timers[timer.conversationId] = timer; Unit }
+
+    override suspend fun expiredMessages(now: Long, limit: Int) = sync {
+        messages.values.filter { it.expireAt != null && it.expireAt <= now && it.status != MessageStatus.PENDING }
+            .sortedWith(order).take(limit)
+    }
+
+    override suspend fun nextExpiry() = sync { messages.values.mapNotNull { it.expireAt }.minOrNull() }
 
     override suspend fun isLocallyDeleted(id: String) = sync { id in tombstones }
 

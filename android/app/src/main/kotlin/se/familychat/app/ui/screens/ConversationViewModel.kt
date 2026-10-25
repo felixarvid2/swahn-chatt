@@ -58,7 +58,9 @@ import se.familychat.app.media.VoiceRecorder
 import se.familychat.app.platform.ActiveConversation
 import se.familychat.app.platform.ConnectivityMonitor
 import se.familychat.app.platform.notify.Notifier
+import se.familychat.app.platform.work.ExpiryManager
 import se.familychat.app.platform.work.WorkScheduler
+import se.familychat.app.media.PendingShares
 import se.familychat.app.ui.components.PlaybackUi
 import se.familychat.app.ui.model.AttachmentKindUi
 import se.familychat.app.ui.model.AttachmentUi
@@ -110,11 +112,26 @@ data class ConversationUiState(
     val openUnread: Int = 0,
     val connection: ConnectionUi = ConnectionUi.HIDDEN,
     val safety: SafetyUi = SafetyUi(),
+    /** Photos, videos and files chosen but not sent yet; they go out as one message with the text as caption. */
+    val staged: List<StagedUi> = emptyList(),
+    /** The disappearing-messages timer in seconds (0: off). */
+    val timerSeconds: Long = 0,
+    /** The screen is in the foreground; the clocks of disappearing messages only start while it is. */
+    val resumed: Boolean = false,
+    /** In a direct chat anyone can change the timer; in a group only administrators. */
+    val canSetTimer: Boolean = true,
 )
+
+/** One chosen file in the preview strip above the composer. */
+@Immutable
+data class StagedUi(val id: String, val uri: Uri, val kind: AttachmentKindUi, val name: String?)
 
 sealed interface ConversationEffect {
     data class Error(val error: UiError, val detail: String? = null) : ConversationEffect
     data class OpenFile(val path: String, val mime: String, val name: String?) : ConversationEffect
+
+    /** A short message for the snackbar, as a string resource. */
+    data class Notice(val message: Int) : ConversationEffect
 
     /** Scroll to this message; if it is not loaded yet, [ConversationViewModel.loadAround] has been asked for. */
     data class ScrollTo(val messageId: String) : ConversationEffect
@@ -134,6 +151,8 @@ class ConversationViewModel @Inject constructor(
     private val repo: ChatRepository,
     private val store: LocalStore,
     private val preparer: AttachmentPreparer,
+    private val pendingShares: PendingShares,
+    private val expiry: ExpiryManager,
     private val recorder: VoiceRecorder,
     private val player: VoicePlayer,
     private val active: ActiveConversation,
@@ -157,6 +176,8 @@ class ConversationViewModel @Inject constructor(
     private val autoRequested = ConcurrentHashMap.newKeySet<String>()
     private val validating = ConcurrentHashMap.newKeySet<String>()
     private val resumed = MutableStateFlow(false)
+    private val staged = MutableStateFlow<List<StagedUi>>(emptyList())
+    private val displayedIds = HashSet<String>()
     private val pagerStart = MutableStateFlow(PagerStart(null, 0))
     /** Messages above this sequence number count as "new" in the jump-to-bottom button; null while the list is at the bottom. */
     private val newSinceSeq = MutableStateFlow<Long?>(null)
@@ -191,9 +212,22 @@ class ConversationViewModel @Inject constructor(
         ) { repo.pagedMessages(conversationId) }.flow
     }.cachedIn(viewModelScope)
 
-    private val rowContext = combine(repo.userMap(), engine.account, downloads, validated, missing) { users, account, dl, ok, gone ->
+    private val rowContext = combine<Any?, ChatRowContext>(
+        repo.userMap(), engine.account, downloads, validated, missing, repo.reactions(conversationId),
+    ) { v ->
+        @Suppress("UNCHECKED_CAST")
+        val users = v[0] as Map<String, se.familychat.core.model.User>
+        val account = v[1] as se.familychat.core.client.Account?
+        @Suppress("UNCHECKED_CAST")
+        val dl = v[2] as Map<String, Float?>
+        @Suppress("UNCHECKED_CAST")
+        val ok = v[3] as Map<String, Boolean>
+        @Suppress("UNCHECKED_CAST")
+        val gone = v[4] as Set<String>
+        @Suppress("UNCHECKED_CAST")
+        val reactions = v[5] as Map<String, List<se.familychat.core.client.Reaction>>
         val isGroup = store.getConversation(conversationId)?.type == ConversationType.GROUP
-        ChatRowContext(account?.userId.orEmpty(), isGroup, users, emptyMap(), dl, ok, gone)
+        ChatRowContext(account?.userId.orEmpty(), isGroup, users, emptyMap(), dl, ok, gone, reactions = reactions)
     }
 
     /**
@@ -217,35 +251,44 @@ class ConversationViewModel @Inject constructor(
         Header(
             title, isGroup, members.size,
             if (isGroup) AvatarUi(title, c.avatarAttachmentId) else other?.avatar ?: AvatarUi(title),
-            typingNames, if (isGroup) null else other?.userId,
+            typingNames, if (isGroup) null else other?.userId, members.any { it.isMe && it.isAdmin },
         )
     }
 
     private class Header(
         val title: String, val isGroup: Boolean, val memberCount: Int, val avatar: AvatarUi,
-        val typingNames: List<String>, val otherUserId: String?,
+        val typingNames: List<String>, val otherUserId: String?, val iAmAdmin: Boolean,
     )
 
-    private val composer = combine(draft, replyTo, editing, recording, sending) { d, r, e, rec, s -> Composer(d, r, e, rec, s) }
+    private val composer = combine<Any?, Composer>(draft, replyTo, editing, recording, sending, staged, resumed) { v ->
+        @Suppress("UNCHECKED_CAST")
+        Composer(v[0] as String, v[1] as String?, v[2] as String?, v[3] as RecordingUi?, v[4] as Boolean, v[5] as List<StagedUi>, v[6] as Boolean)
+    }
 
-    private class Composer(val draft: String, val replyTo: String?, val editing: String?, val recording: RecordingUi?, val sending: Boolean)
+    private class Composer(
+        val draft: String, val replyTo: String?, val editing: String?, val recording: RecordingUi?, val sending: Boolean,
+        val staged: List<StagedUi>, val resumed: Boolean,
+    )
 
     /** Everything around the list that comes from the database or the connection. */
     private class Around(
         val latest: LatestMessageRow?, val newMessages: Int, val connection: ConnectionUi, val safety: SafetyUi, val openUnread: Int,
+        val timer: Long,
     )
 
     /** -1 until the unread state at opening is known (the screen keeps the list hidden meanwhile). */
     private val openUnread = MutableStateFlow(-1)
 
-    private val around = combine(
+    private val around = combine<Any?, Around>(
         repo.latestMessage(conversationId),
         newSinceSeq.flatMapLatest { seq -> if (seq == null) flowOf(0) else repo.incomingAfter(conversationId, seq) },
         connectionStatus.state.onStart { emit(ConnectionUi.HIDDEN) },
         repo.safety(conversationId),
         openUnread,
-        ::Around,
-    )
+        repo.timer(conversationId),
+    ) { v ->
+        Around(v[0] as LatestMessageRow?, v[1] as Int, v[2] as ConnectionUi, v[3] as SafetyUi, v[4] as Int, v[5] as Long)
+    }
 
     val state: StateFlow<ConversationUiState> = combine(header, composer, around) { h, c, ar ->
         if (h == null) return@combine ConversationUiState(removed = true, loaded = true)
@@ -261,6 +304,7 @@ class ConversationViewModel @Inject constructor(
             draft = c.draft, recording = c.recording, sending = c.sending, loaded = true,
             latestId = ar.latest?.id, latestOutgoing = ar.latest?.outgoing == true, newMessages = ar.newMessages,
             openUnread = ar.openUnread, connection = ar.connection, safety = ar.safety,
+            staged = c.staged, resumed = c.resumed, timerSeconds = ar.timer, canSetTimer = !h.isGroup || h.iAmAdmin,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ConversationUiState())
 
@@ -278,6 +322,15 @@ class ConversationViewModel @Inject constructor(
                 if (r && seq != null) runCatching { engine.markRead(conversationId) }
             }
         }
+        // something shared from another app: the text in the composer, the files in the preview strip
+        fun takeShare() {
+            pendingShares.take(conversationId)?.let { share ->
+                share.text?.let { if (it.isNotBlank()) draft.value = (draft.value + " " + it).trim() }
+                viewModelScope.launch { stage(share.files.map { Uri.fromFile(it) }) }
+            }
+        }
+        takeShare()
+        viewModelScope.launch { pendingShares.arrivals.collect { if (it == conversationId) takeShare() } }
         viewModelScope.launch {
             // restore the unsent text, then keep it stored while the user types (not while a sent message is edited)
             repo.draft(conversationId)?.let { if (draft.value.isEmpty() && editing.value == null) draft.value = it }
@@ -370,6 +423,10 @@ class ConversationViewModel @Inject constructor(
     }
 
     fun send() {
+        if (staged.value.isNotEmpty() && editing.value == null) {
+            sendStaged()
+            return
+        }
         val text = draft.value.trim()
         if (text.isEmpty() || sending.value) return
         sending.value = true
@@ -463,17 +520,41 @@ class ConversationViewModel @Inject constructor(
 
     // --- attachments -------------------------------------------------------------------------------------------------
 
-    /** Photos, videos or documents the user picked. They are prepared (compressed, thumbnailed) and sent as one message. */
+    /** Photos, videos or documents the user picked: shown above the composer, sent when the user presses send. */
     fun attach(uris: List<Uri>) {
         if (uris.isEmpty()) return
+        viewModelScope.launch { stage(uris) }
+    }
+
+    private suspend fun stage(uris: List<Uri>) {
+        val room = MAX_ATTACHMENTS - staged.value.size
+        if (uris.size > room) _effects.tryEmit(ConversationEffect.Notice(se.familychat.app.R.string.staged_too_many))
+        val picked = uris.take(room.coerceAtLeast(0)).map { preparer.describe(it) }
+        staged.update { cur ->
+            cur + picked.map { StagedUi(java.util.UUID.randomUUID().toString(), it.uri, attachmentKindOf(it.kind), it.name) }
+        }
+    }
+
+    /** Takes a chosen file out of the preview strip. */
+    fun unstage(id: String) {
+        staged.value.firstOrNull { it.id == id }?.let { preparer.deleteStagedCopy(it.uri) }
+        staged.update { cur -> cur.filterNot { it.id == id } }
+    }
+
+    /** Prepares (compresses, thumbnails) everything in the preview strip and sends it as one message with the text as caption. */
+    private fun sendStaged() {
+        val items = staged.value
+        if (items.isEmpty() || sending.value) return
         sending.value = true
         viewModelScope.launch {
             val prepared = ArrayList<OutgoingAttachment>()
             try {
-                for (uri in uris.take(MAX_ATTACHMENTS)) prepared += preparer.prepare(uri)
+                for (item in items) prepared += preparer.prepare(item.uri)
                 val caption = draft.value.trim().ifEmpty { null }
                 engine.sendAttachments(conversationId, prepared, caption, replyTo.value)
                 draft.value = ""
+                staged.value = emptyList()
+                items.forEach { preparer.deleteStagedCopy(it.uri) }
                 repo.saveDraft(conversationId, "")
                 replyTo.value = null
                 work.enqueueOutbox()
@@ -492,6 +573,48 @@ class ConversationViewModel @Inject constructor(
             } finally {
                 sending.value = false
             }
+        }
+    }
+
+    // --- reactions, timer, disappearing ---------------------------------------------------------------------------------
+
+    /** React with [emoji], or take your reaction back if it already is [emoji]. */
+    fun react(messageId: String, emoji: String) {
+        viewModelScope.launch {
+            try {
+                engine.react(messageId, emoji)
+                work.enqueueOutbox()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _effects.tryEmit(ConversationEffect.Error(e.toUiError(), e.message))
+            }
+        }
+    }
+
+    /** Sets the disappearing-messages timer (0: off). */
+    fun setTimer(seconds: Long) {
+        viewModelScope.launch {
+            try {
+                engine.setDisappearingTimer(conversationId, seconds)
+                work.enqueueOutbox()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _effects.tryEmit(ConversationEffect.Error(e.toUiError(), e.message))
+            }
+        }
+    }
+
+    /**
+     * A message with a timer is on screen: its clock starts now (once; Signal's rule). Only while the screen is in the
+     * foreground, so messages that arrive while the phone is in a pocket are not counted as seen.
+     */
+    fun onMessageDisplayed(messageId: String) {
+        if (!resumed.value || !displayedIds.add(messageId)) return
+        viewModelScope.launch {
+            val earliest = engine.markDisplayed(listOf(messageId))
+            expiry.onDisplayed(earliest)
         }
     }
 
@@ -615,7 +738,7 @@ class ConversationViewModel @Inject constructor(
                         gone += a.id
                     }
                 }
-            } else if (a.downloadState == DownloadState.NONE && (!m.outgoing || a.key != null) && shouldAutoDownload(a.kind, a.size) && autoRequested.add(a.id)) {
+            } else if (a.downloadState == DownloadState.NONE && a.key != null && shouldAutoDownload(a.kind, a.size) && autoRequested.add(a.id)) {
                 download(m.id, AttachmentUi(a.id, AttachmentKindUi.FILE, a.mime, a.name, a.size, null, null, null, null, se.familychat.app.ui.model.TransferUi.Remote))
             }
         }

@@ -179,4 +179,80 @@ class ChatRowsTest {
         assertEquals(Triple(true, false, false), flags("me", MessageStatus.SENT, deleted = true), "a message deleted for everyone can still be removed here")
         assertEquals(Triple(true, false, false), flags("bob", deleted = true))
     }
+
+    // --- 0.4.0: reactions, forwarded, imported, timers, notices ---------------------------------------------------------------
+
+    private fun reaction(message: String, user: String, emoji: String?, at: Long = 1) =
+        se.familychat.core.client.Reaction(message, "c", user, emoji, at, at)
+
+    private fun uiOf(msg: StoredMessage, ctx: ChatRowContext) = buildChatRows(listOf(msg), ctx).filterIsInstance<ChatRow.Message>().single().message
+
+    @Test fun `reactions are grouped by emoji, the most used first, with who reacted and which one is mine`() {
+        val base = ctx(group = true)
+        val withReactions = ChatRowContext(
+            "me", true, users, emptyMap(), emptyMap(), emptyMap(), zone = zone,
+            reactions = mapOf(
+                "x" to listOf(
+                    reaction("x", "bob", "\uD83D\uDE02", 1), reaction("x", "me", "\uD83D\uDC4D", 2), reaction("x", "cy", "\uD83D\uDC4D", 3),
+                    reaction("x", "gone", null, 4), // taken back
+                ),
+            ),
+        )
+        assertEquals(base.reactions, emptyMap())
+        val ui = uiOf(m("x", "bob", seq = 1), withReactions)
+        assertEquals(listOf("\uD83D\uDC4D", "\uD83D\uDE02"), ui.reactions.map { it.emoji })
+        assertEquals(listOf("Anna", "Cy"), ui.reactions[0].reactors.map { it.name })
+        assertTrue(ui.reactions[0].mine); assertFalse(ui.reactions[1].mine)
+        assertEquals(2, ui.reactions[0].count)
+        assertEquals("\uD83D\uDC4D", ui.myReaction)
+        // somebody the phone has no record of is still counted, under a placeholder name
+        val stranger = ChatRowContext("me", false, users, reactions = mapOf("x" to listOf(reaction("x", "who", "\u2764\uFE0F"))), unknownName = "Okänd")
+        assertEquals("Okänd", uiOf(m("x", "bob", seq = 1), stranger).reactions.single().reactors.single().name)
+        assertNull(uiOf(m("x", "bob", seq = 1), ctx()).myReaction)
+    }
+
+    @Test fun `a deleted message shows no reactions`() {
+        val c = ChatRowContext("me", false, users, reactions = mapOf("x" to listOf(reaction("x", "bob", "\uD83D\uDC4D"))))
+        assertTrue(uiOf(m("x", "bob", seq = 1).copy(deleted = true, text = null), c).reactions.isEmpty())
+    }
+
+    @Test fun `reacting and forwarding are offered only for messages that were sent and can be read`() {
+        fun flags(msg: StoredMessage) = uiOf(msg, ctx()).let { it.canReact to it.canForward }
+        assertEquals(true to true, flags(m("a", "bob", seq = 1)))
+        assertEquals(true to true, flags(m("a", "me", seq = 1, status = MessageStatus.READ)))
+        assertEquals(false to false, flags(m("a", "me", status = MessageStatus.PENDING)))
+        assertEquals(false to false, flags(m("a", "me", status = MessageStatus.FAILED)))
+        assertEquals(false to false, flags(m("a", "bob", seq = 1).copy(deleted = true, text = null)))
+        assertEquals(false to false, flags(m("a", "bob", seq = 1).copy(decryptError = DecryptError.CORRUPT, text = null)))
+        assertEquals(true to true, flags(m("a", "bob", seq = 1, text = null, attachments = listOf(attachment("z")))))
+    }
+
+    @Test fun `forwarded, imported and timer flags reach the bubble`() {
+        val ui = uiOf(m("a", "bob", seq = 1).copy(forwarded = true, imported = true, expiresIn = 3600), ctx())
+        assertTrue(ui.forwarded); assertTrue(ui.imported); assertEquals(3600L, ui.expiresIn)
+        val plain = uiOf(m("b", "bob", seq = 2), ctx())
+        assertFalse(plain.forwarded); assertFalse(plain.imported); assertNull(plain.expiresIn)
+    }
+
+    private fun notice(event: SystemEvent) = buildChatRows(
+        listOf(StoredMessage("n", "c", "", null, false, MessageStatus.RECEIVED, 1, at(10, 9), null, null, null, systemEvent = event)), ctx(),
+    ).filterIsInstance<ChatRow.System>().single()
+
+    @Test fun `a timer change and an update notice become notices`() {
+        val timer = notice(SystemEvent.TimerChanged("bob", 86_400))
+        assertEquals(SystemKind.TIMER_CHANGED, timer.kind); assertEquals(86_400L, timer.value); assertEquals("Bob", timer.personName); assertFalse(timer.own)
+        val mine = notice(SystemEvent.TimerChanged("me", 0))
+        assertEquals(0L, mine.value); assertTrue(mine.own)
+        assertEquals(SystemKind.UPDATE_REQUIRED, notice(SystemEvent.UpdateRequired).kind)
+    }
+
+    @Test fun `an attachment that was imported without its file is unavailable, not downloadable`() {
+        val imported = LocalAttachment("import-1", null, null, 100, "image/jpeg", "f.jpg", "image", 10, 10, null, null, null, DownloadState.NONE)
+        assertIs<TransferUi.Unavailable>(uiOf(m("i", "bob", seq = 1, attachments = listOf(imported)), ctx()).attachments.single().transfer)
+        // a received attachment with its key is downloadable; an unsent own one is uploading, not unavailable
+        assertIs<TransferUi.Remote>(uiOf(m("i", "bob", seq = 1, attachments = listOf(attachment("r"))), ctx()).attachments.single().transfer)
+        val queued = LocalAttachment("local-1", null, null, 100, "image/jpeg", "f.jpg", "image", 10, 10, null, null, "/src", DownloadState.DONE)
+        val pending = uiOf(m("q", "me", status = MessageStatus.PENDING, attachments = listOf(queued)), ctx(validated = mapOf("local-1" to true)))
+        assertIs<TransferUi.Uploading>(pending.attachments.single().transfer)
+    }
 }

@@ -51,6 +51,7 @@ class AppStarter @Inject constructor(
     private val db: AppDatabase,
     private val preparer: AttachmentPreparer,
     private val appLock: AppLock,
+    private val expiry: se.familychat.app.platform.work.ExpiryManager,
     @ApplicationScope private val scope: CoroutineScope,
 ) {
     fun start() {
@@ -76,6 +77,8 @@ class AppStarter @Inject constructor(
                             // not signed in after all
                         }
                         work.enqueueOutbox()
+                        // whatever came due while the app was away goes first
+                        runCatching { expiry.purgeAndSchedule() }
                     } else {
                         engine.stopRealtime()
                     }
@@ -90,6 +93,12 @@ class AppStarter @Inject constructor(
             }
         }
 
+        // Disappearing messages that came due while the app was not running.
+        scope.launch {
+            session.awaitRestored()
+            runCatching { expiry.purgeAndSchedule() }
+        }
+
         // Leftover files of messages that were sent (or abandoned).
         scope.launch {
             session.awaitRestored()
@@ -97,6 +106,7 @@ class AppStarter @Inject constructor(
             val inOutbox = store.getOutbox().flatMap { it.attachments.map { a -> a.localPath } }
             val inMessages = db.uiDao().attachmentJsons().flatMap { json -> decodeAttachments(json).mapNotNull { it.localPath } }
             preparer.cleanup((inOutbox + inMessages).toSet())
+            preparer.cleanupStaging()
         }
     }
 }

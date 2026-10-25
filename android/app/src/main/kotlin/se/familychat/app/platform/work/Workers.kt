@@ -52,6 +52,27 @@ class SyncWorker @AssistedInject constructor(
     override suspend fun getForegroundInfo(): ForegroundInfo = syncForegroundInfo(applicationContext)
 }
 
+/** Removes the disappearing messages that are due, and arranges for the next removal. */
+@HiltWorker
+class ExpiryWorker @AssistedInject constructor(
+    @Assisted context: Context,
+    @Assisted params: WorkerParameters,
+    private val session: SessionManager,
+    private val expiry: ExpiryManager,
+) : CoroutineWorker(context, params) {
+    override suspend fun doWork(): Result {
+        session.awaitRestored()
+        return try {
+            expiry.purgeAndSchedule()
+            Result.success()
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.retry()
+        }
+    }
+}
+
 /** Every 15 minutes, the safety net behind push. */
 @HiltWorker
 class PeriodicSyncWorker @AssistedInject constructor(

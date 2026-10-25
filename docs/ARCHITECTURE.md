@@ -165,7 +165,8 @@ Client data flow:
   UnifiedPush wake-up) and `PeriodicSyncWorker` (15 minutes). Notifications are built locally from the decrypted
   messages after a sync, never from the push.
 
-- The Room schema is at version 4 (`drafts`; `message_fts` full-text index; `conversation_settings` for
+- The Room schema is at version 5 (`reactions`, `conversation_timers`, expiry and `forwarded` columns added in v5;
+  `drafts`; `message_fts` full-text index; `conversation_settings` for
   mute/archive/pin; `message_receipts` with per-member delivered/read times; `local_deletions` tombstones for
   "delete for me"), with tested migrations 1→2→3→4, also run on SQLCipher on API 30/34 emulators in CI. Messages are written with an upsert so the
   FTS triggers stay in sync. Schema changes always bump the
@@ -177,6 +178,9 @@ Client data flow:
 - Receipt times come from the receipt event's server `created_at`. `SyncProcessor.applyMessage` skips messages
   with a local tombstone. Media auto-download follows a per-kind policy (always / unmetered only / never);
   `StorageDirs` is shared by the engine and the storage screen.
+- `ExpiryManager` (in-process timer, `ExpiryWorker` and checks on start and foreground) purges expiring messages.
+  `ShareReceiverActivity` takes shared content from other apps. Large attachments (> 8 MiB) use the resumable
+  `/attachments/uploads` API.
 
 ## Notifications: FCM vs self-hosted
 

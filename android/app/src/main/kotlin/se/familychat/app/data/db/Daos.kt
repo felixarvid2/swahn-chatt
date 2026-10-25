@@ -116,6 +116,29 @@ interface StoreDao {
     )
     suspend fun messagesWithAttachments(conversationId: String?): List<MessageEntity>
 
+    // --- reactions, timers and expiry -------------------------------------------------------------------------------
+    @Query("SELECT * FROM reactions WHERE messageId = :messageId AND userId = :userId")
+    suspend fun reaction(messageId: String, userId: String): ReactionEntity?
+    @Query("SELECT * FROM reactions WHERE messageId = :messageId AND emoji IS NOT NULL ORDER BY at, userId")
+    suspend fun reactions(messageId: String): List<ReactionEntity>
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putReaction(r: ReactionEntity)
+    @Query("DELETE FROM reactions WHERE messageId = :messageId AND userId = :userId")
+    suspend fun deleteReaction(messageId: String, userId: String)
+    @Query("DELETE FROM reactions WHERE messageId = :messageId") suspend fun deleteReactionsOfMessage(messageId: String)
+    @Query("DELETE FROM reactions WHERE conversationId = :id") suspend fun deleteReactionsOf(id: String)
+
+    @Query("SELECT * FROM conversation_timers WHERE conversationId = :id") suspend fun timer(id: String): ConversationTimerEntity?
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putTimer(t: ConversationTimerEntity)
+    @Query("DELETE FROM conversation_timers WHERE conversationId = :id") suspend fun deleteTimer(id: String)
+
+    @Query(
+        "SELECT * FROM messages WHERE expireAt IS NOT NULL AND expireAt <= :now AND status != 'PENDING' " +
+            "ORDER BY expireAt, id LIMIT :limit",
+    )
+    suspend fun expired(now: Long, limit: Int): List<MessageEntity>
+
+    @Query("SELECT MIN(expireAt) FROM messages WHERE expireAt IS NOT NULL") suspend fun nextExpiry(): Long?
+
     // --- receipt times and local deletions --------------------------------------------------------------------------
     @Query("SELECT * FROM message_receipts WHERE messageId = :messageId AND userId = :userId")
     suspend fun receipt(messageId: String, userId: String): MessageReceiptEntity?
@@ -258,6 +281,13 @@ interface UiDao {
     @Query("SELECT * FROM account WHERE id = 1") fun observeAccount(): Flow<AccountEntity?>
 
     @Query("SELECT * FROM messages WHERE id = :id") fun observeMessage(id: String): Flow<MessageEntity?>
+
+    /** The reactions that stand in a conversation (not taken back), for the bubbles. */
+    @Query("SELECT * FROM reactions WHERE conversationId = :conversationId AND emoji IS NOT NULL ORDER BY at, userId")
+    fun observeReactions(conversationId: String): Flow<List<ReactionEntity>>
+
+    @Query("SELECT * FROM conversation_timers WHERE conversationId = :conversationId")
+    fun observeTimer(conversationId: String): Flow<ConversationTimerEntity?>
 
     @Query("SELECT * FROM message_receipts WHERE messageId = :messageId ORDER BY userId")
     fun observeReceipts(messageId: String): Flow<List<MessageReceiptEntity>>

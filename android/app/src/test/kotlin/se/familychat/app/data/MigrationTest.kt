@@ -136,13 +136,109 @@ class MigrationTest {
         helper.runMigrationsAndValidate("migration-v1-vN", AppDatabase.VERSION, true, *AppDatabase.MIGRATIONS).use { db ->
             assertEquals(listOf("m1", "m2"), matches(db, "hej"))
             db.query("SELECT COUNT(*) FROM messages").use { it.moveToFirst(); assertEquals(2L, it.getLong(0)) }
-            // the tables of versions 2, 3 and 4 are all there, empty, and usable
-            for (t in listOf("drafts", "conversation_settings", "message_receipts", "local_deletions")) {
+            // the tables of versions 2 to 5 are all there, empty, and usable
+            for (t in listOf("drafts", "conversation_settings", "message_receipts", "local_deletions", "reactions", "conversation_timers")) {
                 db.query("SELECT COUNT(*) FROM $t").use { it.moveToFirst(); assertEquals(0L, it.getLong(0), t) }
             }
             db.execSQL("INSERT INTO message_receipts (messageId, userId, conversationId, deliveredAt, readAt) VALUES ('m1', 'bob', 'c1', 5, NULL)")
             db.execSQL("INSERT INTO local_deletions (messageId, conversationId, deletedAt) VALUES ('m2', 'c1', 6)")
             db.query("SELECT COUNT(*) FROM local_deletions").use { it.moveToFirst(); assertEquals(1L, it.getLong(0)) }
+            // version 5: the old messages have no timer and are neither forwarded nor imported
+            db.query("SELECT forwarded, imported, expiresIn, expireAt, systemValue FROM messages WHERE id = 'm1'").use { c ->
+                assertTrue(c.moveToFirst())
+                assertEquals(0, c.getInt(0)); assertEquals(0, c.getInt(1))
+                assertTrue(c.isNull(2) && c.isNull(3) && c.isNull(4))
+            }
+            db.execSQL("INSERT INTO reactions (messageId, userId, conversationId, emoji, seq, at) VALUES ('m1', 'bob', 'c1', 'x', 3, 4)")
+            db.execSQL("INSERT INTO conversation_timers (conversationId, seconds, setBy, seq, at) VALUES ('c1', 3600, 'bob', 3, 4)")
+        }
+    }
+
+    /** Version 4 as the phone of an updated user holds it: version 3 data, receipt times, a tombstone, an unsent message and a notice. */
+    @Suppress("MaxLineLength") // SQL fixtures
+    private fun fillVersion4(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+        fillVersion3(db)
+        db.execSQL("INSERT INTO message_receipts (messageId, userId, conversationId, deliveredAt, readAt) VALUES ('o1', 'bob', 'c1', 5, 8)")
+        db.execSQL("INSERT INTO local_deletions (messageId, conversationId, deletedAt) VALUES ('gone', 'c1', 6)")
+        db.execSQL("INSERT INTO outbox (messageId, conversationId, kind, targetMessageId, text, replyTo, attachments, clientTs, envelopes, attempts, lastError, createdAt) VALUES ('p1', 'c1', 'message', NULL, 'väntar', NULL, '[]', 11, NULL, 2, 'network', 12)")
+        db.execSQL(
+            "INSERT INTO messages (id, conversationId, senderUserId, senderDeviceId, outgoing, status, seq, clientTs, serverTs, text, replyTo, attachments, edited, editedAt, deleted, decryptError, failureReason, deliveredTo, readBy, systemType, systemUserId, systemDeviceId, systemDeviceName, pendingEnvelopeType, pendingEnvelopeBody) " +
+                "VALUES ('sys1', 'c1', '', NULL, 0, 'RECEIVED', 3, 7, NULL, NULL, NULL, '[]', 0, NULL, 0, NULL, NULL, '', '', 'member_added', 'bob', NULL, NULL, NULL, NULL)",
+        )
+    }
+
+    @Test fun `version 4 to 5 keeps every row and old messages have no timer`() {
+        helper.createDatabase("migration-v4-v5", 4).use { fillVersion4(it) }
+        // validated against 5.json; the whole chain is passed, as the app registers it
+        helper.runMigrationsAndValidate("migration-v4-v5", 5, true, *AppDatabase.MIGRATIONS).use { db ->
+            fun count(table: String) = db.query("SELECT COUNT(*) FROM $table").use { it.moveToFirst(); it.getLong(0) }
+            assertEquals(1L, count("account"))
+            assertEquals(1L, count("conversations"))
+            assertEquals(4L, count("messages"))
+            assertEquals(1L, count("drafts"))
+            assertEquals(1L, count("conversation_settings"))
+            assertEquals(1L, count("signal_identities"))
+            assertEquals(1L, count("message_receipts"))
+            assertEquals(1L, count("local_deletions"))
+            assertEquals(1L, count("outbox"))
+            assertEquals(0L, count("reactions"))
+            assertEquals(0L, count("conversation_timers"))
+            // nothing was rewritten: the defaults mean "as before"
+            db.query("SELECT forwarded, imported, expiresIn, expireAt, systemValue, text, status, readBy FROM messages WHERE id = 'o1'").use { c ->
+                assertTrue(c.moveToFirst())
+                assertEquals(0, c.getInt(0)); assertEquals(0, c.getInt(1))
+                assertTrue(c.isNull(2) && c.isNull(3) && c.isNull(4))
+                assertEquals("skickat", c.getString(5)); assertEquals("READ", c.getString(6)); assertEquals("bob", c.getString(7))
+            }
+            db.query("SELECT forwarded, expiresIn, \"remove\", text, attempts FROM outbox WHERE messageId = 'p1'").use { c ->
+                assertTrue(c.moveToFirst())
+                assertEquals(0, c.getInt(0)); assertTrue(c.isNull(1)); assertEquals(0, c.getInt(2))
+                assertEquals("väntar", c.getString(3)); assertEquals(2, c.getInt(4))
+            }
+            db.query("SELECT cursor FROM sync_state WHERE id = 1").use { c -> assertTrue(c.moveToFirst()); assertEquals(77L, c.getLong(0)) }
+            assertEquals(listOf("m1", "m2"), matches(db, "hej")) // the search index survived the ALTERs
+            // the new columns and tables are usable, and the index still follows edits
+            db.execSQL("UPDATE messages SET expiresIn = 3600, expireAt = 99, forwarded = 1, text = 'ändrad hej' WHERE id = 'm1'")
+            assertEquals(listOf("m1", "m2"), matches(db, "hej"))
+            assertEquals(listOf("m1"), matches(db, "ändr"))
+            db.execSQL("INSERT INTO reactions (messageId, userId, conversationId, emoji, seq, at) VALUES ('m1', 'bob', 'c1', 'x', 3, 4)")
+            db.execSQL("INSERT INTO conversation_timers (conversationId, seconds, setBy, seq, at) VALUES ('c1', 3600, 'bob', 3, 4)")
+            assertEquals(1L, count("reactions"))
+            assertEquals(1L, count("conversation_timers"))
+        }
+    }
+
+    @Test fun `the app opens a version 4 file through the real builder and the new features work on the migrated rows`() {
+        val context = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
+        helper.createDatabase("familychat-upgrade4.db", 4).use { fillVersion4(it) }
+        val db = AppDatabase.build(context, factory = null, name = "familychat-upgrade4.db") { it.allowMainThreadQueries() }
+        try {
+            kotlinx.coroutines.runBlocking {
+                val store = se.familychat.app.data.db.RoomLocalStore(db)
+                val old = store.getMessage("m1")!!
+                assertEquals(null, old.expiresIn); assertEquals(null, old.expireAt); assertEquals(false, old.forwarded); assertEquals(false, old.imported)
+                assertEquals("väntar", store.getOutboxEntry("p1")!!.text)
+                assertEquals(false, store.getOutboxEntry("p1")!!.forwarded)
+                assertTrue(store.getMessage("sys1")!!.isSystem)
+                // reactions, timer and expiry on top of the migrated data
+                store.putReaction(se.familychat.core.client.Reaction("m1", "c1", "bob", "x", 4, 5))
+                assertEquals(listOf("bob"), store.getReactions("m1").map { it.userId })
+                store.putTimer(se.familychat.core.client.ConversationTimer("c1", 3600, "bob", 4, 5))
+                assertEquals(3600L, store.getTimer("c1")!!.seconds)
+                assertEquals(null, store.nextExpiry(), "nothing that existed before the update expires")
+                store.updateMessage("m2") { it.copy(expiresIn = 300, expireAt = 1000) }
+                assertEquals(1000L, store.nextExpiry())
+                assertEquals(listOf("m2"), store.expiredMessages(1000).map { it.id })
+                assertEquals(emptyList(), store.expiredMessages(999).map { it.id })
+                store.deleteMessageLocally("m2", "c1", 1001)
+                assertEquals(emptyList(), SearchRepository(db).search("hej 2").map { it.messageId }.filter { it == "m2" })
+                store.removeConversation("c1")
+                assertEquals(emptyList(), store.getReactions("m1"))
+                assertEquals(null, store.getTimer("c1"))
+            }
+        } finally {
+            db.close()
+            context.deleteDatabase("familychat-upgrade4.db")
         }
     }
 

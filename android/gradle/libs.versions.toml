@@ -19,6 +19,7 @@ serialization = "1.9.0"
 coroutines = "1.10.2"
 workmanager = "2.10.5"
 tink = "1.18.0"
+bouncycastle = "1.80"
 unifiedpush = "3.0.10"
 libsignal = "0.86.5"
 coil = "2.7.0"
@@ -43,6 +44,8 @@ libsignal-android = { module = "org.signal:libsignal-android", version.ref = "li
 # Tink streaming AEAD: full artifact on the JVM, tink-android in the app
 tink = { module = "com.google.crypto.tink:tink", version.ref = "tink" }
 tink-android = { module = "com.google.crypto.tink:tink-android", version.ref = "tink" }
+# Argon2id (Argon2BytesGenerator) for the passphrase of the history export; nothing else of BouncyCastle is used
+bouncycastle-bcprov = { module = "org.bouncycastle:bcprov-jdk18on", version.ref = "bouncycastle" }
 
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
 kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }

@@ -4,6 +4,7 @@ import se.familychat.core.client.DecryptError
 import se.familychat.core.client.DownloadState
 import se.familychat.core.client.LocalAttachment
 import se.familychat.core.client.MessageStatus
+import se.familychat.core.client.Reaction
 import se.familychat.core.client.StoredMessage
 import se.familychat.core.client.SystemEvent
 import se.familychat.core.model.User
@@ -31,6 +32,8 @@ class ChatRowContext(
     val missing: Set<String> = emptySet(),
     val zone: ZoneId = ZoneId.systemDefault(),
     val unknownName: String = "?",
+    /** Message id -> the reactions that stand on it (not taken back), oldest first. */
+    val reactions: Map<String, List<Reaction>> = emptyMap(),
 )
 
 fun attachmentKindOf(kind: String): AttachmentKindUi = when (kind) {
@@ -65,14 +68,29 @@ private fun LocalAttachment.toUi(pending: Boolean, ctx: ChatRowContext): Attachm
         pending -> TransferUi.Uploading
         downloadState == DownloadState.DONE && localPath != null ->
             if (ctx.validated[id] == true) TransferUi.Ready(localPath!!) else TransferUi.Downloading(null)
+        key == null && localPath == null -> TransferUi.Unavailable
         downloadState == DownloadState.FAILED -> TransferUi.Failed
         else -> TransferUi.Remote
     }
     return AttachmentUi(id, attachmentKindOf(kind), mime, name, size, width, height, durationMs, decodeThumbnail(thumbnail), transfer)
 }
 
+/** Reactions grouped by emoji, the most used first (ties: the one used first). */
+internal fun groupReactions(reactions: List<Reaction>, ctx: ChatRowContext): List<ReactionUi> =
+    reactions.filter { it.emoji != null }.groupBy { it.emoji!! }.map { (emoji, list) ->
+        ReactionUi(
+            emoji,
+            list.map { r ->
+                val user = ctx.users[r.userId]
+                val name = user?.displayName ?: ctx.unknownName
+                ReactorUi(r.userId, name, AvatarUi(name, user?.avatarAttachmentId), r.userId == ctx.myUserId)
+            },
+        )
+    }.sortedByDescending { it.count }
+
 private fun StoredMessage.toUi(ctx: ChatRowContext, replyTarget: StoredMessage?): MessageUi {
     val outgoingMine = outgoing
+    val sentAndUsable = !deleted && decryptError == null && status != MessageStatus.PENDING && status != MessageStatus.FAILED
     val name = ctx.users[senderUserId]?.displayName
     val reply = replyTarget?.let {
         ReplyUi(
@@ -103,6 +121,10 @@ private fun StoredMessage.toUi(ctx: ChatRowContext, replyTarget: StoredMessage?)
         canShowInfo = outgoingMine && !deleted && (status == MessageStatus.SENT || status == MessageStatus.DELIVERED || status == MessageStatus.READ),
         senderId = senderUserId,
         speaker = if (outgoingMine) null else name ?: ctx.unknownName,
+        reactions = if (deleted) emptyList() else groupReactions(ctx.reactions[id].orEmpty(), ctx),
+        myReaction = ctx.reactions[id]?.firstOrNull { it.userId == ctx.myUserId }?.emoji,
+        canReact = sentAndUsable, canForward = sentAndUsable && (!text.isNullOrBlank() || attachments.isNotEmpty()),
+        forwarded = forwarded, imported = imported, expiresIn = expiresIn,
     )
 }
 
@@ -121,8 +143,11 @@ fun StoredMessage.toChatRow(ctx: ChatRowContext, replyTarget: StoredMessage? = n
         is SystemEvent.IdentityChanged -> Triple(event.userId, null, SystemKind.IDENTITY_CHANGED)
         is SystemEvent.MemberAdded -> Triple(event.userId, null, SystemKind.MEMBER_ADDED)
         is SystemEvent.MemberRemoved -> Triple(event.userId, null, SystemKind.MEMBER_REMOVED)
+        is SystemEvent.TimerChanged -> Triple(event.userId, null, SystemKind.TIMER_CHANGED)
+        SystemEvent.UpdateRequired -> Triple("", null, SystemKind.UPDATE_REQUIRED)
     }
-    return ChatRow.System(id, kind, userId, ctx.users[userId]?.displayName ?: ctx.unknownName, deviceName, time, own = userId == ctx.myUserId)
+    val value = (event as? SystemEvent.TimerChanged)?.seconds ?: 0L
+    return ChatRow.System(id, kind, userId, ctx.users[userId]?.displayName ?: ctx.unknownName, deviceName, time, own = userId == ctx.myUserId, value = value)
 }
 
 private fun ChatRow.timeOrNull(): Long? = when (this) {

@@ -22,6 +22,7 @@ import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PersonAdd
+import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
@@ -67,6 +68,8 @@ import se.familychat.app.data.UiError
 import se.familychat.app.data.toUiError
 import se.familychat.app.media.AttachmentPreparer
 import se.familychat.app.ui.components.Avatar
+import se.familychat.app.ui.components.DisappearingDialog
+import se.familychat.app.ui.components.timerLabel
 import se.familychat.app.ui.model.AvatarUi
 import se.familychat.app.ui.model.MemberUi
 import se.familychat.app.ui.model.UserUi
@@ -82,6 +85,8 @@ data class GroupInfoState(
     val busy: Boolean = false,
     val error: UiError? = null,
     val gone: Boolean = false,
+    /** The disappearing-messages timer in seconds (0: off); only administrators change it in a group. */
+    val timerSeconds: Long = 0,
 )
 
 @HiltViewModel
@@ -105,7 +110,8 @@ class GroupInfoViewModel @Inject constructor(
             name = name, avatar = AvatarUi(name, c.avatarAttachmentId), members = members,
             meIsAdmin = members.any { it.isMe && it.isAdmin }, addable = users.filter { it.id !in inGroup }, busy = b, error = e,
         )
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), GroupInfoState())
+    }.let { base -> combine(base, repo.timer(conversationId)) { st, timer -> st.copy(timerSeconds = timer) } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), GroupInfoState())
 
     private fun run(block: suspend () -> Unit) {
         busy.value = true
@@ -128,6 +134,7 @@ class GroupInfoViewModel @Inject constructor(
     fun remove(userId: String) = run { engine.removeMember(conversationId, userId) }
     fun setAdmin(userId: String, admin: Boolean) = run { engine.setMemberRole(conversationId, userId, admin) }
     fun leave() = run { engine.leave(conversationId) }
+    fun setTimer(seconds: Long) = run { engine.setDisappearingTimer(conversationId, seconds) }
     fun dismissError() { error.value = null }
 
     init {
@@ -144,6 +151,7 @@ class GroupInfoCallbacks(
     val onRemove: (String) -> Unit = {},
     val onSetAdmin: (String, Boolean) -> Unit = { _, _ -> },
     val onLeave: () -> Unit = {},
+    val onSetTimer: (Long) -> Unit = {},
     val onOpenMember: (String) -> Unit = {},
 )
 
@@ -158,7 +166,7 @@ fun GroupInfoScreen(onBack: () -> Unit, onLeft: () -> Unit, onOpenMember: (Strin
             onBack = onBack, onRename = vm::rename,
             onPickAvatar = { pick.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
             onClearAvatar = vm::clearAvatar, onAdd = vm::addMembers, onRemove = vm::remove, onSetAdmin = vm::setAdmin,
-            onLeave = vm::leave, onOpenMember = onOpenMember,
+            onLeave = vm::leave, onSetTimer = vm::setTimer, onOpenMember = onOpenMember,
         ),
     )
 }
@@ -169,6 +177,7 @@ fun GroupInfoContent(state: GroupInfoState, cb: GroupInfoCallbacks, modifier: Mo
     var renaming by remember { mutableStateOf(false) }
     var adding by remember { mutableStateOf(false) }
     var leaving by remember { mutableStateOf(false) }
+    var timerOpen by remember { mutableStateOf(false) }
     var removing by remember { mutableStateOf<MemberUi?>(null) }
     val errorText = errorTexts()
     Scaffold(
@@ -197,6 +206,17 @@ fun GroupInfoContent(state: GroupInfoState, cb: GroupInfoCallbacks, modifier: Mo
                     }
                     if (state.busy) CircularProgressIndicator(Modifier.padding(top = 8.dp).size(24.dp), strokeWidth = 2.dp)
                     state.error?.let { Text(errorText(it), color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 8.dp)) }
+                }
+                HorizontalDivider()
+                Row(
+                    Modifier.fillMaxWidth().heightIn(min = 64.dp).clickable { timerOpen = true }.padding(horizontal = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(Icons.Filled.Timer, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                    Column(Modifier.padding(start = 16.dp)) {
+                        Text(stringResource(R.string.disappearing_title), style = MaterialTheme.typography.titleMedium)
+                        Text(timerLabel(state.timerSeconds), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                 }
                 HorizontalDivider()
                 Text(
@@ -229,6 +249,12 @@ fun GroupInfoContent(state: GroupInfoState, cb: GroupInfoCallbacks, modifier: Mo
         }
     }
 
+    if (timerOpen) {
+        DisappearingDialog(
+            current = state.timerSeconds, canChange = state.meIsAdmin,
+            onSelect = { cb.onSetTimer(it); timerOpen = false }, onDismiss = { timerOpen = false },
+        )
+    }
     if (renaming) {
         var text by remember { mutableStateOf(state.name) }
         AlertDialog(

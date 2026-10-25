@@ -12,13 +12,20 @@ import se.familychat.core.model.AttachmentRef
 import se.familychat.core.model.Content
 import se.familychat.core.model.ContentCodec
 import se.familychat.core.model.ContentType
+import se.familychat.core.model.ConversationType
+import se.familychat.core.model.MemberRole
+import se.familychat.core.model.Emoji
 import se.familychat.core.model.Envelope
 import se.familychat.core.model.MessageKind
 import se.familychat.core.model.SendMessageRequest
+import se.familychat.core.model.StartUploadRequest
+import se.familychat.core.model.UploadProgress
+import se.familychat.core.model.UploadedAttachment
 import se.familychat.core.network.ApiException
 import se.familychat.core.network.StreamingRequestBody
 import java.io.File
 import java.io.IOException
+import java.io.RandomAccessFile
 import java.util.Base64
 
 /** Outcome of one pass over the outbox. */
@@ -80,20 +87,31 @@ internal class SendPipeline(private val ctx: EngineContext, private val director
         return enqueueMessage(conversationId, caption?.takeIf { it.isNotBlank() }, replyTo, attachments)
     }
 
+    /** A copy of a message of another conversation; [attachments] are copies of the files, uploaded afresh (new keys). */
+    suspend fun enqueueForwarded(conversationId: String, text: String?, attachments: List<OutboxAttachment>): String {
+        require(!text.isNullOrBlank() || attachments.isNotEmpty()) { "Nothing to forward" }
+        require(attachments.size <= MAX_ATTACHMENTS) { "1..$MAX_ATTACHMENTS attachments" }
+        if (!text.isNullOrEmpty()) require(text.toByteArray().size <= MAX_TEXT_BYTES) { "Message text is too long" }
+        return enqueueMessage(conversationId, text?.takeIf { it.isNotBlank() }, null, attachments, forwarded = true)
+    }
+
     private suspend fun enqueueMessage(
         conversationId: String,
         text: String?,
         replyTo: String?,
         attachments: List<OutboxAttachment>,
+        forwarded: Boolean = false,
     ): String {
         val account = ctx.requireAccount()
         ctx.store.getConversation(conversationId) ?: throw IllegalArgumentException("Unknown conversation")
         val id = ctx.config.newId()
         val ts = ctx.now()
+        // The timer of the conversation as of now goes into the content, so every phone treats this message alike.
+        val expiresIn = ctx.store.getTimer(conversationId)?.seconds?.takeIf { it > 0 }
         val message = StoredMessage(
             id = id, conversationId = conversationId, senderUserId = account.userId, senderDeviceId = account.deviceId,
             outgoing = true, status = MessageStatus.PENDING, seq = null, clientTs = ts, serverTs = null,
-            text = text, replyTo = replyTo,
+            text = text, replyTo = replyTo, forwarded = forwarded, expiresIn = expiresIn,
             attachments = attachments.mapIndexed { i, a ->
                 LocalAttachment(
                     id = "local-$id-$i", key = null, sha256 = null, size = File(a.localPath).length(), mime = a.mime,
@@ -105,6 +123,7 @@ internal class SendPipeline(private val ctx: EngineContext, private val director
         val entry = OutboxEntry(
             messageId = id, conversationId = conversationId, kind = MessageKind.MESSAGE, targetMessageId = null,
             text = text, replyTo = replyTo, attachments = attachments, clientTs = ts, createdAt = stamp(),
+            forwarded = forwarded, expiresIn = expiresIn,
         )
         ctx.store.transaction {
             ctx.store.upsertMessage(message)
@@ -152,6 +171,7 @@ internal class SendPipeline(private val ctx: EngineContext, private val director
         val pending = ctx.store.getOutboxEntry(messageId)
         ctx.store.transaction {
             ctx.store.updateMessage(messageId) { wipe(it) }
+            ctx.store.removeReactions(messageId)
             if (pending != null) {
                 // Never reached the server: nothing to tell anybody.
                 ctx.store.removeOutbox(messageId)
@@ -168,6 +188,63 @@ internal class SendPipeline(private val ctx: EngineContext, private val director
         ctx.emit(EngineEvent.MessageChanged(target.conversationId, messageId))
     }
 
+    /**
+     * Reacts to [messageId] with [emoji], or takes our reaction back when it already is [emoji] (one reaction per member and
+     * message). Shown at once; sent as an encrypted `reaction` to every device like a message. Returns the id of the
+     * reaction message.
+     */
+    suspend fun enqueueReaction(messageId: String, emoji: String): String {
+        require(Emoji.isValid(emoji)) { "Not a single emoji" }
+        val account = ctx.requireAccount()
+        val target = ctx.store.getMessage(messageId) ?: throw IllegalArgumentException("Unknown message")
+        require(!target.deleted && !target.isSystem && target.decryptError == null) { "That message cannot be reacted to" }
+        require(target.status != MessageStatus.PENDING && target.status != MessageStatus.FAILED) { "The message has not been sent yet" }
+        val current = ctx.store.getReaction(messageId, account.userId)
+        val remove = current?.emoji == emoji
+        val id = ctx.config.newId()
+        val ts = ctx.now()
+        ctx.store.transaction {
+            ctx.store.putReaction(Reaction(messageId, target.conversationId, account.userId, if (remove) null else emoji, null, ts))
+            ctx.store.putOutbox(
+                OutboxEntry(
+                    messageId = id, conversationId = target.conversationId, kind = MessageKind.REACTION, targetMessageId = messageId,
+                    text = emoji, replyTo = null, attachments = emptyList(), clientTs = ts, createdAt = stamp(), remove = remove,
+                ),
+            )
+        }
+        ctx.emit(EngineEvent.MessageChanged(target.conversationId, messageId))
+        return id
+    }
+
+    /**
+     * Sets the disappearing-messages timer of [conversationId] to [seconds] (0: off). The phones learn it from an encrypted
+     * `timer` message; the server's pruning timer is patched afterwards, once that message is out.
+     */
+    suspend fun enqueueTimer(conversationId: String, seconds: Long): String {
+        require(Content.isValidTimer(seconds)) { "Not an allowed timer" }
+        val account = ctx.requireAccount()
+        val conversation = ctx.store.getConversation(conversationId) ?: throw IllegalArgumentException("Unknown conversation")
+        // the same rule as the server's PATCH: in a group only administrators, in a direct chat either person
+        require(
+            conversation.type != ConversationType.GROUP ||
+                conversation.members.any { it.userId == account.userId && it.role == MemberRole.ADMIN },
+        ) { "Only administrators can change the timer of a group" }
+        val id = ctx.config.newId()
+        val ts = ctx.now()
+        ctx.store.transaction {
+            ctx.store.putTimer(ConversationTimer(conversationId, seconds, account.userId, null, ts))
+            directory.postNotice(conversation, "sys-timer-$id", SystemEvent.TimerChanged(account.userId, seconds), at = ts)
+            ctx.store.putOutbox(
+                OutboxEntry(
+                    messageId = id, conversationId = conversationId, kind = OutboxKind.TIMER, targetMessageId = null, text = null,
+                    replyTo = null, attachments = emptyList(), clientTs = ts, createdAt = stamp(), expiresIn = seconds,
+                ),
+            )
+        }
+        ctx.emit(EngineEvent.ConversationChanged(conversationId))
+        return id
+    }
+
     /** Re-queues a FAILED outgoing message. */
     suspend fun retry(messageId: String) {
         val m = ctx.store.getMessage(messageId) ?: return
@@ -180,7 +257,7 @@ internal class SendPipeline(private val ctx: EngineContext, private val director
                     OutboxAttachment(it, a.mime, a.name, a.kind, a.width, a.height, a.durationMs, a.thumbnail)
                 }
             },
-            clientTs = m.clientTs, createdAt = stamp(),
+            clientTs = m.clientTs, createdAt = stamp(), forwarded = m.forwarded, expiresIn = m.expiresIn,
         )
         ctx.store.transaction {
             ctx.store.updateMessage(m.id) { it.copy(status = MessageStatus.PENDING, failureReason = null) }
@@ -212,6 +289,11 @@ internal class SendPipeline(private val ctx: EngineContext, private val director
         var pending = 0
         var offline = false
         val entries = ctx.store.getOutbox()
+        try {
+            retryPendingTimerPatches()
+        } catch (e: ApiException) {
+            if (e.isLoggedOut) throw e
+        }
         for ((index, entry) in entries.withIndex()) {
             when (val r = sendEntry(entry)) {
                 SendOutcome.Sent -> sent++
@@ -252,13 +334,14 @@ internal class SendPipeline(private val ctx: EngineContext, private val director
                     ctx.store.putOutbox(entry)
                 }
                 val request = SendMessageRequest(
-                    id = entry.messageId, conversationId = entry.conversationId, kind = entry.kind,
+                    id = entry.messageId, conversationId = entry.conversationId,
+                    kind = serverKind(entry),
                     targetMessageId = entry.targetMessageId, clientTs = entry.clientTs,
                     attachmentIds = entry.attachments.mapNotNull { it.uploadedId }, envelopes = envelopes,
                 )
                 try {
                     val response = ctx.api.sendMessage(request)
-                    markSent(entry, response.message.seq, response.message.serverTs)
+                    afterSent(entry, response.message.seq, response.message.serverTs)
                     return SendOutcome.Sent
                 } catch (e: ApiException.MismatchedDevices) {
                     lastError = "mismatched_devices"
@@ -318,6 +401,7 @@ internal class SendPipeline(private val ctx: EngineContext, private val director
             if (entry.kind == MessageKind.MESSAGE) {
                 ctx.store.updateMessage(entry.messageId) { it.copy(status = MessageStatus.FAILED, failureReason = reason) }
             }
+            if (entry.kind == MessageKind.REACTION) dropUnsentReaction(entry)
         }
         ctx.emit(EngineEvent.MessageChanged(entry.conversationId, entry.targetMessageId ?: entry.messageId))
         return SendOutcome.Failed(reason)
@@ -337,9 +421,60 @@ internal class SendPipeline(private val ctx: EngineContext, private val director
                     }
                 }
             }
+            if (entry.kind == MessageKind.REACTION) {
+                // The reaction now has its place in the server's order (it was shown as unsent until now).
+                val me = ctx.requireAccount().userId
+                val own = ctx.store.getReaction(entry.targetMessageId!!, me)
+                if (own != null && own.seq == null && own.at == entry.clientTs) ctx.store.putReaction(own.copy(seq = seq))
+            }
+            if (entry.kind == OutboxKind.TIMER) {
+                val own = ctx.store.getTimer(entry.conversationId)
+                if (own != null && own.seq == null && own.at == entry.clientTs) ctx.store.putTimer(own.copy(seq = seq))
+            }
             ctx.store.removeOutbox(entry.messageId)
         }
         ctx.emit(EngineEvent.MessageChanged(entry.conversationId, entry.targetMessageId ?: entry.messageId))
+    }
+
+    /** A timer change is an ordinary `message` for the server; everything else is sent under its own kind. */
+    private fun serverKind(entry: OutboxEntry): String = if (entry.kind == OutboxKind.TIMER) MessageKind.MESSAGE else entry.kind
+
+    private suspend fun afterSent(entry: OutboxEntry, seq: Long, serverTs: Long) {
+        markSent(entry, seq, serverTs)
+        if (entry.kind == OutboxKind.TIMER) patchServerTimer(entry.conversationId, entry.expiresIn ?: 0L)
+    }
+
+    private suspend fun dropUnsentReaction(entry: OutboxEntry) {
+        val me = ctx.requireAccount().userId
+        val own = ctx.store.getReaction(entry.targetMessageId ?: return, me)
+        if (own != null && own.seq == null && own.at == entry.clientTs) ctx.store.removeReaction(own.messageId, me)
+    }
+
+    /**
+     * `PATCH /conversations/{id}` with the timer, after its encrypted message was accepted. The server only prunes with it
+     * (SECURITY.md), so a failure never undoes the change: it is remembered and tried again on the next pass.
+     */
+    private suspend fun patchServerTimer(conversationId: String, seconds: Long) {
+        val key = PENDING_TIMER_PATCH + conversationId
+        try {
+            ctx.api.updateConversation(conversationId, disappearingSeconds = seconds.takeIf { it > 0 }, clearDisappearing = seconds == 0L)
+            ctx.store.setMeta(key, null)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: IOException) {
+            ctx.store.setMeta(key, seconds.toString())
+        } catch (e: ApiException) {
+            // 403 for a member who may not (groups: admins only), 404, 422: not worth repeating. Sessions ending surface elsewhere.
+            if (e is ApiException.Server || e is ApiException.RateLimited) ctx.store.setMeta(key, seconds.toString())
+            else ctx.store.setMeta(key, null)
+        }
+    }
+
+    private suspend fun retryPendingTimerPatches() {
+        for (c in ctx.store.getConversations()) {
+            val seconds = ctx.store.getMeta(PENDING_TIMER_PATCH + c.id)?.toLongOrNull() ?: continue
+            patchServerTimer(c.id, seconds)
+        }
     }
 
     // --- content and envelopes ----------------------------------------------------------------------------------------
@@ -362,9 +497,17 @@ internal class SendPipeline(private val ctx: EngineContext, private val director
                 type = ContentType.DELETE, conversationId = entry.conversationId,
                 messageId = entry.messageId, targetMessageId = entry.targetMessageId,
             )
+            MessageKind.REACTION -> Content(
+                type = ContentType.REACTION, emoji = entry.text, remove = true.takeIf { entry.remove },
+                conversationId = entry.conversationId, messageId = entry.messageId, targetMessageId = entry.targetMessageId,
+            )
+            OutboxKind.TIMER -> Content(
+                type = ContentType.TIMER, seconds = entry.expiresIn, conversationId = entry.conversationId, messageId = entry.messageId,
+            )
             else -> Content(
                 type = ContentType.TEXT, text = entry.text, attachments = refs, replyTo = entry.replyTo,
                 conversationId = entry.conversationId, messageId = entry.messageId,
+                expiresIn = entry.expiresIn, forwarded = true.takeIf { entry.forwarded },
             )
         }
         if (ContentCodec.encode(content).size > MAX_CONTENT_BYTES) {
@@ -427,7 +570,11 @@ internal class SendPipeline(private val ctx: EngineContext, private val director
             val tmp = File.createTempFile("up-", ".enc", ctx.config.tempDir)
             try {
                 val enc = withContext(ctx.config.ioDispatcher) { AttachmentCipher.encryptFile(src, tmp) }
-                val up = ctx.api.uploadAttachment(StreamingRequestBody.of(tmp), AttachmentPurpose.MESSAGE, enc.sha256Hex)
+                val up = if (tmp.length() > ctx.config.resumableUploadThreshold) {
+                    uploadResumable(tmp, enc.sha256Hex)
+                } else {
+                    ctx.api.uploadAttachment(StreamingRequestBody.of(tmp), AttachmentPurpose.MESSAGE, enc.sha256Hex)
+                }
                 if (up.sha256.isNotEmpty() && !up.sha256.equals(enc.sha256Hex, ignoreCase = true)) {
                     throw IOException("Server stored different bytes than uploaded")
                 }
@@ -450,11 +597,52 @@ internal class SendPipeline(private val ctx: EngineContext, private val director
         return entry
     }
 
+    /**
+     * Uploads [file] (already encrypted) in chunks through `/attachments/uploads`. A chunk that breaks off is not lost: the
+     * server's offset is asked for and the upload continues from there (`409 offset_mismatch` names it too). Gives up after a
+     * few failures in a row; the next pass then starts a new session with a new key.
+     */
+    @Suppress("ThrowsCount") // each way the upload can end badly has its own exception
+    private suspend fun uploadResumable(file: File, sha256Hex: String): UploadedAttachment {
+        val size = file.length()
+        val session = ctx.api.startUpload(StartUploadRequest(size = size, sha256 = sha256Hex))
+        val chunkSize = minOf(ctx.config.uploadChunkBytes.toLong(), session.maxChunkBytes).coerceAtLeast(1).toInt()
+        var offset = session.offset
+        var failures = 0
+        RandomAccessFile(file, "r").use { raf ->
+            while (true) {
+                val length = minOf(chunkSize.toLong(), size - offset).toInt()
+                if (length <= 0) throw IOException("Upload offset $offset is beyond the file")
+                val bytes = ByteArray(length)
+                withContext(ctx.config.ioDispatcher) { raf.seek(offset); raf.readFully(bytes) }
+                try {
+                    when (val r = ctx.api.uploadChunk(session.uploadId, offset, bytes)) {
+                        is UploadProgress.Finished -> return r.attachment
+                        is UploadProgress.Partial -> offset = r.offset
+                    }
+                    failures = 0
+                } catch (e: ApiException.OffsetMismatch) {
+                    if (++failures > MAX_CHUNK_FAILURES) throw e
+                    offset = e.serverOffset ?: ctx.api.uploadStatus(session.uploadId).offset
+                } catch (e: IOException) {
+                    if (++failures > MAX_CHUNK_FAILURES) throw e
+                    offset = ctx.api.uploadStatus(session.uploadId).offset // may itself throw: then the pass retries later
+                } catch (e: ApiException.Conflict) {
+                    if (e.code != "upload_busy" || ++failures > MAX_CHUNK_FAILURES) throw e
+                    kotlinx.coroutines.delay(100L * failures)
+                }
+            }
+        }
+        @Suppress("UNREACHABLE_CODE") throw IllegalStateException()
+    }
+
     private class AttachmentSourceMissing(path: String) : Exception("Attachment source missing: $path")
 
     companion object {
         const val MAX_ATTACHMENTS = 10
         const val MAX_TEXT_BYTES = 40_000
+        private const val MAX_CHUNK_FAILURES = 5
+        private const val PENDING_TIMER_PATCH = "pending_timer_patch:"
 
         /** Padded plaintext limit; an envelope body may be 64 KiB and libsignal adds ~100 bytes of overhead. */
         const val MAX_CONTENT_BYTES = 60_000

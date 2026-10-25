@@ -66,6 +66,11 @@ data class Conversation(
     @SerialName("my_read_seq") val myReadSeq: Long = 0,
     @SerialName("unread_count") val unreadCount: Int = 0,
     val members: List<ConversationMember> = emptyList(),
+    /**
+     * The server's pruning timer. Untrusted for anything on the phone: it must never delete local history (SECURITY.md,
+     * "Disappearing messages"); only encrypted `timer` content from a member sets the phone's own timer.
+     */
+    @SerialName("disappearing_seconds") val disappearingSeconds: Long? = null,
 )
 
 object EnvelopeType {
@@ -91,6 +96,7 @@ object MessageKind {
     const val MESSAGE = "message"
     const val EDIT = "edit"
     const val DELETE = "delete"
+    const val REACTION = "reaction"
 }
 
 @Serializable
@@ -108,6 +114,8 @@ data class Message(
     @SerialName("attachment_ids") val attachmentIds: List<String> = emptyList(),
     val deleted: Boolean = false,
     val envelope: MessageEnvelope? = null,
+    /** The server's pruning time; never used for local deletion (see [Conversation.disappearingSeconds]). */
+    @SerialName("expires_at") val expiresAt: Long? = null,
 )
 
 // ---------------------------------------------------------------------------------------------------------
@@ -127,6 +135,8 @@ data class ErrorBody(
     val message: String = "",
     @SerialName("missing_devices") val missingDevices: List<DeviceRef> = emptyList(),
     @SerialName("extra_devices") val extraDevices: List<DeviceRef> = emptyList(),
+    /** Only on `409 offset_mismatch` of a resumable upload: the offset the server expects. */
+    val offset: Long? = null,
 )
 
 // ---------------------------------------------------------------------------------------------------------
@@ -318,6 +328,32 @@ object AttachmentPurpose {
     const val MESSAGE = "message"
     const val AVATAR = "avatar"
 }
+
+/** `POST /attachments/uploads` and `GET /attachments/uploads/{id}`: where a resumable upload stands. */
+@Serializable
+data class UploadSession(
+    @SerialName("upload_id") val uploadId: String,
+    val offset: Long = 0,
+    val size: Long = 0,
+    @SerialName("expires_at") val expiresAt: Long = 0,
+    @SerialName("max_chunk_bytes") val maxChunkBytes: Long = 8L * 1024 * 1024,
+)
+
+/** Answer of a chunk upload: [UploadedAttachment] after the last byte, else the new [offset]. */
+sealed interface UploadProgress {
+    data class Partial(val offset: Long) : UploadProgress
+    data class Finished(val attachment: UploadedAttachment) : UploadProgress
+}
+
+@Serializable
+data class UploadOffset(val offset: Long = 0)
+
+@Serializable
+data class StartUploadRequest(
+    val size: Long,
+    val purpose: String = AttachmentPurpose.MESSAGE,
+    val sha256: String? = null,
+)
 
 @Serializable
 data class UploadedAttachment(

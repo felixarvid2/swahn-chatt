@@ -9,8 +9,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import androidx.sqlite.db.SupportSQLiteOpenHelper
 
 /**
- * The one database of the app. Version 4 (1: first release; 2: `drafts`; 3: `message_fts` search index, `conversation_settings`;
- * 4: `message_receipts`, `local_deletions`).
+ * The one database of the app. Version 5 (1: first release; 2: `drafts`; 3: `message_fts` search index, `conversation_settings`;
+ * 4: `message_receipts`, `local_deletions`; 5: `reactions`, `conversation_timers`, columns for forwarded / imported /
+ * disappearing messages and timer notices).
  *
  * Schema changes: bump [version], add a `Migration` to [MIGRATIONS], and extend `MigrationTest` (the exported schema JSON
  * files in `app/schemas/` are the test fixtures: commit the new one).
@@ -22,7 +23,7 @@ import androidx.sqlite.db.SupportSQLiteOpenHelper
         AccountEntity::class, MetaEntity::class, TokenEntity::class, SyncStateEntity::class,
         UserEntity::class, DeviceEntity::class, ConversationEntity::class, MemberEntity::class,
         MessageEntity::class, OutboxEntity::class, DraftEntity::class, MessageFtsEntity::class, ConversationSettingsEntity::class,
-        MessageReceiptEntity::class, LocalDeletionEntity::class,
+        MessageReceiptEntity::class, LocalDeletionEntity::class, ReactionEntity::class, ConversationTimerEntity::class,
         SignalIdentityEntity::class, SignalPreKeyEntity::class, SignalSignedPreKeyEntity::class,
         SignalKyberPreKeyEntity::class, SignalLastResortUsedEntity::class, SignalSessionEntity::class,
         SignalRemoteIdentityEntity::class, SignalCounterEntity::class,
@@ -35,7 +36,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun uiDao(): UiDao
 
     companion object {
-        const val VERSION = 4
+        const val VERSION = 5
         const val FILE_NAME = "familychat.db"
 
         /** 1 -> 2: the unsent composer text per conversation. Nothing else changes, so no existing row is touched. */
@@ -76,8 +77,31 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * 4 -> 5: reactions, the local disappearing-messages timer, and the columns the new features need. Additive only: two
+         * new tables, and `ALTER TABLE ... ADD COLUMN` on `messages` and `outbox` with defaults that mean "as before"
+         * (not forwarded, not imported, no timer, no removal time). No existing row is rewritten; the search index and its
+         * triggers do not involve the new columns. Messages from before version 5 never expire (they have no `expires_in`).
+         */
+        @Suppress("MaxLineLength") // SQL, copied from the exported 5.json
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS `reactions` (`messageId` TEXT NOT NULL, `userId` TEXT NOT NULL, `conversationId` TEXT NOT NULL, `emoji` TEXT, `seq` INTEGER, `at` INTEGER NOT NULL, PRIMARY KEY(`messageId`, `userId`))")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_reactions_conversationId` ON `reactions` (`conversationId`)")
+                db.execSQL("CREATE TABLE IF NOT EXISTS `conversation_timers` (`conversationId` TEXT NOT NULL, `seconds` INTEGER NOT NULL, `setBy` TEXT NOT NULL, `seq` INTEGER, `at` INTEGER NOT NULL, PRIMARY KEY(`conversationId`))")
+                db.execSQL("ALTER TABLE `messages` ADD COLUMN `forwarded` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE `messages` ADD COLUMN `imported` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE `messages` ADD COLUMN `expiresIn` INTEGER")
+                db.execSQL("ALTER TABLE `messages` ADD COLUMN `expireAt` INTEGER")
+                db.execSQL("ALTER TABLE `messages` ADD COLUMN `systemValue` INTEGER")
+                db.execSQL("ALTER TABLE `outbox` ADD COLUMN `forwarded` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE `outbox` ADD COLUMN `expiresIn` INTEGER")
+                db.execSQL("ALTER TABLE `outbox` ADD COLUMN `remove` INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
         /** Migrations from older versions; every shipped version needs one (see `MigrationTest`). */
-        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
 
         /** Durable ratchet writes: a lost libsignal step cannot be recovered, so never trade `synchronous` for speed. */
         private val durability = object : Callback() {

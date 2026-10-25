@@ -18,6 +18,9 @@ class TestClient(
     workers: Boolean = false,
     val store: LocalStore = InMemoryLocalStore(),
     val protocol: InMemoryProtocolStorage = InMemoryProtocolStorage(),
+    clock: () -> Long = System::currentTimeMillis,
+    resumableThreshold: Long = 8L * 1024 * 1024,
+    chunkBytes: Int = 8 * 1024 * 1024,
 ) {
     val tokens = InMemoryTokenProvider()
     val dir: File = Files.createTempDirectory("fc-$name").toFile().also { it.deleteOnExit() }
@@ -25,7 +28,8 @@ class TestClient(
         store, protocol, tokens,
         EngineConfig(
             deviceName = "$name phone", attachmentDir = File(dir, "att"), tempDir = File(dir, "tmp"),
-            allowInsecureLan = true, startWorkers = workers, typingTimeoutMs = 1_500,
+            allowInsecureLan = true, startWorkers = workers, typingTimeoutMs = 1_500, clock = clock,
+            resumableUploadThreshold = resumableThreshold, uploadChunkBytes = chunkBytes,
         ),
         scope,
         connectionFactory = { server.connect() },

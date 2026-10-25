@@ -42,6 +42,7 @@ object AppModule {
         transfer = File(context.filesDir, "transfer"),
         cache = context.cacheDir,
         database = context.getDatabasePath(AppDatabase.FILE_NAME),
+        outgoing = File(context.filesDir, "outgoing"),
     )
 
     @Provides @Singleton
@@ -73,6 +74,7 @@ object AppModule {
             deviceName = defaultDeviceName(),
             attachmentDir = dirs.attachments,
             tempDir = dirs.transfer,
+            forwardDir = dirs.outgoing ?: File(dirs.transfer, "forward"),
             allowInsecureLan = BuildConfig.ALLOW_INSECURE_LAN,
         ),
         scope = scope,

@@ -7,6 +7,15 @@ object ContentType {
     const val TEXT = "text"
     const val EDIT = "edit"
     const val DELETE = "delete"
+
+    /** A reaction to a message (sent as message kind `reaction`). */
+    const val REACTION = "reaction"
+
+    /** A change of the conversation's disappearing-messages timer (sent as an ordinary `message`). */
+    const val TIMER = "timer"
+
+    /** The types this app version understands; anything else is well-formed content from a newer app (see [ContentCodec]). */
+    val KNOWN: Set<String> = setOf(TEXT, EDIT, DELETE, REACTION, TIMER)
 }
 
 object AttachmentKind {
@@ -50,7 +59,11 @@ data class AttachmentRef(
  * in [targetMessageId]. The receiver rejects the message when they differ from the event it arrived in.
  *
  * `type = "edit"`: [text] is the new text. `type = "delete"`: only the binding fields are set. [replyTo] is the id of
- * the message this one replies to.
+ * the message this one replies to. `type = "reaction"`: [targetMessageId] is the message reacted to, [emoji] the reaction,
+ * [remove] true when the reaction is taken back. `type = "timer"`: [seconds] is the new disappearing-messages timer (0: off).
+ *
+ * Every field added after version 2 shipped is optional and omitted when null, so older apps ignore it: [expiresIn]
+ * (seconds a text message lives on the receiver's phone once displayed), [forwarded].
  */
 @Serializable
 data class Content(
@@ -62,9 +75,24 @@ data class Content(
     @SerialName("conversation_id") val conversationId: String? = null,
     @SerialName("message_id") val messageId: String? = null,
     @SerialName("target_message_id") val targetMessageId: String? = null,
+    val emoji: String? = null,
+    val remove: Boolean? = null,
+    val seconds: Long? = null,
+    @SerialName("expires_in") val expiresIn: Long? = null,
+    val forwarded: Boolean? = null,
 ) {
+    /** True for a type this app version knows how to apply. */
+    val isKnownType: Boolean get() = type in ContentType.KNOWN
+
     companion object {
         const val VERSION = 2
+
+        /** Shortest and longest disappearing-messages timer, the server's own limits (docs/API.md). */
+        const val MIN_TIMER_SECONDS = 300L
+        const val MAX_TIMER_SECONDS = 31_536_000L
+
+        /** 0 is "off". */
+        fun isValidTimer(seconds: Long?): Boolean = seconds != null && (seconds == 0L || seconds in MIN_TIMER_SECONDS..MAX_TIMER_SECONDS)
     }
 }
 
@@ -76,12 +104,17 @@ object ContentCodec {
     /**
      * @throws InvalidPaddingException on bad padding
      * @throws kotlinx.serialization.SerializationException if the JSON is malformed
-     * @throws IllegalArgumentException on an unsupported version, an unknown type, or missing/inconsistent binding fields
+     * @throws IllegalArgumentException on an unsupported version, malformed content of a known type, or missing binding fields
+     *
+     * Content of a type this version does not know (a newer app's) is returned as it is when it is well-formed: version 2
+     * and the binding fields present. It is the caller's job to look at [Content.isKnownType] and to check the binding to
+     * the event; nothing about an unknown type is interpreted here.
      */
     fun decode(padded: ByteArray): Content {
         val json = Padding.unpad(padded).toString(Charsets.UTF_8)
         val content = FamilyChatJson.decodeFromString(Content.serializer(), json)
         require(content.v == Content.VERSION) { "unsupported content version ${content.v}" }
+        require(content.type.isNotEmpty()) { "content has no type" }
         require(!content.conversationId.isNullOrEmpty()) { "content has no conversation_id" }
         require(!content.messageId.isNullOrEmpty()) { "content has no message_id" }
         when (content.type) {
@@ -91,7 +124,16 @@ object ContentCodec {
                 require(!content.targetMessageId.isNullOrEmpty()) { "delete without target_message_id" }
                 require(content.text == null && content.attachments.isEmpty()) { "a delete carries no content" }
             }
-            else -> throw IllegalArgumentException("unknown content type '${content.type}'")
+            ContentType.REACTION -> {
+                require(!content.targetMessageId.isNullOrEmpty()) { "reaction without target_message_id" }
+                require(Emoji.isValid(content.emoji)) { "reaction without a single valid emoji" }
+                require(content.text == null && content.attachments.isEmpty()) { "a reaction carries no content" }
+            }
+            ContentType.TIMER -> {
+                require(Content.isValidTimer(content.seconds)) { "timer without a valid seconds value" }
+                require(content.targetMessageId == null) { "a timer has no target" }
+            }
+            else -> Unit // a newer app's type: well-formed and bound, nothing more is known about it
         }
         return content
     }

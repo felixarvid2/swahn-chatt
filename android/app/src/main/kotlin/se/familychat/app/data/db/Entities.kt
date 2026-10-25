@@ -1,5 +1,6 @@
 package se.familychat.app.data.db
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.Fts4
 import androidx.room.FtsOptions
@@ -115,6 +116,16 @@ data class MessageEntity(
     val systemDeviceName: String?,
     val pendingEnvelopeType: String?,
     val pendingEnvelopeBody: String?,
+    /** Added in version 5: sent on from another conversation. */
+    @ColumnInfo(defaultValue = "0") val forwarded: Boolean = false,
+    /** Added in version 5: merged in from an exported history file. */
+    @ColumnInfo(defaultValue = "0") val imported: Boolean = false,
+    /** Added in version 5: seconds the message lives once displayed (the sender's encrypted `expires_in`), null: no timer. */
+    val expiresIn: Long? = null,
+    /** Added in version 5: when it is removed from this phone (epoch ms); set when it is first displayed here. */
+    val expireAt: Long? = null,
+    /** Added in version 5: the number a system notice is about (the new timer in seconds for `timer_changed`). */
+    val systemValue: Long? = null,
 )
 
 @Entity(tableName = "outbox")
@@ -133,6 +144,12 @@ data class OutboxEntity(
     val attempts: Int,
     val lastError: String?,
     val createdAt: Long,
+    /** Added in version 5. */
+    @ColumnInfo(defaultValue = "0") val forwarded: Boolean = false,
+    /** Added in version 5: content `expires_in` of a message; the new timer of a `timer` entry. */
+    val expiresIn: Long? = null,
+    /** Added in version 5: a reaction that takes the emoji back. */
+    @ColumnInfo(defaultValue = "0") val remove: Boolean = false,
 )
 
 /**
@@ -198,6 +215,36 @@ data class LocalDeletionEntity(
     @PrimaryKey val messageId: String,
     val conversationId: String,
     val deletedAt: Long,
+)
+
+/**
+ * A member's reaction to a message (added in database version 5). One row per member and message; the highest `seq` wins and
+ * an [emoji] of null means it was taken back (the row stays so an older event cannot bring it back). [seq] is null while our
+ * own reaction waits in the outbox. Removed with the message and with the conversation.
+ */
+@Entity(tableName = "reactions", primaryKeys = ["messageId", "userId"], indices = [Index("conversationId")])
+data class ReactionEntity(
+    val messageId: String,
+    val userId: String,
+    val conversationId: String,
+    val emoji: String?,
+    val seq: Long?,
+    val at: Long,
+)
+
+/**
+ * The disappearing-messages timer of a conversation as this phone applies it (added in database version 5). Written only
+ * from encrypted `timer` content of a member (or by this phone for its own change), never from the server's
+ * `disappearing_seconds`, which is not stored at all. A separate table, like [ConversationSettingsEntity], because the sync
+ * rewrites the `conversations` rows.
+ */
+@Entity(tableName = "conversation_timers")
+data class ConversationTimerEntity(
+    @PrimaryKey val conversationId: String,
+    val seconds: Long,
+    val setBy: String,
+    val seq: Long?,
+    val at: Long,
 )
 
 // --- libsignal state (ProtocolStorage) ---------------------------------------------------------------------------

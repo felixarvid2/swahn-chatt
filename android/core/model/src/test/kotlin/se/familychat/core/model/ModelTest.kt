@@ -99,7 +99,8 @@ class ContentTest {
         assertFailsWith<IllegalArgumentException> {
             decodeJson("""{"v":2,"type":"text","text":"x","conversation_id":"c","message_id":"m","target_message_id":"t"}""")
         }
-        assertFailsWith<IllegalArgumentException> { decodeJson("""{"v":2,"type":"bogus","conversation_id":"c","message_id":"m"}""") }
+        // a type this version does not know is not an error (a newer app's content), see ContentForwardCompatibilityTest
+        assertTrue(!decodeJson("""{"v":2,"type":"bogus","conversation_id":"c","message_id":"m"}""").isKnownType)
         val ok = decodeJson("""{"v":2,"type":"delete","conversation_id":"c","message_id":"m","target_message_id":"t"}""")
         assertEquals(ContentType.DELETE, ok.type)
         assertEquals("t", ok.targetMessageId)
@@ -107,10 +108,11 @@ class ContentTest {
 }
 
 /**
- * Older apps stay installed, so what a newer app sends must not break them. Pinned here: unknown JSON fields on a known type
- * are ignored (additive fields are safe), an unknown content *type* is refused with an IllegalArgumentException, which the
- * crypto layer turns into "could not decrypt" for that one message (see `MessageCrypto.decryptContent`): it is never applied
- * and never crashes. A new content type therefore needs a note in the docs that older apps will show a placeholder for it.
+ * Older apps stay installed and newer ones will come: what a newer app sends must not break this one. Pinned here: unknown
+ * JSON fields on a known type are ignored (additive fields are safe), and content of a type this version does not know is
+ * accepted by the codec when it is well-formed and bound (version 2, conversation and message id), so the receiver can consume
+ * it without showing "could not decrypt". Malformed content is still refused. A new content type still shows a placeholder
+ * on apps older than 0.4, which cannot be fixed afterwards.
  */
 class ContentForwardCompatibilityTest {
     private fun decodeJson(json: String) = ContentCodec.decode(Padding.pad(json.toByteArray()))
@@ -123,18 +125,111 @@ class ContentForwardCompatibilityTest {
     }
 
     @Test
-    fun `an unknown content type is refused without crashing, whatever else it carries`() {
-        for (type in listOf("poll", "reaction", "pin", "location", "")) {
-            val e = assertFailsWith<IllegalArgumentException>(type) {
-                decodeJson("""{"v":2,"type":"$type","text":"x","conversation_id":"c","message_id":"m","target_message_id":"t","poll":{"q":"?"}}""")
-            }
-            assertTrue(e.message!!.contains("unknown content type"))
+    fun `well-formed bound content of an unknown type is accepted and marked unknown`() {
+        for (type in listOf("poll", "pin", "location", "sticker")) {
+            val c = decodeJson("""{"v":2,"type":"$type","text":"x","conversation_id":"c","message_id":"m","target_message_id":"t","poll":{"q":"?"}}""")
+            assertEquals(type, c.type)
+            assertTrue(!c.isKnownType, type)
+            assertEquals("c", c.conversationId)
+            assertEquals("m", c.messageId)
         }
+    }
+
+    @Test
+    fun `unknown types are still refused when unbound or malformed`() {
+        assertFailsWith<IllegalArgumentException> { decodeJson("""{"v":2,"type":"poll","message_id":"m"}""") }
+        assertFailsWith<IllegalArgumentException> { decodeJson("""{"v":2,"type":"poll","conversation_id":"c"}""") }
+        assertFailsWith<IllegalArgumentException> { decodeJson("""{"v":2,"type":"poll","conversation_id":"","message_id":"m"}""") }
+        assertFailsWith<IllegalArgumentException> { decodeJson("""{"v":2,"type":"","conversation_id":"c","message_id":"m"}""") }
+        assertFailsWith<IllegalArgumentException> { decodeJson("""{"v":3,"type":"poll","conversation_id":"c","message_id":"m"}""") }
+        assertFailsWith<Exception> { decodeJson("""{"v":2,"type":"poll","conversation_id":"c","message_id":"m""") }
+        assertFailsWith<Exception> { decodeJson("""{"v":2,"type":7,"conversation_id":"c","message_id":"m"}""") }
+        assertFailsWith<InvalidPaddingException> { ContentCodec.decode(ByteArray(7)) }
     }
 
     @Test
     fun `a content version this app does not know is refused`() {
         assertFailsWith<IllegalArgumentException> { decodeJson("""{"v":3,"type":"text","text":"x","conversation_id":"c","message_id":"m"}""") }
+    }
+
+    @Test
+    fun `new optional fields are omitted from the wire when unset so older apps see the content they know`() {
+        val json = FamilyChatJson.parseToJsonElement(
+            Padding.unpad(ContentCodec.encode(Content(text = "x", conversationId = "c", messageId = "m"))).decodeToString(),
+        ).jsonObject
+        assertEquals(setOf("v", "type", "text", "attachments", "conversation_id", "message_id"), json.keys)
+    }
+}
+
+class ReactionAndTimerContentTest {
+    private fun decodeJson(json: String) = ContentCodec.decode(Padding.pad(json.toByteArray()))
+    private fun reaction(emoji: String?, extra: String = "") =
+        """{"v":2,"type":"reaction","emoji":${emoji?.let { "\"$it\"" }},"remove":false,"conversation_id":"c","message_id":"m","target_message_id":"t"$extra}"""
+
+    @Test
+    fun `a reaction round-trips`() {
+        val c = Content(type = ContentType.REACTION, emoji = "\uD83D\uDC4D", remove = true, conversationId = "c", messageId = "m", targetMessageId = "t")
+        assertEquals(c, ContentCodec.decode(ContentCodec.encode(c)))
+    }
+
+    @Test
+    fun `a reaction needs a target and one valid emoji and carries no text`() {
+        assertEquals("\u2764\uFE0F", decodeJson(reaction("\u2764\uFE0F")).emoji)
+        assertFailsWith<IllegalArgumentException> { decodeJson(reaction(null)) }
+        assertFailsWith<IllegalArgumentException> { decodeJson(reaction("ab")) }
+        assertFailsWith<IllegalArgumentException> { decodeJson(reaction("\uD83D\uDC4D\uD83D\uDC4D")) }
+        assertFailsWith<IllegalArgumentException> { decodeJson(reaction("\uD83D\uDC4D", ""","text":"hi"""")) }
+        assertFailsWith<IllegalArgumentException> {
+            decodeJson("""{"v":2,"type":"reaction","emoji":"\uD83D\uDC4D","conversation_id":"c","message_id":"m"}""")
+        }
+    }
+
+    @Test
+    fun `a timer needs a valid number of seconds and no target`() {
+        fun timer(seconds: String, extra: String = "") = """{"v":2,"type":"timer","seconds":$seconds,"conversation_id":"c","message_id":"m"$extra}"""
+        assertEquals(0L, decodeJson(timer("0")).seconds)
+        assertEquals(86_400L, decodeJson(timer("86400")).seconds)
+        assertFailsWith<IllegalArgumentException> { decodeJson(timer("299")) }
+        assertFailsWith<IllegalArgumentException> { decodeJson(timer("31536001")) }
+        assertFailsWith<IllegalArgumentException> { decodeJson(timer("-5")) }
+        assertFailsWith<IllegalArgumentException> { decodeJson("""{"v":2,"type":"timer","conversation_id":"c","message_id":"m"}""") }
+        assertFailsWith<IllegalArgumentException> { decodeJson(timer("300", ""","target_message_id":"t"""")) }
+    }
+
+    @Test
+    fun `expires_in and forwarded travel on text content`() {
+        val c = decodeJson("""{"v":2,"type":"text","text":"x","expires_in":3600,"forwarded":true,"conversation_id":"c","message_id":"m"}""")
+        assertEquals(3600L, c.expiresIn)
+        assertEquals(true, c.forwarded)
+    }
+}
+
+class EmojiTest {
+    @Test
+    fun `single emoji are valid`() {
+        val valid = listOf(
+            "\uD83D\uDC4D", // thumbs up
+            "\uD83D\uDC4D\uD83C\uDFFD", // with skin tone
+            "\u2764\uFE0F", // red heart
+            "\u2764", // heart without selector
+            "\uD83C\uDDF8\uD83C\uDDEA", // flag SE
+            "1\uFE0F\u20E3", // keycap 1
+            "\uD83D\uDE02", "\uD83D\uDE2E", "\uD83D\uDE22", "\uD83D\uDE4F", "\uD83D\uDD25",
+            "\uD83D\uDC68\u200D\uD83D\uDCBB", // man technologist (ZWJ)
+        )
+        for (e in valid) assertTrue(Emoji.isValid(e), e)
+    }
+
+    @Test
+    fun `text, several emoji, control characters and oversize input are refused`() {
+        val invalid = listOf(
+            "", " ", "a", "ab", "1", "\n", "\uD83D\uDC4D ", " \uD83D\uDC4D", "\uD83D\uDC4D\uD83D\uDC4D", "\uD83D\uDC4Da",
+            "\u200D", "\uD83D\uDC4D\u200D", "\uD83C\uDDF8", "\uD83C\uDDF8\uD83C\uDDEA\uD83C\uDDF8", "\uFE0F", "\u202E\uD83D\uDC4D",
+            "\uD83D\uDC68\u200D\uD83D\uDC69\u200D\uD83D\uDC67", // family: 18 bytes, over the 16-byte limit
+            "\uD83D", // lone surrogate
+        )
+        for (e in invalid) assertTrue(!Emoji.isValid(e), "should be refused: ${e.map { it.code.toString(16) }}")
+        assertTrue(!Emoji.isValid(null))
     }
 }
 

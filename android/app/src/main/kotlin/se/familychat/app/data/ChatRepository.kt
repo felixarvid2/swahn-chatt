@@ -22,6 +22,7 @@ import se.familychat.app.ui.model.SafetyUi
 import se.familychat.app.ui.model.UserUi
 import se.familychat.app.ui.model.delivery
 import se.familychat.core.client.FamilyChatEngine
+import se.familychat.core.client.Reaction
 import se.familychat.core.client.ReceiptTimes
 import se.familychat.core.client.StoredMessage
 import se.familychat.core.model.ConversationType
@@ -95,6 +96,13 @@ class ChatRepository @Inject constructor(
 
     /** One message, again whenever it changes (null: it does not exist, or was deleted on this phone). */
     fun message(id: String): Flow<StoredMessage?> = ui.observeMessage(id).map { it?.toModel() }
+
+    /** The reactions that stand in a conversation, by message id (oldest reaction first). */
+    fun reactions(conversationId: String): Flow<Map<String, List<Reaction>>> =
+        ui.observeReactions(conversationId).map { list -> list.map { it.toModel() }.groupBy { it.messageId } }.distinctUntilChanged()
+
+    /** The disappearing-messages timer this phone applies in the conversation, in seconds (0: off). */
+    fun timer(conversationId: String): Flow<Long> = ui.observeTimer(conversationId).map { it?.seconds ?: 0L }.distinctUntilChanged()
 
     /** When each member acknowledged / read one of our messages, as far as known. */
     fun receipts(messageId: String): Flow<List<ReceiptTimes>> =

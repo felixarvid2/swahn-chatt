@@ -40,6 +40,7 @@ class FakeServer {
     class ConvRec(
         val id: String, val type: String, var name: String?, val createdBy: String,
         val members: LinkedHashMap<String, MutableMember> = LinkedHashMap(),
+        var disappearingSeconds: Long? = null,
     )
 
     class MutableMember(val userId: String, var role: String, var readSeq: Long = 0)
@@ -56,6 +57,32 @@ class FakeServer {
     val queues = HashMap<String, MutableList<Event>>() // deviceId -> events
     private val deliveredPairs = HashSet<String>()
     private val attachmentBlobs = HashMap<String, ByteArray>()
+    private class UploadRec(val id: String, val size: Long, val sha256: String?, val bytes: java.io.ByteArrayOutputStream = java.io.ByteArrayOutputStream())
+    private val uploads = HashMap<String, UploadRec>()
+
+    /** Largest chunk the fake accepts (tests shrink it to force several requests). */
+    @Volatile var maxChunkBytes = 8L * 1024 * 1024
+
+    /** The next N chunk requests fail with an IOException after the server stored the chunk (a lost response). */
+    @Volatile var loseChunkResponses = 0
+
+    /** Set the next N chunk requests to fail before reaching the server. */
+    @Volatile var failChunks = 0
+
+    /** Messages (and kinds) the server stored, with the `expires_at` it computed from its own timer. */
+    val expiresAt = HashMap<String, Long?>()
+
+    /**
+     * A malicious or hacked server sets the conversation's pruning timer and tells every member's devices, with no encrypted
+     * `timer` content behind it.
+     */
+    fun serverSetsTimer(conversationId: String, seconds: Long?) {
+        synchronized(lock) {
+            val c = conversations.getValue(conversationId)
+            c.disappearingSeconds = seconds
+            pushConversation(c)
+        }
+    }
     private val realtimes = CopyOnWriteArrayList<FakeRealtime>()
 
     /** Chronological log of API calls (e.g. "sync:0", "ack:7", "send:<id>") for ordering assertions. */
@@ -68,6 +95,7 @@ class FakeServer {
     @Volatile var onAck: ((deviceId: String, cursor: Long) -> Unit)? = null
     @Volatile var corruptAttachments = false
     @Volatile var alwaysMismatch = false
+    @Volatile var patchFails = 0
 
     // --- a malicious server --------------------------------------------------------------------------------------------
     /** Rewrites the device list the server returns for a user (number remaps, injected or hidden devices). */
@@ -168,6 +196,7 @@ class FakeServer {
             c.id, c.type, c.name, null, c.createdBy, 0, 0, null, lastSeq,
             forUser?.let { c.members[it]?.readSeq } ?: 0, 0,
             c.members.values.map { ConversationMember(it.userId, it.role, 0) },
+            c.disappearingSeconds,
         )
     }
 
@@ -296,10 +325,21 @@ class FakeServer {
             convDto(c, me.userId)
         }
 
-        override suspend fun updateConversation(id: String, name: String?, avatarAttachmentId: String?, clearAvatar: Boolean): Conversation =
+        override suspend fun updateConversation(
+            id: String,
+            name: String?,
+            avatarAttachmentId: String?,
+            clearAvatar: Boolean,
+            disappearingSeconds: Long?,
+            clearDisappearing: Boolean,
+        ): Conversation =
             synchronized(lock) {
+                log += "patch:$id:${if (clearDisappearing) "null" else disappearingSeconds}"
                 val c = conversations.getValue(id)
+                if (patchFails > 0) { patchFails--; throw IOException("simulated patch failure") }
                 name?.let { c.name = it }
+                if (clearDisappearing) c.disappearingSeconds = null
+                else disappearingSeconds?.let { c.disappearingSeconds = it }
                 pushConversation(c)
                 convDto(c, me.userId)
             }
@@ -366,10 +406,18 @@ class FakeServer {
                 fun ref(id: String) = DeviceRef(devices.getValue(id).userId, id)
                 throw ApiException.MismatchedDevices("mismatch", (want - given).map(::ref), (given - want).map(::ref))
             }
-            if (r.kind != MessageKind.MESSAGE) {
+            if (r.kind == MessageKind.REACTION) {
+                val t = messages[r.targetMessageId]
+                if (t == null || t.deleted || t.kind != MessageKind.MESSAGE || t.msg.conversationId != r.conversationId) {
+                    throw ApiException.NotFound("not_found", "target")
+                }
+                if (r.attachmentIds.isNotEmpty()) throw ApiException.Invalid("invalid_request", "no attachments")
+            } else if (r.kind != MessageKind.MESSAGE) {
                 val t = messages[r.targetMessageId] ?: throw ApiException.NotFound("not_found", "target")
                 if (t.msg.senderUserId != me.userId || t.deleted) throw ApiException.NotFound("not_found", "target")
             }
+            for (id in r.attachmentIds) if (id !in attachmentBlobs) throw ApiException.Invalid("invalid_request", "unknown attachment $id")
+            expiresAt[r.id] = c.disappearingSeconds?.let { 1000 + it * 1000 }
             val msg = Message(
                 r.id, r.conversationId, me.userId, me.id, r.kind, r.targetMessageId, r.clientTs, 1000, messageSeq.incrementAndGet(),
                 r.attachmentIds, false, null,
@@ -418,6 +466,43 @@ class FakeServer {
             val id = UUID.randomUUID().toString()
             synchronized(lock) { attachmentBlobs[id] = bytes; log += "upload:$id" }
             return UploadedAttachment(id, purpose, "application/octet-stream", bytes.size.toLong(), sha, 0)
+        }
+
+        override suspend fun startUpload(request: StartUploadRequest): UploadSession = synchronized(lock) {
+            log += "upload-start:${request.size}"
+            val id = UUID.randomUUID().toString()
+            uploads[id] = UploadRec(id, request.size, request.sha256)
+            UploadSession(id, 0, request.size, 0, maxChunkBytes)
+        }
+
+        override suspend fun uploadStatus(uploadId: String): UploadSession = synchronized(lock) {
+            val u = uploads[uploadId] ?: throw ApiException.NotFound("not_found", "upload")
+            UploadSession(u.id, u.bytes.size().toLong(), u.size, 0, maxChunkBytes)
+        }
+
+        override suspend fun uploadChunk(uploadId: String, offset: Long, bytes: ByteArray): UploadProgress {
+            if (failChunks > 0) { failChunks--; throw IOException("simulated chunk failure") }
+            val result = synchronized(lock) {
+                log += "upload-chunk:$offset:${bytes.size}"
+                val u = uploads[uploadId] ?: throw ApiException.NotFound("not_found", "upload")
+                if (bytes.size > maxChunkBytes) throw ApiException.PayloadTooLarge("payload_too_large", "chunk")
+                if (offset != u.bytes.size().toLong()) throw ApiException.OffsetMismatch("offset", u.bytes.size().toLong())
+                if (offset + bytes.size > u.size) throw ApiException.PayloadTooLarge("payload_too_large", "beyond size")
+                u.bytes.write(bytes)
+                if (u.bytes.size().toLong() < u.size) {
+                    UploadProgress.Partial(u.bytes.size().toLong())
+                } else {
+                    val all = u.bytes.toByteArray()
+                    val sha = MessageDigest.getInstance("SHA-256").digest(all).joinToString("") { "%02x".format(it) }
+                    if (u.sha256 != null && u.sha256 != sha) throw ApiException.Invalid("checksum_mismatch", "x")
+                    attachmentBlobs[u.id] = all
+                    uploads.remove(u.id)
+                    log += "upload:${u.id}"
+                    UploadProgress.Finished(UploadedAttachment(u.id, "message", "application/octet-stream", all.size.toLong(), sha, 0))
+                }
+            }
+            if (loseChunkResponses > 0) { loseChunkResponses--; throw IOException("simulated lost chunk response") }
+            return result
         }
 
         override suspend fun downloadAttachment(id: String, target: File, onProgress: ((Long) -> Unit)?): Long {

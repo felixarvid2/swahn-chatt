@@ -69,6 +69,9 @@ sealed interface TransferUi {
 
     /** Outgoing: still waiting to be uploaded with the message. */
     data object Uploading : TransferUi
+
+    /** Merged in from a history export without the file: there is nothing to download (it has no key). */
+    data object Unavailable : TransferUi
 }
 
 @Immutable
@@ -98,6 +101,17 @@ data class ReplyUi(
 
 enum class UndecryptableUi { CORRUPT, RETRYABLE_IDENTITY, OTHER }
 
+/** One person's reaction, for the list of who reacted. */
+@Immutable
+data class ReactorUi(val userId: String, val name: String, val avatar: AvatarUi, val isMe: Boolean)
+
+/** All reactions with one emoji under a message: [reactors] in the order they reacted. */
+@Immutable
+data class ReactionUi(val emoji: String, val reactors: List<ReactorUi>) {
+    val count: Int get() = reactors.size
+    val mine: Boolean get() = reactors.any { it.isMe }
+}
+
 @Immutable
 data class MessageUi(
     val id: String,
@@ -125,6 +139,19 @@ data class MessageUi(
     val senderId: String = "",
     /** The sender's display name for screen readers, also in direct conversations; null for own messages. */
     val speaker: String? = null,
+    /** Reactions grouped by emoji, the most used first. */
+    val reactions: List<ReactionUi> = emptyList(),
+    /** The emoji you reacted with, if any (tapping it again takes it back). */
+    val myReaction: String? = null,
+    /** A message that has left the outbox and is not deleted: it can be reacted to and forwarded. */
+    val canReact: Boolean = false,
+    val canForward: Boolean = false,
+    /** "Vidarebefordrat": sent on from another conversation (set by the sender inside the encrypted content). */
+    val forwarded: Boolean = false,
+    /** "Importerad": merged in from an exported history file. */
+    val imported: Boolean = false,
+    /** Seconds this message lives once displayed (the sender's timer), null: it stays. */
+    val expiresIn: Long? = null,
 )
 
 enum class SystemKind {
@@ -135,6 +162,12 @@ enum class SystemKind {
     IDENTITY_CHANGED,
     MEMBER_ADDED,
     MEMBER_REMOVED,
+
+    /** [ChatRow.System.value] is the new timer in seconds (0: off). */
+    TIMER_CHANGED,
+
+    /** Content of a newer app version was ignored. */
+    UPDATE_REQUIRED,
 }
 
 sealed interface ChatRow {
@@ -163,6 +196,8 @@ sealed interface ChatRow {
         val time: Long,
         /** The notice is about this account itself (its own devices). */
         val own: Boolean = false,
+        /** The number a notice is about: the timer in seconds of [SystemKind.TIMER_CHANGED]. */
+        val value: Long = 0,
     ) : ChatRow {
         override val key get() = id
     }

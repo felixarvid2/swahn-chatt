@@ -24,7 +24,10 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Forward
 import androidx.compose.material.icons.automirrored.filled.Reply
+import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
@@ -45,6 +48,7 @@ import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -121,6 +125,10 @@ class BubbleActions(
     val onCycleVoiceSpeed: () -> Unit = {},
     /** A link in a message text was tapped; the screen confirms the address before anything is opened. */
     val onOpenLink: (String) -> Unit = {},
+    /** React with an emoji, or take your own reaction back when it is the same one. */
+    val onReact: (messageId: String, emoji: String) -> Unit = { _, _ -> },
+    /** Opens the conversation picker to forward the message. */
+    val onForward: (String) -> Unit = {},
 )
 
 /** Decodes a thumbnail from the message. It is untrusted input: refuse anything that is not a small image. */
@@ -147,6 +155,8 @@ fun MessageBubble(
     val m = row.message
     val clock = rememberClockFormatter()
     var menuOpen by remember { mutableStateOf(false) }
+    var pickerOpen by remember { mutableStateOf(false) }
+    var reactorsOpen by remember { mutableStateOf(false) }
     val scheme = MaterialTheme.colorScheme
     val container = if (m.outgoing) scheme.primaryContainer else scheme.surfaceContainerHigh
     val content = if (m.outgoing) scheme.onPrimaryContainer else scheme.onSurface
@@ -171,116 +181,164 @@ fun MessageBubble(
                     if (row.firstOfRun) Avatar(m.senderAvatar, size = 28.dp)
                 }
             }
-            Box(Modifier.widthIn(max = 320.dp)) {
-                Surface(
-                    shape = shape,
-                    color = container,
-                    contentColor = content,
-                    modifier = Modifier
-                        .clip(shape)
-                        .combinedClickable(
-                            onClick = { if (m.failed) actions.onRetry(m.id) },
-                            onLongClick = { menuOpen = true },
-                            onLongClickLabel = stringResource(R.string.message_actions),
-                        )
-                        // One spoken line per bubble (who, what, when, status); the pieces it names are hidden below.
-                        // Attachments, the quoted reply and buttons keep their own nodes. Links of the (hidden) text
-                        // are offered as actions instead.
-                        .semantics(mergeDescendants = true) {
-                            contentDescription = description
-                            // the swipe has no gesture for TalkBack: the same actions are offered here (and in the long-press menu)
-                            customActions = buildList {
-                                if (canReply) add(CustomAccessibilityAction(replyLabel) { actions.onReply(m.id); true })
-                                if (m.canShowInfo) add(CustomAccessibilityAction(infoLabel) { actions.onInfo(m.id); true })
-                                links.forEachIndexed { i, l -> add(CustomAccessibilityAction(openLinkLabels[i]) { actions.onOpenLink(l.url); true }) }
-                            }
-                        },
-                ) {
-                    Column(Modifier.padding(horizontal = 10.dp, vertical = 6.dp).width(IntrinsicSize.Max).widthIn(min = 72.dp)) {
-                        if (m.senderName != null && row.firstOfRun) {
-                            Text(
-                                m.senderName, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold,
-                                color = scheme.primary, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.clearAndSetSemantics {},
+            Column(Modifier.widthIn(max = 320.dp), horizontalAlignment = if (m.outgoing) Alignment.End else Alignment.Start) {
+                Box {
+                    Surface(
+                        shape = shape,
+                        color = container,
+                        contentColor = content,
+                        modifier = Modifier
+                            .clip(shape)
+                            .combinedClickable(
+                                onClick = { if (m.failed) actions.onRetry(m.id) },
+                                onLongClick = { menuOpen = true },
+                                onLongClickLabel = stringResource(R.string.message_actions),
                             )
-                        }
-                        when {
-                            m.deleted -> DeletedPlaceholder(content)
-                            m.undecryptable != null -> UndecryptablePlaceholder(m.undecryptable, actions.onReviewIdentity)
-                            else -> BubbleBody(m, actions, playback, content)
-                        }
-                        BubbleFooter(m, time, content)
-                        if (m.failed) {
-                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp).clearAndSetSemantics {}) {
-                                Icon(Icons.Filled.Refresh, contentDescription = null, tint = LocalStatusColors.current.failed, modifier = Modifier.size(16.dp))
+                            // One spoken line per bubble (who, what, when, status); the pieces it names are hidden below.
+                            // Attachments, the quoted reply and buttons keep their own nodes. Links of the (hidden) text
+                            // are offered as actions instead.
+                            .semantics(mergeDescendants = true) {
+                                contentDescription = description
+                                // the swipe has no gesture for TalkBack: the same actions are offered here (and in the long-press menu)
+                                customActions = buildList {
+                                    if (canReply) add(CustomAccessibilityAction(replyLabel) { actions.onReply(m.id); true })
+                                    if (m.canShowInfo) add(CustomAccessibilityAction(infoLabel) { actions.onInfo(m.id); true })
+                                    links.forEachIndexed { i, l -> add(CustomAccessibilityAction(openLinkLabels[i]) { actions.onOpenLink(l.url); true }) }
+                                }
+                            },
+                    ) {
+                        Column(Modifier.padding(horizontal = 10.dp, vertical = 6.dp).width(IntrinsicSize.Max).widthIn(min = 72.dp)) {
+                            if (m.senderName != null && row.firstOfRun) {
                                 Text(
-                                    stringResource(R.string.message_failed_retry), style = MaterialTheme.typography.labelMedium,
-                                    color = LocalStatusColors.current.failed, modifier = Modifier.padding(start = 4.dp),
+                                    m.senderName, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold,
+                                    color = scheme.primary, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.clearAndSetSemantics {},
                                 )
                             }
+                            when {
+                                m.deleted -> DeletedPlaceholder(content)
+                                m.undecryptable != null -> UndecryptablePlaceholder(m.undecryptable, actions.onReviewIdentity)
+                                else -> BubbleBody(m, actions, playback, content)
+                            }
+                            BubbleFooter(m, time, content)
+                            if (m.failed) {
+                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp).clearAndSetSemantics {}) {
+                                    Icon(
+                                        Icons.Filled.Refresh, contentDescription = null, tint = LocalStatusColors.current.failed,
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                    Text(
+                                        stringResource(R.string.message_failed_retry), style = MaterialTheme.typography.labelMedium,
+                                        color = LocalStatusColors.current.failed, modifier = Modifier.padding(start = 4.dp),
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                        if (m.canReact) {
+                            QuickReactionRow(
+                                selected = m.myReaction,
+                                onPick = { menuOpen = false; actions.onReact(m.id, it) },
+                                onMore = { menuOpen = false; pickerOpen = true },
+                            )
+                            HorizontalDivider(Modifier.padding(vertical = 4.dp))
+                        }
+                        if (canReply) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.action_reply)) },
+                                leadingIcon = { Icon(Icons.AutoMirrored.Filled.Reply, null) },
+                                onClick = { menuOpen = false; actions.onReply(m.id) },
+                            )
+                        }
+                        if (m.canForward) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.action_forward)) },
+                                leadingIcon = { Icon(Icons.AutoMirrored.Filled.Forward, null) },
+                                onClick = { menuOpen = false; actions.onForward(m.id) },
+                            )
+                        }
+                        if (m.canEdit) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.action_edit)) },
+                                leadingIcon = { Icon(Icons.Filled.Edit, null) },
+                                onClick = { menuOpen = false; actions.onEdit(m.id) },
+                            )
+                        }
+                        if (!m.text.isNullOrBlank() && !m.deleted) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.action_copy)) },
+                                leadingIcon = { Icon(Icons.Filled.ContentCopy, null) },
+                                onClick = { menuOpen = false; actions.onCopy(m.text) },
+                            )
+                        }
+                        if (m.failed) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.action_retry)) },
+                                leadingIcon = { Icon(Icons.Filled.Refresh, null) },
+                                onClick = { menuOpen = false; actions.onRetry(m.id) },
+                            )
+                        }
+                        if (m.canShowInfo) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.action_message_info)) },
+                                leadingIcon = { Icon(Icons.Filled.Info, null) },
+                                onClick = { menuOpen = false; actions.onInfo(m.id) },
+                            )
+                        }
+                        if (m.canDeleteForMe) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.action_delete_for_me)) },
+                                leadingIcon = { Icon(Icons.Filled.Delete, null) },
+                                onClick = { menuOpen = false; actions.onDeleteForMe(m.id) },
+                            )
+                        }
+                        if (m.canDelete) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.action_delete_for_everyone)) },
+                                leadingIcon = { Icon(Icons.Filled.DeleteForever, null) },
+                                onClick = { menuOpen = false; actions.onDelete(m.id) },
+                            )
                         }
                     }
                 }
-                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                    if (canReply) {
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.action_reply)) },
-                            leadingIcon = { Icon(Icons.AutoMirrored.Filled.Reply, null) },
-                            onClick = { menuOpen = false; actions.onReply(m.id) },
-                        )
-                    }
-                    if (m.canEdit) {
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.action_edit)) },
-                            leadingIcon = { Icon(Icons.Filled.Edit, null) },
-                            onClick = { menuOpen = false; actions.onEdit(m.id) },
-                        )
-                    }
-                    if (!m.text.isNullOrBlank() && !m.deleted) {
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.action_copy)) },
-                            leadingIcon = { Icon(Icons.Filled.ContentCopy, null) },
-                            onClick = { menuOpen = false; actions.onCopy(m.text) },
-                        )
-                    }
-                    if (m.failed) {
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.action_retry)) },
-                            leadingIcon = { Icon(Icons.Filled.Refresh, null) },
-                            onClick = { menuOpen = false; actions.onRetry(m.id) },
-                        )
-                    }
-                    if (m.canShowInfo) {
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.action_message_info)) },
-                            leadingIcon = { Icon(Icons.Filled.Info, null) },
-                            onClick = { menuOpen = false; actions.onInfo(m.id) },
-                        )
-                    }
-                    if (m.canDeleteForMe) {
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.action_delete_for_me)) },
-                            leadingIcon = { Icon(Icons.Filled.Delete, null) },
-                            onClick = { menuOpen = false; actions.onDeleteForMe(m.id) },
-                        )
-                    }
-                    if (m.canDelete) {
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.action_delete_for_everyone)) },
-                            leadingIcon = { Icon(Icons.Filled.DeleteForever, null) },
-                            onClick = { menuOpen = false; actions.onDelete(m.id) },
-                        )
-                    }
-                }
+                // reactions sit under the bubble, tucked against its corner
+                ReactionsRow(m.reactions, onClick = { reactorsOpen = true }, modifier = Modifier.padding(horizontal = 6.dp))
             }
         }
+    }
+    if (pickerOpen) {
+        ReactionPickerDialog(m.myReaction, onPick = { pickerOpen = false; actions.onReact(m.id, it) }, onDismiss = { pickerOpen = false })
+    }
+    if (reactorsOpen && m.reactions.isNotEmpty()) {
+        ReactorsDialog(m.reactions, onRemoveMine = { reactorsOpen = false; actions.onReact(m.id, it) }, onDismiss = { reactorsOpen = false })
     }
 }
 
 @Composable
 private fun BubbleBody(m: MessageUi, actions: BubbleActions, playback: PlaybackUi, content: Color) {
+    if (m.forwarded || m.imported) {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 2.dp).clearAndSetSemantics {}) {
+            Icon(
+                if (m.forwarded) Icons.AutoMirrored.Filled.Forward else Icons.Filled.History, contentDescription = null,
+                tint = content.copy(alpha = 0.7f), modifier = Modifier.size(14.dp),
+            )
+            Text(
+                stringResource(if (m.forwarded) R.string.message_forwarded else R.string.message_imported),
+                style = MaterialTheme.typography.labelSmall, fontStyle = FontStyle.Italic, color = content.copy(alpha = 0.8f),
+                modifier = Modifier.padding(start = 4.dp),
+            )
+        }
+    }
     m.reply?.let { ReplyQuote(it, onClick = { actions.onJumpTo(it.messageId) }) }
+    // Two or more photos and videos form one grid; a single one, voice messages and files keep their own views.
+    val media = m.attachments.filter { it.kind == AttachmentKindUi.IMAGE || it.kind == AttachmentKindUi.VIDEO }
+    if (media.size >= 2) {
+        MediaGrid(m.id, media, actions)
+        Spacer(Modifier.height(4.dp))
+    }
     for (a in m.attachments) {
+        if (media.size >= 2 && a in media) continue
         AttachmentView(m.id, a, actions, playback)
         Spacer(Modifier.height(4.dp))
     }
@@ -337,6 +395,10 @@ private fun BubbleFooter(m: MessageUi, time: String, content: Color) {
         horizontalArrangement = Arrangement.End,
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        if (m.expiresIn != null && !m.deleted) {
+            Icon(Icons.Filled.Timer, contentDescription = null, tint = content.copy(alpha = 0.7f), modifier = Modifier.size(12.dp))
+            Spacer(Modifier.width(4.dp))
+        }
         if (m.edited && !m.deleted) {
             Text(stringResource(R.string.message_edited), style = MaterialTheme.typography.labelSmall, color = content.copy(alpha = 0.7f))
             Spacer(Modifier.width(6.dp))
@@ -387,6 +449,8 @@ fun bubbleDescription(m: MessageUi, time: String): String {
         m.deleted -> parts += stringResource(R.string.message_deleted)
         m.undecryptable != null -> parts += stringResource(R.string.message_undecryptable)
         else -> {
+            if (m.forwarded) parts += stringResource(R.string.message_forwarded)
+            if (m.imported) parts += stringResource(R.string.message_imported)
             m.reply?.let { parts += stringResource(R.string.bubble_reply_to, it.senderName ?: stringResource(R.string.you)) }
             for (a in m.attachments) {
                 val kind = attachmentKindLabel(a.kind)
@@ -398,6 +462,7 @@ fun bubbleDescription(m: MessageUi, time: String): String {
             }
             if (!m.text.isNullOrBlank()) parts += m.text
             if (m.edited) parts += stringResource(R.string.message_edited)
+            if (m.reactions.isNotEmpty()) parts += m.reactions.joinToString(" ") { "${it.emoji} ${it.count}" }
         }
     }
     parts += time
@@ -455,32 +520,102 @@ private fun MediaThumbnail(messageId: String, a: AttachmentUi, actions: BubbleAc
     val w = a.width?.takeIf { it > 0 } ?: 4
     val h = a.height?.takeIf { it > 0 } ?: 3
     val ratio = (w.toFloat() / h).coerceIn(0.6f, 1.8f)
+    MediaTile(messageId, a, actions, Modifier.width(240.dp).heightIn(max = 320.dp).aspectRatio(ratio))
+}
+
+/** Width of the media in a bubble; the grid divides it into two columns. */
+private val GRID_WIDTH = 240.dp
+private val GRID_GAP = 4.dp
+private val GRID_CELL = (GRID_WIDTH - GRID_GAP) / 2
+
+/**
+ * Photos and videos of one message as a grid: two side by side; three as one tall picture and two small; four or more as
+ * 2 x 2, the last cell saying how many more there are ("+N"). A tap on any cell opens the viewer there, which swipes through all.
+ */
+@Composable
+fun MediaGrid(messageId: String, items: List<AttachmentUi>, actions: BubbleActions) {
+    val description = stringResource(R.string.media_grid_description, items.size)
+    val tall = GRID_CELL * 2 + GRID_GAP
+    Box(Modifier.width(GRID_WIDTH).clip(RoundedCornerShape(10.dp)).semantics { contentDescription = description }) {
+        when (items.size) {
+            2 -> Row(horizontalArrangement = Arrangement.spacedBy(GRID_GAP)) {
+                for (a in items) MediaTile(messageId, a, actions, Modifier.size(GRID_CELL, 160.dp), corner = 0.dp)
+            }
+            3 -> Row(horizontalArrangement = Arrangement.spacedBy(GRID_GAP)) {
+                MediaTile(messageId, items[0], actions, Modifier.size(GRID_CELL, tall), corner = 0.dp)
+                Column(verticalArrangement = Arrangement.spacedBy(GRID_GAP)) {
+                    MediaTile(messageId, items[1], actions, Modifier.size(GRID_CELL, GRID_CELL), corner = 0.dp)
+                    MediaTile(messageId, items[2], actions, Modifier.size(GRID_CELL, GRID_CELL), corner = 0.dp)
+                }
+            }
+            else -> Column(verticalArrangement = Arrangement.spacedBy(GRID_GAP)) {
+                for (row in 0..1) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(GRID_GAP)) {
+                        for (col in 0..1) {
+                            val i = row * 2 + col
+                            val more = if (i == 3) items.size - 4 else 0
+                            MediaTile(messageId, items[i], actions, Modifier.size(GRID_CELL, GRID_CELL), corner = 0.dp, moreCount = more)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** One photo or video: its preview, the download/progress badge, and [moreCount] ("+N") over it when the grid has more. */
+@Composable
+private fun MediaTile(
+    messageId: String,
+    a: AttachmentUi,
+    actions: BubbleActions,
+    modifier: Modifier,
+    corner: androidx.compose.ui.unit.Dp = 10.dp,
+    moreCount: Int = 0,
+) {
     val thumb = remember(a.thumbnail) { a.thumbnail?.let { decodeThumbnailSafe(it) } }
     val ready = (a.transfer as? TransferUi.Ready)?.path
     val description = stringResource(if (a.kind == AttachmentKindUi.VIDEO) R.string.attachment_video else R.string.attachment_photo)
     Box(
-        modifier = Modifier
-            .width(240.dp)
-            .heightIn(max = 320.dp)
-            .aspectRatio(ratio)
-            .clip(RoundedCornerShape(10.dp))
+        modifier = modifier
+            .clip(RoundedCornerShape(corner))
             .background(MaterialTheme.colorScheme.surfaceVariant)
-            .clickable(role = Role.Button, onClickLabel = description) {
+            .clickable(role = Role.Button, onClickLabel = description, enabled = a.transfer !is TransferUi.Unavailable) {
                 if (ready != null) actions.onOpenAttachment(messageId, a) else actions.onDownload(messageId, a)
-            },
+            }
+            .semantics { contentDescription = description },
         contentAlignment = Alignment.Center,
     ) {
-        if (a.transfer is TransferUi.Invalid) {
-            Icon(Icons.Filled.BrokenImage, contentDescription = stringResource(R.string.attachment_invalid), modifier = Modifier.size(40.dp))
+        if (a.transfer is TransferUi.Invalid || a.transfer is TransferUi.Unavailable) {
+            if (thumb != null && a.transfer is TransferUi.Unavailable) {
+                Image(thumb, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.matchParentSize())
+            } else {
+                Icon(
+                    Icons.Filled.BrokenImage,
+                    contentDescription = stringResource(
+                        if (a.transfer is TransferUi.Unavailable) R.string.attachment_unavailable else R.string.attachment_invalid,
+                    ),
+                    modifier = Modifier.size(40.dp),
+                )
+            }
         } else {
             if (thumb != null) {
-                Image(thumb, contentDescription = description, contentScale = ContentScale.Crop, modifier = Modifier.matchParentSize())
+                Image(thumb, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.matchParentSize())
             }
             if (ready != null && a.kind == AttachmentKindUi.IMAGE) {
-                AsyncImage(model = File(ready), contentDescription = description, contentScale = ContentScale.Crop, modifier = Modifier.matchParentSize())
+                AsyncImage(model = File(ready), contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.matchParentSize())
             }
-            TransferOverlay(a, playIcon = a.kind == AttachmentKindUi.VIDEO && ready != null)
-            if (a.kind == AttachmentKindUi.VIDEO && a.durationMs != null) {
+            if (moreCount > 0) {
+                Box(Modifier.matchParentSize().background(Color.Black.copy(alpha = 0.55f)), contentAlignment = Alignment.Center) {
+                    Text(
+                        stringResource(R.string.media_more_count, moreCount), color = Color.White,
+                        style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold,
+                    )
+                }
+            } else {
+                TransferOverlay(a, playIcon = a.kind == AttachmentKindUi.VIDEO && ready != null)
+            }
+            if (a.kind == AttachmentKindUi.VIDEO && a.durationMs != null && moreCount == 0) {
                 Text(
                     formatDuration(a.durationMs), style = MaterialTheme.typography.labelSmall, color = Color.White,
                     modifier = Modifier.align(Alignment.BottomStart).padding(6.dp).clip(RoundedCornerShape(6.dp))
@@ -512,7 +647,7 @@ private fun TransferOverlay(a: AttachmentUi, playIcon: Boolean) {
         is TransferUi.Ready -> if (playIcon) Box(badge, contentAlignment = Alignment.Center) {
             Icon(Icons.Filled.PlayArrow, contentDescription = stringResource(R.string.action_play), tint = Color.White, modifier = Modifier.size(32.dp))
         }
-        is TransferUi.Invalid -> Unit
+        is TransferUi.Invalid, is TransferUi.Unavailable -> Unit
     }
 }
 
@@ -525,7 +660,7 @@ private fun VoiceView(messageId: String, a: AttachmentUi, actions: BubbleActions
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.widthIn(min = 200.dp)) {
         Box(
             Modifier.size(48.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary)
-                .clickable(role = Role.Button) {
+                .clickable(role = Role.Button, enabled = a.transfer !is TransferUi.Unavailable) {
                     if (a.transfer is TransferUi.Ready) actions.onToggleVoice(messageId, a) else actions.onDownload(messageId, a)
                 },
             contentAlignment = Alignment.Center,
@@ -538,6 +673,8 @@ private fun VoiceView(messageId: String, a: AttachmentUi, actions: BubbleActions
                     tint = MaterialTheme.colorScheme.onPrimary,
                 )
                 is TransferUi.Invalid -> Icon(Icons.Filled.BrokenImage, stringResource(R.string.attachment_invalid), tint = MaterialTheme.colorScheme.onPrimary)
+                is TransferUi.Unavailable ->
+                    Icon(Icons.Filled.BrokenImage, stringResource(R.string.attachment_unavailable), tint = MaterialTheme.colorScheme.onPrimary)
                 else -> Icon(Icons.Filled.Download, stringResource(R.string.action_download), tint = MaterialTheme.colorScheme.onPrimary)
             }
         }
@@ -583,7 +720,9 @@ private fun FileChip(messageId: String, a: AttachmentUi, actions: BubbleActions)
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).clip(RoundedCornerShape(10.dp))
             .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.55f))
-            .clickable(role = Role.Button) { if (ready) actions.onOpenAttachment(messageId, a) else actions.onDownload(messageId, a) }
+            .clickable(role = Role.Button, enabled = a.transfer !is TransferUi.Unavailable) {
+                if (ready) actions.onOpenAttachment(messageId, a) else actions.onDownload(messageId, a)
+            }
             .padding(8.dp),
     ) {
         when (a.transfer) {
@@ -594,7 +733,11 @@ private fun FileChip(messageId: String, a: AttachmentUi, actions: BubbleActions)
         Column(Modifier.padding(start = 10.dp).weight(1f)) {
             Text(a.name ?: stringResource(R.string.attachment_file), maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyMedium)
             Text(
-                if (a.transfer is TransferUi.Invalid) stringResource(R.string.attachment_invalid) else formatSize(a.size),
+                when (a.transfer) {
+                    is TransferUi.Invalid -> stringResource(R.string.attachment_invalid)
+                    is TransferUi.Unavailable -> stringResource(R.string.attachment_unavailable)
+                    else -> formatSize(a.size)
+                },
                 style = MaterialTheme.typography.labelSmall,
             )
         }

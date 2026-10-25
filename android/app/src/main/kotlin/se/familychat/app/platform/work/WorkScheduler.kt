@@ -57,7 +57,23 @@ class WorkScheduler @Inject constructor(@ApplicationContext private val context:
         wm.enqueueUniquePeriodicWork(PERIODIC, ExistingPeriodicWorkPolicy.KEEP, request)
     }
 
+    /**
+     * Runs [ExpiryWorker] when the next disappearing message is due ([atMillis], epoch ms), replacing an earlier schedule. Needs
+     * no network. The in-process timer of `ExpiryManager` is more precise while the app runs; this is for when it does not.
+     */
+    fun scheduleExpiry(atMillis: Long, now: Long = System.currentTimeMillis()) {
+        val request = OneTimeWorkRequestBuilder<ExpiryWorker>()
+            .setInitialDelay((atMillis - now).coerceAtLeast(0), TimeUnit.MILLISECONDS)
+            .build()
+        wm.enqueueUniqueWork(EXPIRY, ExistingWorkPolicy.REPLACE, request)
+    }
+
+    fun cancelExpiry() {
+        wm.cancelUniqueWork(EXPIRY)
+    }
+
     fun cancelAll() {
+        wm.cancelUniqueWork(EXPIRY)
         wm.cancelUniqueWork(OUTBOX)
         wm.cancelUniqueWork(SYNC)
         wm.cancelUniqueWork(PERIODIC)
@@ -67,6 +83,7 @@ class WorkScheduler @Inject constructor(@ApplicationContext private val context:
         const val OUTBOX = "outbox"
         const val SYNC = "sync"
         const val PERIODIC = "periodic-sync"
+        const val EXPIRY = "expiry"
         const val BACKOFF_SECONDS = 30L
     }
 }

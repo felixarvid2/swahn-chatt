@@ -50,3 +50,13 @@
 -keep class androidx.room.** { *; }
 -keep class androidx.sqlite.** { *; }
 -keep,allowobfuscation class kotlinx.serialization.** { *; }
+
+# History file format and the encrypted content codec (HistoryAndContentInstrumentedTest)
+-keep,allowobfuscation class se.familychat.app.data.history.HistoryFormat { *; }
+-keep,allowobfuscation class se.familychat.app.data.history.HistoryFormat$Header { *; }
+-keep,allowobfuscation class se.familychat.app.data.history.KdfParams { *; }
+-keep,allowobfuscation class se.familychat.app.data.history.HistoryException** { *; }
+-keep,allowobfuscation class se.familychat.core.model.ContentCodec { *; }
+-keep,allowobfuscation class se.familychat.core.model.Padding { *; }
+-keep,allowobfuscation class se.familychat.core.model.ContentType { *; }
+-keep,allowobfuscation class se.familychat.core.model.FamilyChatJson { *; }

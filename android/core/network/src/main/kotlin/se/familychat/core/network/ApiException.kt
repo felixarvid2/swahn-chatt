@@ -38,6 +38,9 @@ sealed class ApiException(
     /** 409 other than mismatched devices: `username_taken`, `id_conflict`, `identity_key_mismatch`, ... */
     class Conflict(code: String, message: String) : ApiException(409, code, message)
 
+    /** 409 `offset_mismatch` on a resumable upload chunk: [serverOffset] is where the server wants the next byte (null: unknown). */
+    class OffsetMismatch(message: String, val serverOffset: Long?) : ApiException(409, "offset_mismatch", message)
+
     /**
      * 409 `mismatched_devices` on `POST /messages`: refresh the device lists/keys of the users involved and retry
      * with the same message id.
@@ -84,6 +87,8 @@ sealed class ApiException(
                 409 ->
                     if (code == "mismatched_devices") {
                         MismatchedDevices(msg, body?.missingDevices.orEmpty(), body?.extraDevices.orEmpty())
+                    } else if (code == "offset_mismatch") {
+                        OffsetMismatch(msg, body?.offset)
                     } else {
                         Conflict(code, msg)
                     }

@@ -489,6 +489,115 @@ class FamilyChatEngine(
         return freed
     }
 
+    // --- reactions -------------------------------------------------------------------------------------------------
+
+    /**
+     * Reacts to [messageId] with [emoji] (one single emoji), or takes your reaction back if it already is [emoji]; another
+     * emoji replaces yours. Shown at once and sent encrypted to every device, like a message.
+     */
+    suspend fun react(messageId: String, emoji: String) {
+        sender.enqueueReaction(messageId, emoji)
+        requestOutbox()
+    }
+
+    /** The reactions that stand on [messageId], oldest first. */
+    suspend fun reactionsOf(messageId: String): List<Reaction> = ctx.store.getReactions(messageId)
+
+    // --- disappearing messages -------------------------------------------------------------------------------------
+
+    /**
+     * Sets the disappearing-messages timer of the conversation (0: off; otherwise 300 s to a year). The change goes to
+     * the members as encrypted content and the server's pruning timer is patched too, but each phone's own timer follows only
+     * the encrypted content of a member, never the server's field.
+     */
+    suspend fun setDisappearingTimer(conversationId: String, seconds: Long) {
+        sender.enqueueTimer(conversationId, seconds)
+        requestOutbox()
+    }
+
+    /** The timer this phone applies to new messages of the conversation, in seconds (0: off). */
+    suspend fun disappearingTimer(conversationId: String): Long = ctx.store.getTimer(conversationId)?.seconds ?: 0L
+
+    /**
+     * Starts the clocks of messages that have just been shown: a message with `expires_in` is removed from this phone that long
+     * after it was first displayed here (Signal's rule). Messages without a timer, or already counting, are left alone.
+     * Returns the earliest removal time that is now scheduled (null: none), for the app to schedule [purgeExpired].
+     */
+    suspend fun markDisplayed(messageIds: Collection<String>): Long? {
+        val now = ctx.now()
+        var earliest: Long? = null
+        for (id in messageIds) {
+            val m = ctx.store.getMessage(id)?.takeIf { it.expireAt == null && !it.deleted && !it.isSystem && it.decryptError == null }
+            val seconds = m?.expiresIn ?: continue
+            val at = now + seconds * 1000
+            ctx.store.updateMessage(id) { if (it.expireAt == null) it.copy(expireAt = at) else it }
+            earliest = minOf(earliest ?: at, at)
+        }
+        return earliest
+    }
+
+    /**
+     * Removes every message whose time has come: text, attachment files that the engine owns, search index rows (with the
+     * row), reactions and receipts, leaving a tombstone so a replayed event cannot bring it back. Messages still waiting to
+     * be sent stay. Returns the removed messages: the app deletes the source files it handed over itself.
+     */
+    suspend fun purgeExpired(): List<StoredMessage> {
+        val removed = ArrayList<StoredMessage>()
+        while (true) {
+            val now = ctx.now()
+            val due = ctx.store.expiredMessages(now)
+            if (due.isEmpty()) break
+            for (m in due) {
+                val gone = ctx.store.transaction { ctx.store.deleteMessageLocally(m.id, m.conversationId, now) } ?: continue
+                gone.attachments.forEach { ctx.deleteDownloadedFile(it.localPath) }
+                removed += gone
+                ctx.emit(EngineEvent.MessageChanged(m.conversationId, m.id))
+            }
+        }
+        return removed
+    }
+
+    /** When the next message is due to disappear from this phone (epoch ms), or null. */
+    suspend fun nextExpiry(): Long? = ctx.store.nextExpiry()
+
+    // --- forwarding ------------------------------------------------------------------------------------------------
+
+    /**
+     * Sends a copy of [messageId] to each of [conversationIds] (at most [MAX_FORWARD_TARGETS]), marked as forwarded inside the
+     * encrypted content. Attachments are decrypted on this phone (downloaded first if need be), copied, and uploaded again
+     * under fresh keys, since the server only takes attachment ids uploaded by the sender. The copy carries the timer of its
+     * own conversation. Returns the new message ids.
+     *
+     * @throws java.io.IOException if an attachment cannot be fetched
+     */
+    suspend fun forwardMessage(messageId: String, conversationIds: List<String>): List<String> {
+        val targets = conversationIds.distinct()
+        require(targets.isNotEmpty() && targets.size <= MAX_FORWARD_TARGETS) { "1..$MAX_FORWARD_TARGETS conversations" }
+        val source = ctx.store.getMessage(messageId) ?: throw IllegalArgumentException("Unknown message")
+        require(!source.deleted && !source.isSystem && source.decryptError == null) { "That message cannot be forwarded" }
+        require(source.status != MessageStatus.PENDING && source.status != MessageStatus.FAILED) { "The message has not been sent yet" }
+        for (t in targets) ctx.store.getConversation(t) ?: throw IllegalArgumentException("Unknown conversation")
+        val files = source.attachments.map { a ->
+            val path = a.localPath?.takeIf { a.downloadState == DownloadState.DONE && File(it).isFile }
+            a to (path?.let(::File) ?: attachments.download(messageId, a.id))
+        }
+        ctx.config.forwardDir.mkdirs()
+        val ids = ArrayList<String>()
+        try {
+            for (t in targets) {
+                val copies = files.map { (a, f) ->
+                    val copy = File.createTempFile("fwd-", ".bin", ctx.config.forwardDir)
+                    f.copyTo(copy, overwrite = true)
+                    OutboxAttachment(copy.absolutePath, a.mime, a.name, a.kind, a.width, a.height, a.durationMs, a.thumbnail)
+                }
+                ids += sender.enqueueForwarded(t, source.text, copies)
+            }
+        } finally {
+            requestOutbox()
+        }
+        return ids
+    }
+
     /** Re-queues a message that ended in FAILED. */
     suspend fun retryMessage(messageId: String) {
         sender.retry(messageId)
@@ -812,6 +921,9 @@ class OutgoingAttachment(
     /** base64 of a small JPEG preview (a few KB). */
     val thumbnailBase64: String? = null,
 )
+
+/** The most conversations one forward may go to. */
+const val MAX_FORWARD_TARGETS = 5
 
 internal const val MAX_AVATAR_BYTES = 2 * 1024 * 1024
 internal const val META_KEYS_UPLOADED = "keys_uploaded"

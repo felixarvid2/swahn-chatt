@@ -169,12 +169,13 @@ internal class DeviceDirectory(private val ctx: EngineContext) {
         }
     }
 
-    suspend fun postNotice(c: Conversation, id: String, event: SystemEvent) {
+    /** Adds the notice [id] to [c] unless it exists; [seq] and [at] place it in the list (default: after the last message, now). */
+    suspend fun postNotice(c: Conversation, id: String, event: SystemEvent, seq: Long = c.lastMessageSeq ?: 0, at: Long = ctx.now()) {
         if (ctx.store.getMessage(id) != null) return
         ctx.store.upsertMessage(
             StoredMessage(
                 id = id, conversationId = c.id, senderUserId = "", senderDeviceId = null, outgoing = false,
-                status = MessageStatus.RECEIVED, seq = c.lastMessageSeq ?: 0, clientTs = ctx.now(), serverTs = null,
+                status = MessageStatus.RECEIVED, seq = seq, clientTs = at, serverTs = null,
                 text = null, replyTo = null, systemEvent = event,
             ),
         )

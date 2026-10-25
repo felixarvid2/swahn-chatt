@@ -111,7 +111,36 @@ sealed interface SystemEvent {
 
     /** [userId] disappeared from the member list of a group (left or was removed). */
     data class MemberRemoved(val userId: String) : SystemEvent
+
+    /**
+     * [userId] set the disappearing-messages timer to [seconds] (0: off). Only ever created from encrypted `timer` content
+     * of a member (or by this device for its own change), never from the server's `disappearing_seconds`.
+     */
+    data class TimerChanged(val userId: String, val seconds: Long) : SystemEvent
+
+    /** Content of a newer app version was received and ignored: "Update the app to see everything". At most once per conversation. */
+    data object UpdateRequired : SystemEvent
 }
+
+/**
+ * One member's reaction to one message. A member has at most one per message; the one with the highest [seq] wins.
+ * [emoji] is null when the reaction was taken back (the row stays so an older event cannot bring it back). [seq] is null
+ * while our own change waits in the outbox (it then wins over everything stored).
+ */
+data class Reaction(
+    val messageId: String,
+    val conversationId: String,
+    val userId: String,
+    val emoji: String?,
+    val seq: Long?,
+    val at: Long,
+)
+
+/**
+ * The disappearing-messages timer of a conversation as this phone knows it: [seconds] (0: off), set by [setBy] with the
+ * encrypted `timer` message numbered [seq] (null while ours is not sent yet). Never derived from the server's field.
+ */
+data class ConversationTimer(val conversationId: String, val seconds: Long, val setBy: String, val seq: Long?, val at: Long)
 
 /**
  * A message in a conversation as the UI sees it. Ordering is by [seq] (server order), pending messages (null seq)
@@ -150,6 +179,14 @@ data class StoredMessage(
      */
     val pendingEnvelopeType: String? = null,
     val pendingEnvelopeBody: String? = null,
+    /** Sent on to this conversation from another one ("Vidarebefordrat"); set by the sender inside the encrypted content. */
+    val forwarded: Boolean = false,
+    /** Merged in from an exported history file ("Importerad"); never sent anywhere. */
+    val imported: Boolean = false,
+    /** Seconds this message lives once displayed, from the sender's encrypted content; null: it stays. */
+    val expiresIn: Long? = null,
+    /** When it is removed from this phone (epoch ms): set when first displayed here, `displayed + expiresIn`. Null until then. */
+    val expireAt: Long? = null,
 ) {
     val isSystem: Boolean get() = systemEvent != null
 }
@@ -186,7 +223,7 @@ data class OutboxAttachment(
 data class OutboxEntry(
     val messageId: String,
     val conversationId: String,
-    /** `message|edit|delete` */
+    /** `message|edit|delete|reaction`, or [OutboxKind.TIMER] (sent as a `message` whose content is a timer change). */
     val kind: String,
     val targetMessageId: String?,
     val text: String?,
@@ -198,7 +235,22 @@ data class OutboxEntry(
     val attempts: Int = 0,
     val lastError: String? = null,
     val createdAt: Long,
+    /** Content `forwarded`. */
+    val forwarded: Boolean = false,
+    /**
+     * `expires_in` of the content of a message, copied from the conversation's timer when it was written; for [OutboxKind.TIMER]
+     * the new timer in seconds. Fixed at that moment so a retry sends the same content.
+     */
+    val expiresIn: Long? = null,
+    /** Reaction ([text] is the emoji): true when it is taken back. */
+    val remove: Boolean = false,
 )
+
+/** Outbox kinds that are not a server message kind. */
+object OutboxKind {
+    /** A change of the disappearing-messages timer: encrypted `timer` content in a `message`. */
+    const val TIMER = "timer"
+}
 
 /**
  * Persistence for the messaging engine; the app implements it on Room (SQLCipher). All functions are `suspend` so they
@@ -292,6 +344,30 @@ interface LocalStore {
      */
     suspend fun messagesWithAttachments(conversationId: String? = null): List<StoredMessage>
 
+    // --- reactions and timers -----------------------------------------------------------------------------------------
+    suspend fun getReaction(messageId: String, userId: String): Reaction?
+
+    /** Insert or replace the member's reaction row (the caller decided it is the newest). */
+    suspend fun putReaction(reaction: Reaction)
+
+    /** Forgets the member's row for [messageId] altogether (an unsent reaction that failed for good). */
+    suspend fun removeReaction(messageId: String, userId: String)
+
+    /** Forgets every reaction to [messageId] (the message was deleted). */
+    suspend fun removeReactions(messageId: String)
+
+    /** The reactions that stand (not taken back) on [messageId]. */
+    suspend fun getReactions(messageId: String): List<Reaction>
+    suspend fun getTimer(conversationId: String): ConversationTimer?
+    suspend fun putTimer(timer: ConversationTimer)
+
+    // --- disappearing messages ----------------------------------------------------------------------------------------
+    /** Messages whose [StoredMessage.expireAt] is at or before [now], except those still waiting to be sent. */
+    suspend fun expiredMessages(now: Long, limit: Int = 500): List<StoredMessage>
+
+    /** The earliest [StoredMessage.expireAt] of any message that has one, or null. */
+    suspend fun nextExpiry(): Long?
+
     // --- receipt times and local deletions ----------------------------------------------------------------------------
     /**
      * Remembers when [userId] acknowledged ([deliveredAt]) or read ([readAt]) [messageId]. A time already stored is kept
@@ -303,7 +379,9 @@ interface LocalStore {
     /**
      * "Delete for me": removes the message (and its receipt times) from this device and remembers that it was removed, so a
      * replayed event cannot bring it back ([isLocallyDeleted]). Returns the removed message, or null if there was none.
-     * Purely local; nothing is sent. The tombstone is removed with the conversation.
+     * Purely local; nothing is sent. The tombstone is removed with the conversation. Also used to remember content that was
+     * consumed without being stored (timer changes, content of a newer app), so a replay is skipped before decryption.
+     * The message's reactions go with it.
      */
     suspend fun deleteMessageLocally(id: String, conversationId: String, at: Long): StoredMessage?
     suspend fun isLocallyDeleted(id: String): Boolean

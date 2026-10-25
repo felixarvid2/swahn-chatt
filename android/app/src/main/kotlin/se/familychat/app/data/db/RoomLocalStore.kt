@@ -6,7 +6,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import se.familychat.core.client.Account
 import se.familychat.core.client.LocalStore
+import se.familychat.core.client.ConversationTimer
 import se.familychat.core.client.OutboxEntry
+import se.familychat.core.client.Reaction
 import se.familychat.core.client.ReceiptTimes
 import se.familychat.core.client.StoredMessage
 import se.familychat.core.model.Conversation
@@ -107,6 +109,8 @@ class RoomLocalStore(
         dao.deleteMessagesOf(id)
         dao.deleteReceiptsOf(id)
         dao.deleteLocalDeletionsOf(id)
+        dao.deleteReactionsOf(id)
+        dao.deleteTimer(id)
         dao.deleteOutboxOf(id)
         dao.deleteDraft(id)
         dao.deleteSettings(id)
@@ -156,9 +160,29 @@ class RoomLocalStore(
         val existing = dao.message(id)?.toModel()
         dao.putLocalDeletion(LocalDeletionEntity(id, conversationId, at))
         dao.deleteReceipts(id)
+        dao.deleteReactionsOfMessage(id)
         dao.deleteMessage(id)
         existing
     }
+
+    override suspend fun getReaction(messageId: String, userId: String): Reaction? =
+        io { dao.reaction(messageId, userId)?.toModel() }
+
+    override suspend fun putReaction(reaction: Reaction) =
+        io { dao.putReaction(ReactionEntity(reaction.messageId, reaction.userId, reaction.conversationId, reaction.emoji, reaction.seq, reaction.at)) }
+
+    override suspend fun removeReaction(messageId: String, userId: String) = io { dao.deleteReaction(messageId, userId) }
+    override suspend fun removeReactions(messageId: String) = io { dao.deleteReactionsOfMessage(messageId) }
+    override suspend fun getReactions(messageId: String): List<Reaction> = io { dao.reactions(messageId).map { it.toModel() } }
+
+    override suspend fun getTimer(conversationId: String): ConversationTimer? =
+        io { dao.timer(conversationId)?.let { ConversationTimer(it.conversationId, it.seconds, it.setBy, it.seq, it.at) } }
+
+    override suspend fun putTimer(timer: ConversationTimer) =
+        io { dao.putTimer(ConversationTimerEntity(timer.conversationId, timer.seconds, timer.setBy, timer.seq, timer.at)) }
+
+    override suspend fun expiredMessages(now: Long, limit: Int): List<StoredMessage> = io { dao.expired(now, limit).map { it.toModel() } }
+    override suspend fun nextExpiry(): Long? = io { dao.nextExpiry() }
 
     override suspend fun isLocallyDeleted(id: String): Boolean = io { dao.localDeletionCount(id) > 0 }
 

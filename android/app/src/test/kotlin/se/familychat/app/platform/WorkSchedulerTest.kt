@@ -62,4 +62,27 @@ class WorkSchedulerTest {
             assertTrue(infos(name).all { it.state == androidx.work.WorkInfo.State.CANCELLED }, name)
         }
     }
+
+    @Test fun `the expiry job waits until the next message is due, needs no network, and a later schedule replaces it`() {
+        val now = 1_000_000L
+        scheduler.scheduleExpiry(atMillis = now + 3_600_000, now = now)
+        val first = infos(WorkScheduler.EXPIRY).single()
+        assertEquals(NetworkType.NOT_REQUIRED, first.constraints.requiredNetworkType)
+        assertTrue(first.tags.any { it.endsWith("ExpiryWorker") })
+        assertEquals(androidx.work.WorkInfo.State.ENQUEUED, first.state)
+        assertEquals(3_600_000L, first.initialDelayMillis)
+        scheduler.scheduleExpiry(atMillis = now + 60_000, now = now)
+        val all = infos(WorkScheduler.EXPIRY)
+        assertEquals(1, all.count { it.state == androidx.work.WorkInfo.State.ENQUEUED })
+        assertTrue(all.single { it.state == androidx.work.WorkInfo.State.ENQUEUED }.id != first.id, "replaced")
+        assertEquals(60_000L, all.single { it.state == androidx.work.WorkInfo.State.ENQUEUED }.initialDelayMillis)
+        scheduler.cancelExpiry()
+        assertTrue(infos(WorkScheduler.EXPIRY).all { it.state == androidx.work.WorkInfo.State.CANCELLED })
+    }
+
+    @Test fun `cancelAll takes the expiry job along`() {
+        scheduler.scheduleExpiry(System.currentTimeMillis() + 10_000)
+        scheduler.cancelAll()
+        assertTrue(infos(WorkScheduler.EXPIRY).all { it.state == androidx.work.WorkInfo.State.CANCELLED })
+    }
 }

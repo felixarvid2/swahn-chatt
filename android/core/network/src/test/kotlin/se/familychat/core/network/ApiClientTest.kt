@@ -240,4 +240,56 @@ class ApiClientTest {
         f.delete()
         assertFailsWith<ApiException.NotFound> { api.downloadAttachment("gone", f) }
     }
+
+    @Test
+    fun `resumable upload endpoints`() = runBlocking<Unit> {
+        val c = client().api
+        server.enqueue(json(201, """{"upload_id":"up1","offset":0,"size":10,"expires_at":5,"max_chunk_bytes":8388608}"""))
+        val session = c.startUpload(StartUploadRequest(10, sha256 = "ab"))
+        assertEquals("up1", session.uploadId)
+        val start = server.takeRequest()
+        assertEquals("POST", start.method)
+        assertEquals("/api/v1/attachments/uploads", start.path)
+        assertTrue(start.body.readUtf8().contains(""""size":10"""))
+
+        server.enqueue(
+            MockResponse().setResponseCode(200).setHeader("Upload-Offset", "4").setHeader("Content-Type", "application/json").setBody("""{"offset":4}"""),
+        )
+        assertEquals(UploadProgress.Partial(4), c.uploadChunk("up1", 0, byteArrayOf(1, 2, 3, 4)))
+        val chunk = server.takeRequest()
+        assertEquals("PATCH", chunk.method)
+        assertEquals("/api/v1/attachments/uploads/up1", chunk.path)
+        assertEquals("0", chunk.getHeader("Upload-Offset"))
+        assertTrue(chunk.getHeader("Content-Type")!!.startsWith("application/octet-stream"))
+        assertEquals(4L, chunk.bodySize)
+
+        server.enqueue(json(201, """{"id":"up1","purpose":"message","content_type":"application/octet-stream","size":10,"sha256":"ab","created_at":1}"""))
+        val done = c.uploadChunk("up1", 4, ByteArray(6))
+        assertEquals("up1", assertIs<UploadProgress.Finished>(done).attachment.id)
+
+        server.enqueue(json(200, """{"upload_id":"up1","offset":4,"size":10,"expires_at":5,"max_chunk_bytes":8388608}"""))
+        assertEquals(4L, c.uploadStatus("up1").offset)
+        assertEquals("/api/v1/attachments/uploads/up1", server.takeRequest().also { server.takeRequest() }.path)
+    }
+
+    @Test
+    fun `an offset mismatch tells where to continue`() = runBlocking<Unit> {
+        server.enqueue(json(409, """{"code":"offset_mismatch","message":"x","offset":7}""").setHeader("Upload-Offset", "7"))
+        val e = assertFailsWith<ApiException.OffsetMismatch> { client().api.uploadChunk("up1", 0, byteArrayOf(1)) }
+        assertEquals(7L, e.serverOffset)
+        server.enqueue(json(409, """{"code":"upload_busy","message":"x"}"""))
+        assertEquals("upload_busy", assertFailsWith<ApiException.Conflict> { client().api.uploadChunk("up1", 7, byteArrayOf(1)) }.code)
+    }
+
+    @Test
+    fun `conversation timer is patched and can be cleared with an explicit null`() = runBlocking<Unit> {
+        val conv = """{"id":"c","type":"direct","created_by":"u1","members":[],"disappearing_seconds":3600}"""
+        server.enqueue(json(200, conv))
+        val updated = client().api.updateConversation("c", disappearingSeconds = 3600)
+        assertEquals(3600L, updated.disappearingSeconds)
+        assertEquals("""{"disappearing_seconds":3600}""", server.takeRequest().body.readUtf8())
+        server.enqueue(json(200, """{"id":"c","type":"direct","created_by":"u1","members":[]}"""))
+        assertNull(client().api.updateConversation("c", clearDisappearing = true).disappearingSeconds)
+        assertEquals("""{"disappearing_seconds":null}""", server.takeRequest().body.readUtf8())
+    }
 }

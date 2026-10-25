@@ -46,7 +46,9 @@ import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Photo
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.VerifiedUser
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.animation.fadeIn
@@ -138,7 +140,10 @@ import se.familychat.app.ui.components.BubbleActions
 import se.familychat.app.ui.components.MessageBubble
 import se.familychat.app.ui.components.PlaybackUi
 import se.familychat.app.ui.components.ReplyQuote
+import se.familychat.app.ui.components.DisappearingDialog
+import se.familychat.app.ui.components.StagedStrip
 import se.familychat.app.ui.components.dayLabel
+import se.familychat.app.ui.components.timerLabel
 import se.familychat.app.ui.components.formatDuration
 import se.familychat.app.ui.model.AttachmentKindUi
 import se.familychat.app.ui.model.ChatRow
@@ -155,6 +160,7 @@ class ConversationNav(
     val onOpenContact: (userId: String) -> Unit,
     val onSearch: (conversationId: String) -> Unit = {},
     val onOpenMessageInfo: (messageId: String) -> Unit = {},
+    val onForward: (messageId: String) -> Unit = {},
 )
 
 @Composable
@@ -203,6 +209,7 @@ fun ConversationScreen(
         vm.effects.collect { effect ->
             when (effect) {
                 is ConversationEffect.Error -> snackbar.showSnackbar(errorText(effect.error))
+                is ConversationEffect.Notice -> snackbar.showSnackbar(context.getString(effect.message))
                 is ConversationEffect.OpenFile -> openFile(context, effect.path, effect.mime, effect.name)
                 is ConversationEffect.ScrollTo -> scrollTo(effect.messageId)
             }
@@ -251,6 +258,8 @@ fun ConversationScreen(
             onJumpTo = vm::jumpTo,
             onCycleVoiceSpeed = vm::cycleVoiceSpeed,
             onOpenLink = { confirmLink = it },
+            onReact = vm::react,
+            onForward = nav.onForward,
         )
     }
 
@@ -301,6 +310,9 @@ fun ConversationScreen(
             onAtBottom = vm::onAtBottom,
             onJumpToLatest = vm::jumpToLatest,
             onMessageShown = vm::onMessageShown,
+            onMessageDisplayed = vm::onMessageDisplayed,
+            onUnstage = vm::unstage,
+            onSetTimer = vm::setTimer,
         ),
     )
 
@@ -468,6 +480,11 @@ class ConversationCallbacks(
     val onJumpToLatest: () -> Unit = {},
     /** A message with attachments came into view. */
     val onMessageShown: (messageId: String) -> Unit = {},
+    /** A message with a timer is on screen (its clock starts). */
+    val onMessageDisplayed: (messageId: String) -> Unit = {},
+    /** Takes a chosen file out of the preview strip. */
+    val onUnstage: (id: String) -> Unit = {},
+    val onSetTimer: (seconds: Long) -> Unit = {},
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -483,6 +500,7 @@ fun ConversationContent(
     snackbarHost: @Composable () -> Unit = {},
 ) {
     var menuOpen by remember { mutableStateOf(false) }
+    var timerOpen by remember { mutableStateOf(false) }
     Scaffold(
         modifier = modifier,
         snackbarHost = snackbarHost,
@@ -496,17 +514,44 @@ fun ConversationContent(
                         Avatar(state.avatar, size = 40.dp)
                         Column(Modifier.padding(start = 12.dp)) {
                             Text(state.title, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleMedium)
-                            val subtitle = when {
-                                state.typingNames.isNotEmpty() -> stringResource(R.string.typing_names, state.typingNames.joinToString(", "))
-                                state.isGroup -> pluralStringResource(R.plurals.members_count, state.memberCount, state.memberCount)
-                                else -> null
-                            }
-                            if (subtitle != null) {
+                            val members = if (state.isGroup) pluralStringResource(R.plurals.members_count, state.memberCount, state.memberCount) else null
+                            val typing = state.typingNames.takeIf { it.isNotEmpty() }?.let { stringResource(R.string.typing_names, it.joinToString(", ")) }
+                            val timerText = if (state.timerSeconds > 0) timerLabel(state.timerSeconds) else null
+                            val timerSpoken = if (timerText != null) stringResource(R.string.disappearing_summary, timerText) else null
+                            if (typing != null) {
                                 Text(
-                                    subtitle, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                                    fontStyle = if (state.typingNames.isNotEmpty()) FontStyle.Italic else FontStyle.Normal,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    typing, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                    fontStyle = FontStyle.Italic, color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
+                            } else if (members != null || timerText != null) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = if (timerSpoken == null) {
+                                        Modifier
+                                    } else {
+                                        // one spoken line: "4 medlemmar, Försvinnande meddelanden: 1 dag"
+                                        val spoken = listOfNotNull(members, timerSpoken).joinToString(", ")
+                                        Modifier.semantics(mergeDescendants = true) { contentDescription = spoken }
+                                    },
+                                ) {
+                                    if (members != null) {
+                                        Text(
+                                            members, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                    if (timerText != null) {
+                                        // a clock and the short label: the long form is in the conversation menu and the notices
+                                        Icon(
+                                            Icons.Filled.Timer, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.padding(start = if (members != null) 8.dp else 0.dp, end = 2.dp).size(14.dp),
+                                        )
+                                        Text(
+                                            timerText, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
@@ -526,6 +571,11 @@ fun ConversationContent(
                             Icon(Icons.Filled.MoreVert, contentDescription = stringResource(R.string.action_more))
                         }
                         DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.disappearing_title)) },
+                                leadingIcon = { Icon(Icons.Filled.Timer, null) },
+                                onClick = { menuOpen = false; timerOpen = true },
+                            )
                             if (state.isGroup) {
                                 DropdownMenuItem(
                                     text = { Text(stringResource(R.string.group_info)) },
@@ -546,6 +596,12 @@ fun ConversationContent(
         },
         bottomBar = { Composer(state, callbacks) },
     ) { padding ->
+        if (timerOpen) {
+            DisappearingDialog(
+                current = state.timerSeconds, canChange = state.canSetTimer,
+                onSelect = { callbacks.onSetTimer(it); timerOpen = false }, onDismiss = { timerOpen = false },
+            )
+        }
         Column(Modifier.padding(padding).fillMaxSize()) {
             ConnectionBanner(state.connection)
             MessageList(state, items, playback, actions, callbacks, listState, Modifier.weight(1f).fillMaxWidth())
@@ -658,6 +714,9 @@ private fun MessageList(
                         val first = isFirstOfRun(row, older)
                         MessageBubble(if (first == row.firstOfRun) row else row.copy(firstOfRun = first), actions, playback)
                         val m = row.message
+                        if (m.expiresIn != null) {
+                            LaunchedEffect(m.id, state.resumed) { if (state.resumed) callbacks.onMessageDisplayed(m.id) }
+                        }
                         val needsFetch = m.attachments.any { it.transfer is TransferUi.Remote || (it.transfer is TransferUi.Downloading && it.transfer.progress == null) }
                         LaunchedEffect(m.id, needsFetch) { if (needsFetch) callbacks.onMessageShown(m.id) }
                     }
@@ -745,6 +804,13 @@ private fun SystemNotice(row: ChatRow.System, onReview: () -> Unit) {
             else stringResource(R.string.system_new_device_blocked, row.personName, row.deviceName.orEmpty())
         SystemKind.MEMBER_ADDED -> stringResource(R.string.system_member_added, row.personName)
         SystemKind.MEMBER_REMOVED -> stringResource(R.string.system_member_removed, row.personName)
+        SystemKind.TIMER_CHANGED -> when {
+            row.value == 0L && row.own -> stringResource(R.string.system_timer_off_you)
+            row.value == 0L -> stringResource(R.string.system_timer_off, row.personName)
+            row.own -> stringResource(R.string.system_timer_set_you, timerLabel(row.value))
+            else -> stringResource(R.string.system_timer_set, row.personName, timerLabel(row.value))
+        }
+        SystemKind.UPDATE_REQUIRED -> stringResource(R.string.system_update_required)
     }
     Column(
         Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 6.dp),
@@ -757,7 +823,13 @@ private fun SystemNotice(row: ChatRow.System, onReview: () -> Unit) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(
-                if (warning) Icons.Filled.Warning else Icons.Filled.Security, contentDescription = null,
+                when {
+                    warning -> Icons.Filled.Warning
+                    row.kind == SystemKind.TIMER_CHANGED -> Icons.Filled.Timer
+                    row.kind == SystemKind.UPDATE_REQUIRED -> Icons.Filled.Info
+                    else -> Icons.Filled.Security
+                },
+                contentDescription = null,
                 tint = if (warning) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.size(18.dp),
             )
@@ -802,6 +874,7 @@ private fun Composer(state: ConversationUiState, callbacks: ConversationCallback
                     }
                 }
             }
+            StagedStrip(state.staged, callbacks.onUnstage)
             val recording = state.recording
             if (recording != null && recording.locked) {
                 LockedRecordingBar(recording, callbacks)
@@ -816,7 +889,7 @@ private fun Composer(state: ConversationUiState, callbacks: ConversationCallback
 private fun InputRow(state: ConversationUiState, callbacks: ConversationCallbacks) {
     var attachMenu by remember { mutableStateOf(false) }
     val recording = state.recording
-    val hasText = state.draft.isNotBlank()
+    val hasText = state.draft.isNotBlank() || state.staged.isNotEmpty()
     var slidCancel by remember { mutableStateOf(false) }
     Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 6.dp), verticalAlignment = Alignment.Bottom) {
         if (state.editingMessageId == null && recording == null) {
@@ -858,7 +931,7 @@ private fun InputRow(state: ConversationUiState, callbacks: ConversationCallback
             TextField(
                 value = state.draft,
                 onValueChange = callbacks.onDraft,
-                placeholder = { Text(stringResource(R.string.message_hint)) },
+                placeholder = { Text(stringResource(if (state.staged.isNotEmpty()) R.string.caption_hint else R.string.message_hint)) },
                 modifier = Modifier.weight(1f).heightIn(min = 48.dp),
                 maxLines = 6,
                 shape = RoundedCornerShape(24.dp),

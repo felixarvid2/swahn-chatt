@@ -73,6 +73,15 @@ internal interface RawApi {
         @Body body: RequestBody,
     ): UploadedAttachment
 
+    @POST("attachments/uploads") suspend fun startUpload(@Body r: StartUploadRequest): UploadSession
+    @GET("attachments/uploads/{id}") suspend fun uploadStatus(@Path("id") id: String): UploadSession
+
+    @PATCH("attachments/uploads/{id}") suspend fun uploadChunk(
+        @Path("id") id: String,
+        @Header("Upload-Offset") offset: Long,
+        @Body body: RequestBody,
+    ): Response<ResponseBody>
+
     @Streaming
     @GET("attachments/{id}")
     suspend fun downloadAttachment(

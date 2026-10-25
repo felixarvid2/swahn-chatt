@@ -31,6 +31,9 @@ import kotlin.math.roundToInt
 /** A picked file is bigger than the 100 MB limit of the server and the engine. */
 class AttachmentTooLargeException(val size: Long) : IOException("Attachment is $size bytes")
 
+/** A file the user picked and has not sent yet. [kind] is `image`, `video` or `file`. */
+data class PickedFile(val uri: Uri, val name: String?, val mime: String, val kind: String)
+
 /** The picked file cannot be read or is not usable (for example a broken image). */
 class UnusableAttachmentException(message: String, cause: Throwable? = null) : IOException(message, cause)
 
@@ -49,6 +52,23 @@ class UnusableAttachmentException(message: String, cause: Throwable? = null) : I
 class AttachmentPreparer @Inject constructor(@ApplicationContext private val context: Context) {
     val outgoingDir: File get() = File(context.filesDir, "outgoing").also { it.mkdirs() }
 
+    /** Copies of files other apps shared with us, until the user has chosen where they go (see [ShareIntake]). */
+    val stagingDir: File get() = File(context.filesDir, "share-staging").also { it.mkdirs() }
+
+    /** Deletes the staged copy behind [uri] if it is one of ours (a `file:` URI inside [stagingDir]), and its folder. */
+    fun deleteStagedCopy(uri: Uri) {
+        if (uri.scheme != "file") return
+        val f = File(uri.path ?: return)
+        val dir = f.canonicalFile.parentFile ?: return
+        if (dir.parentFile == stagingDir.canonicalFile) dir.deleteRecursively()
+    }
+
+    /** Staged shares nobody picked a conversation for, older than a day. */
+    fun cleanupStaging() {
+        val cutoff = System.currentTimeMillis() - 24L * 60 * 60 * 1000
+        stagingDir.listFiles()?.forEach { if (it.lastModified() < cutoff) it.deleteRecursively() }
+    }
+
     suspend fun prepare(uri: Uri): OutgoingAttachment = withContext(Dispatchers.IO) {
         val resolver = context.contentResolver
         val mime = (resolver.getType(uri) ?: guessMime(displayName(uri))).lowercase()
@@ -58,6 +78,13 @@ class AttachmentPreparer @Inject constructor(@ApplicationContext private val con
             mime.startsWith("video/") -> prepareVideo(uri, mime)
             else -> prepareFile(uri, mime)
         }
+    }
+
+    /** What a picked [uri] will be sent as and how to call it, without reading the file (for the preview strip). */
+    suspend fun describe(uri: Uri): PickedFile = withContext(Dispatchers.IO) {
+        val name = displayName(uri)
+        val mime = (context.contentResolver.getType(uri) ?: guessMime(name)).lowercase()
+        PickedFile(uri, name, mime, if (mime.startsWith("image/")) "image" else if (mime.startsWith("video/")) "video" else "file")
     }
 
     // --- photos ---------------------------------------------------------------------------------------------------------
@@ -271,6 +298,7 @@ class AttachmentPreparer @Inject constructor(@ApplicationContext private val con
     /** Logout: everything prepared for sending and everything shared out of the app goes. */
     fun deleteAll() {
         outgoingDir.deleteRecursively()
+        stagingDir.deleteRecursively()
         File(context.cacheDir, "share").deleteRecursively()
     }
 

@@ -10,6 +10,7 @@ import se.familychat.core.client.LocalAttachment
 import se.familychat.core.client.MessageStatus
 import se.familychat.core.client.OutboxAttachment
 import se.familychat.core.client.OutboxEntry
+import se.familychat.core.client.Reaction
 import se.familychat.core.client.StoredMessage
 import se.familychat.core.client.SystemEvent
 import se.familychat.core.model.Conversation
@@ -125,9 +126,13 @@ internal fun StoredMessage.toEntity(): MessageEntity {
             is SystemEvent.IdentityChanged -> SYSTEM_IDENTITY_CHANGED
             is SystemEvent.MemberAdded -> SYSTEM_MEMBER_ADDED
             is SystemEvent.MemberRemoved -> SYSTEM_MEMBER_REMOVED
+            is SystemEvent.TimerChanged -> SYSTEM_TIMER_CHANGED
+            SystemEvent.UpdateRequired -> SYSTEM_UPDATE_REQUIRED
         },
         systemUserId = when (sys) {
             null -> null
+            SystemEvent.UpdateRequired -> null
+            is SystemEvent.TimerChanged -> sys.userId
             is SystemEvent.NewDevice -> sys.userId
             is SystemEvent.IdentityChanged -> sys.userId
             is SystemEvent.MemberAdded -> sys.userId
@@ -140,6 +145,8 @@ internal fun StoredMessage.toEntity(): MessageEntity {
         },
         systemDeviceName = (sys as? SystemEvent.NewDevice)?.deviceName,
         pendingEnvelopeType = pendingEnvelopeType, pendingEnvelopeBody = pendingEnvelopeBody,
+        forwarded = forwarded, imported = imported, expiresIn = expiresIn, expireAt = expireAt,
+        systemValue = (sys as? SystemEvent.TimerChanged)?.seconds,
     )
 }
 
@@ -151,6 +158,8 @@ internal fun MessageEntity.toModel(): StoredMessage {
         SYSTEM_IDENTITY_CHANGED -> SystemEvent.IdentityChanged(systemUserId.orEmpty(), systemDeviceId.orEmpty())
         SYSTEM_MEMBER_ADDED -> SystemEvent.MemberAdded(systemUserId.orEmpty())
         SYSTEM_MEMBER_REMOVED -> SystemEvent.MemberRemoved(systemUserId.orEmpty())
+        SYSTEM_TIMER_CHANGED -> SystemEvent.TimerChanged(systemUserId.orEmpty(), systemValue ?: 0L)
+        SYSTEM_UPDATE_REQUIRED -> SystemEvent.UpdateRequired
         else -> null
     }
     return StoredMessage(
@@ -161,6 +170,7 @@ internal fun MessageEntity.toModel(): StoredMessage {
         decryptError = enumOrNull<DecryptError>(decryptError), failureReason = enumOrNull<FailureReason>(failureReason),
         deliveredTo = deliveredTo.toSet(), readBy = readBy.toSet(), systemEvent = sys,
         pendingEnvelopeType = pendingEnvelopeType, pendingEnvelopeBody = pendingEnvelopeBody,
+        forwarded = forwarded, imported = imported, expiresIn = expiresIn, expireAt = expireAt,
     )
 }
 
@@ -169,6 +179,8 @@ private const val SYSTEM_NEW_DEVICE_BLOCKED = "new_device_blocked"
 private const val SYSTEM_IDENTITY_CHANGED = "identity_changed"
 private const val SYSTEM_MEMBER_ADDED = "member_added"
 private const val SYSTEM_MEMBER_REMOVED = "member_removed"
+private const val SYSTEM_TIMER_CHANGED = "timer_changed"
+private const val SYSTEM_UPDATE_REQUIRED = "update_required"
 
 // --- outbox ---------------------------------------------------------------------------------------------------------
 
@@ -186,6 +198,7 @@ internal fun OutboxEntry.toEntity() = OutboxEntity(
     ),
     clientTs = clientTs, envelopes = envelopes?.let { FamilyChatJson.encodeToString(envelopesSerializer, it) },
     attempts = attempts, lastError = lastError, createdAt = createdAt,
+    forwarded = forwarded, expiresIn = expiresIn, remove = remove,
 )
 
 internal fun OutboxEntity.toModel() = OutboxEntry(
@@ -199,4 +212,7 @@ internal fun OutboxEntity.toModel() = OutboxEntry(
     },
     clientTs = clientTs, envelopes = envelopes?.let { FamilyChatJson.decodeFromString(envelopesSerializer, it) },
     attempts = attempts, lastError = lastError, createdAt = createdAt,
+    forwarded = forwarded, expiresIn = expiresIn, remove = remove,
 )
+
+internal fun ReactionEntity.toModel() = Reaction(messageId, conversationId, userId, emoji, seq, at)

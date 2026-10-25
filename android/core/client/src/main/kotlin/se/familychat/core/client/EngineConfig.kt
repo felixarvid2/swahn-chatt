@@ -11,11 +11,13 @@ import java.util.UUID
  * @property deviceName shown to other users ("Anna added a new device") and in the device list
  * @property attachmentDir where decrypted downloaded attachments are written (app-private storage)
  * @property tempDir scratch space for encrypted uploads/downloads; downloads are resumable by file name
+ * @property forwardDir where the copies of attachments of forwarded messages wait until they are uploaded (app-private)
  */
 class EngineConfig(
     val deviceName: String,
     val attachmentDir: File,
     val tempDir: File,
+    val forwardDir: File = File(tempDir, "forward"),
     val allowInsecureLan: Boolean = false,
     val clock: () -> Long = System::currentTimeMillis,
     val newId: () -> String = { UUID.randomUUID().toString() },
@@ -28,6 +30,10 @@ class EngineConfig(
     val typingTimeoutMs: Long = 7_000,
     /** Largest accepted attachment (plaintext bytes) for downloads and sends. */
     val maxAttachmentBytes: Long = 100L * 1024 * 1024,
+    /** Encrypted attachments above this size go up as resumable uploads (`/attachments/uploads`), in chunks of at most 8 MiB. */
+    val resumableUploadThreshold: Long = 8L * 1024 * 1024,
+    /** Largest chunk of a resumable upload (the server accepts at most 8 MiB). */
+    val uploadChunkBytes: Int = 8 * 1024 * 1024,
     /**
      * Run the background workers that sync on hints and deliver the outbox automatically. Turn off to drive
      * `sync()` / `processOutbox()` by hand (tests, or an app that schedules everything with WorkManager).

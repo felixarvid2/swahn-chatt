@@ -139,13 +139,33 @@ Risks of libsignal that we accept and mitigate:
 - **QR codes are untrusted input.** An invitation QR (`familychat://invite?v=1&server=…&code=…`) is parsed
   strictly. It may only pre-fill the invitation form and shows the server host prominently, with a warning for
   punycode hosts. It never submits, never touches the login form or the saved server address, and accepts https
-  only in release builds. No system intent filter is registered, so no other app or web page can open FamilyChat
-  with an invitation. Safety-number QR codes carry the libsignal scannable fingerprint and are compared with
+  only in release builds. No intent filter is registered for invitation links, so no other app or web page can open
+  FamilyChat with an invitation. Safety-number QR codes carry the libsignal scannable fingerprint and are compared with
   `matchesScanned`.
 - **"Radera för mig"** deletes the message, its receipts and its downloaded files on this phone only, and writes a
   local tombstone so a later sync, edit or receipt cannot bring it back. Nothing is sent. "Radera för alla" is the
   authenticated, encrypted delete described above.
-- **Unknown content:** clients ignore unknown JSON fields. Content with an unknown type or version is not applied.
+- **Unknown content:** clients ignore unknown JSON fields. Well-formed, bound content of a type this version does
+  not know is decrypted (so the ratchet stays in step), not shown, and leads to a single "Uppdatera appen" notice
+  per conversation. Malformed or unbound content is rejected. Versions 0.1–0.3 still show such messages as "could
+  not decrypt".
+- **Reactions and disappearing-message timers** are encrypted, bound content like edits. A reaction is bound to
+  its target and its author. A timer change applies only when it arrives as encrypted `timer` content from a
+  member (an admin in groups). The server's `disappearing_seconds` and `expires_at` only drive server-side pruning:
+  a client never deletes local history because the server says so. Expiry starts when the message is first shown
+  on the device and removes the text, files and search index rows.
+- **Share target:** FamilyChat accepts `ACTION_SEND`/`ACTION_SEND_MULTIPLE` from other apps. Shared items are
+  untrusted: only `content://` URIs are read (never `file://` or the app's own provider), copies are size-limited
+  and never read past the limit, names are sanitised, and the app lock must be unlocked before conversations are
+  shown.
+- **Forwarding** re-encrypts the content for the target conversation and re-uploads attachments under fresh keys.
+- **History export/import** (moving to a new phone): one file, format `FCHX` version 1. The header holds the KDF
+  id and parameters: Argon2id (BouncyCastle) with 64 MiB memory, t=3, p=1 and a 16-byte random salt. The payload is
+  a ZIP encrypted with Tink streaming AEAD `AES256_GCM_HKDF_1MB`, with the whole header as associated data.
+  Passphrases have at least 12 characters and are never stored. The file never contains keys, sessions, tokens or
+  identity material (tested). Imports are verified completely before anything is merged. Imported messages are
+  marked "Importerad", are never re-sent and only go into existing conversations of the same account. Expiring
+  messages are not exported. The file is as strong as its passphrase, so use a long one.
 
 ## Keys on the phone
 
