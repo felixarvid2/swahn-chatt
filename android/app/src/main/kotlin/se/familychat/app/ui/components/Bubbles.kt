@@ -318,13 +318,18 @@ fun MessageBubble(
 @Composable
 private fun BubbleBody(m: MessageUi, actions: BubbleActions, playback: PlaybackUi, content: Color) {
     if (m.forwarded || m.imported) {
+        // "Importerad" is always shown, also on a forwarded message: a file can set `forwarded` and must not hide where a message came from
+        val label = listOfNotNull(
+            if (m.forwarded) stringResource(R.string.message_forwarded) else null,
+            if (m.imported) stringResource(R.string.message_imported) else null,
+        ).joinToString(" · ")
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 2.dp).clearAndSetSemantics {}) {
             Icon(
-                if (m.forwarded) Icons.AutoMirrored.Filled.Forward else Icons.Filled.History, contentDescription = null,
+                if (m.imported) Icons.Filled.History else Icons.AutoMirrored.Filled.Forward, contentDescription = null,
                 tint = content.copy(alpha = 0.7f), modifier = Modifier.size(14.dp),
             )
             Text(
-                stringResource(if (m.forwarded) R.string.message_forwarded else R.string.message_imported),
+                label,
                 style = MaterialTheme.typography.labelSmall, fontStyle = FontStyle.Italic, color = content.copy(alpha = 0.8f),
                 modifier = Modifier.padding(start = 4.dp),
             )

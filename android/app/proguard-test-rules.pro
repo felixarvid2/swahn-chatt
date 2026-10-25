@@ -15,7 +15,15 @@
 
 # :core:model: construction and property access only. Companion / serializer() are NOT listed: the app rules must keep them.
 -keep,allowobfuscation class se.familychat.core.model.** { <init>(...); }
--keepclassmembers,allowobfuscation class se.familychat.core.model.** { *** get*(); *** component*(); *** copy(...); }
+-keepclassmembers,allowobfuscation class se.familychat.core.model.** { *** get*(); *** component*(); *** copy(...); boolean is*(); }
+
+# :core:client types the tests build and read through the app's Room store (MigrationInstrumentedTest). RoomLocalStore also needs its
+# constructor with default arguments (the synthetic <init>(..., int, DefaultConstructorMarker) the test's `RoomLocalStore(db)` calls).
+-keep,allowobfuscation interface se.familychat.core.client.LocalStore { *; }
+-keep,allowobfuscation class se.familychat.core.client.StoredMessage { *; }
+-keep,allowobfuscation class se.familychat.core.client.Reaction { *; }
+-keep,allowobfuscation class se.familychat.core.client.ConversationTimer { *; }
+-keep,allowobfuscation class se.familychat.app.data.db.RoomLocalStore { *; }
 
 # App code the tests drive directly
 -keep,allowobfuscation class se.familychat.app.data.security.** { *; }

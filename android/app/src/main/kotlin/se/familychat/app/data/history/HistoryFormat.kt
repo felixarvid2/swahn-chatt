@@ -44,8 +44,8 @@ data class KdfParams(val memoryKiB: Int, val iterations: Int, val parallelism: I
         val DEFAULT = KdfParams(memoryKiB = 64 * 1024, iterations = 3, parallelism = 1)
 
         // What an importer is willing to run. The upper bounds keep a crafted header from exhausting the phone's memory or time.
-        const val MAX_MEMORY_KIB = 256 * 1024
-        const val MAX_ITERATIONS = 10
+        const val MAX_MEMORY_KIB = 128 * 1024 // twice what an export uses; a crafted header must not be able to ask a phone for more
+        const val MAX_ITERATIONS = 6
         const val MAX_PARALLELISM = 8
     }
 }
@@ -149,6 +149,9 @@ object HistoryFormat {
         val pw = passphraseBytes(passphrase)
         return try {
             ByteArray(KEY_BYTES).also { generator.generateBytes(pw, it) }
+        } catch (e: OutOfMemoryError) {
+            // the memory block is allocated here; a phone that cannot give 128 MiB refuses the file instead of crashing the app
+            throw HistoryException.UnsupportedParameters("not enough memory for ${header.kdf.memoryKiB / 1024} MiB")
         } finally {
             pw.fill(0)
         }
