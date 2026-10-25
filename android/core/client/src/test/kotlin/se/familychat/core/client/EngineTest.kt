@@ -557,7 +557,11 @@ class EngineTest {
     fun `typing indicators arrive via realtime and expire`() = runBlocking<Unit> {
         val (alice, bob, convId) = pair()
         alice.engine.startRealtime(); bob.engine.startRealtime()
-        eventually(what = "connected") { alice.engine.realtimeState.value == se.familychat.core.network.RealtimeState.CONNECTED }
+        // Both sockets must be up: typing frames are not stored, so one sent before Bob connects is gone.
+        eventually(what = "connected") {
+            alice.engine.realtimeState.value == se.familychat.core.network.RealtimeState.CONNECTED &&
+                bob.engine.realtimeState.value == se.familychat.core.network.RealtimeState.CONNECTED
+        }
         alice.engine.sendTyping(convId, true)
         eventually(what = "typing shown") { bob.engine.typing.value[convId]?.contains(alice.userId()) == true }
         eventually(what = "typing expired") { bob.engine.typing.value.isEmpty() }
