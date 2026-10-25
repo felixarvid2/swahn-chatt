@@ -82,7 +82,7 @@ class Settings(BaseSettings):
     turn_urls: str = ""
     turn_secret: str = ""
     stun_urls: str = ""
-    turn_ttl_seconds: int = Field(3600, ge=60, le=86400)
+    turn_ttl_seconds: int = Field(600, ge=60, le=86400)
 
     @model_validator(mode="after")
     def _finish(self) -> "Settings":

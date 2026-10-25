@@ -7,7 +7,7 @@ from app.ratelimit import RateLimiter
 from app.schemas import TurnCredentials
 from app.services import calls as svc
 
-TURN_REQUESTS_PER_MINUTE = 30
+TURN_REQUESTS_PER_MINUTE = 10
 
 router = APIRouter(prefix="/calls", tags=["calls"], responses=error_responses(401))
 

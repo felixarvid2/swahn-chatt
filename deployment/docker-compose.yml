@@ -150,6 +150,7 @@ services:
       TURN_REALM: ${TURN_REALM:-swahnchat}
       TURN_EXTERNAL_IP: ${TURN_EXTERNAL_IP:-}
       TURN_ALLOW_TAILNET_PEERS: ${TURN_ALLOW_TAILNET_PEERS:-false}
+      TURN_ALLOW_IPV6_PEERS: ${TURN_ALLOW_IPV6_PEERS:-false}
     volumes:
       - ./turnserver.conf:/etc/coturn/turnserver.conf:ro
       - ./turn-start.sh:/etc/coturn/turn-start.sh:ro

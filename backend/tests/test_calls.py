@@ -238,9 +238,10 @@ def test_turn_credentials_follow_the_turn_rest_api(make_app, monkeypatch):
     r = a.get("/calls/turn")
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["ttl"] == 3600
+    assert body["ttl"] == 600
     assert body["urls"] == ["stun:pi.example.ts.net:3478", *TURN.split(",")]
-    assert body["username"] == f"{1_000_000_000 + 3600}:{a.id}"
+    # the expiry is rounded up to the next 10-minute window, then the ttl is added
+    assert body["username"] == f"{1_000_000_200 + 600}:{a.id}"
     expected = base64.b64encode(hmac.new(TURN_SECRET.encode(), body["username"].encode(), hashlib.sha1).digest())
     assert body["credential"] == expected.decode()
     assert set(body) == {"urls", "username", "credential", "ttl"}
@@ -252,17 +253,32 @@ def test_turn_credentials_are_per_user_and_expire(make_app, monkeypatch):
     a, b = f.user("alice"), f.user("bob")
     monkeypatch.setattr(clock, "now_ms", lambda: 1_000_000_000_000)
     ca, cb = a.get("/calls/turn").json(), b.get("/calls/turn").json()
-    assert ca["ttl"] == 120 and ca["username"].startswith("1000000120:")
+    assert ca["ttl"] == 120 and ca["username"].startswith("1000000320:")
     assert ca["username"].endswith(a.id) and cb["username"].endswith(b.id)
     assert ca["credential"] != cb["credential"]
-    monkeypatch.setattr(clock, "now_ms", lambda: 1_000_000_060_000)
+    monkeypatch.setattr(clock, "now_ms", lambda: 1_000_000_600_000)  # next 10-minute window
     later = a.get("/calls/turn").json()
-    assert later["username"].startswith("1000000180:") and later["credential"] != ca["credential"]
+    assert later["username"].startswith("1000000920:") and later["credential"] != ca["credential"]
+
+
+def test_turn_username_is_stable_within_a_window_so_the_quota_counts_per_user(make_app, monkeypatch):
+    a = turn_app(make_app)
+    # 999_999_600 is the start of a 600 s window; its last second is 1_000_000_199.
+    monkeypatch.setattr(clock, "now_ms", lambda: 999_999_600_000)
+    first = a.get("/calls/turn").json()
+    monkeypatch.setattr(clock, "now_ms", lambda: 1_000_000_199_000)
+    second = a.get("/calls/turn").json()
+    assert first["username"] == second["username"] == f"{1_000_000_200 + 600}:{a.id}"
+    assert first["credential"] == second["credential"]
+    mac = hmac.new(TURN_SECRET.encode(), first["username"].encode(), hashlib.sha1).digest()
+    assert first["credential"] == base64.b64encode(mac).decode()
+    monkeypatch.setattr(clock, "now_ms", lambda: 1_000_000_200_000)  # first second of the next window
+    assert a.get("/calls/turn").json()["username"] != first["username"]
 
 
 def test_turn_not_configured_returns_no_relay(make_app):
     a = turn_app(make_app, turn_urls="", turn_secret="")
-    assert a.get("/calls/turn").json() == {"urls": [], "username": None, "credential": None, "ttl": 3600}
+    assert a.get("/calls/turn").json() == {"urls": [], "username": None, "credential": None, "ttl": 600}
     b = turn_app(make_app, turn_urls="", turn_secret="", stun_urls="stun:stun.example.org:3478")
     assert b.get("/calls/turn").json()["urls"] == ["stun:stun.example.org:3478"]
     assert b.get("/calls/turn").json()["credential"] is None
@@ -270,7 +286,7 @@ def test_turn_not_configured_returns_no_relay(make_app):
 
 def test_turn_is_rate_limited(make_app):
     a = turn_app(make_app, rate_limit_enabled=True)
-    for _ in range(30):
+    for _ in range(10):
         assert a.get("/calls/turn").status_code == 200
     r = a.get("/calls/turn")
     assert r.status_code == 429 and "retry-after" in r.headers
