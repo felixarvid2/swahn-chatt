@@ -3,6 +3,7 @@ package se.swahnchat.core.client.call
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import se.swahnchat.core.client.CallSignalEvent
+import se.swahnchat.core.client.SystemEvent
 import se.swahnchat.core.model.CallSignal
 import se.swahnchat.core.model.IceCandidate
 import se.swahnchat.core.model.TurnCredentials
@@ -29,6 +30,9 @@ class FakeSignalling(val net: FakeNet, val userId: String, val deviceId: String)
     val flow = MutableSharedFlow<CallSignalEvent>(extraBufferCapacity = 256)
     val sent = ArrayList<SentSignal>()
 
+    /** The history notices the manager asked for, with their conversation and call id. */
+    val notices = ArrayList<Triple<String, String, SystemEvent.Call>>()
+
     /** Decides per signal whether the send fails (null: it goes out). */
     var failure: (CallSignal) -> Throwable? = { null }
     var turn: () -> TurnCredentials = { TurnCredentials(listOf("stun:s:3478", "turn:t:3478"), "user", "secret", 3600) }
@@ -52,6 +56,10 @@ class FakeSignalling(val net: FakeNet, val userId: String, val deviceId: String)
     override suspend fun turnCredentials(): TurnCredentials {
         turnFetches++
         return turn()
+    }
+
+    override suspend fun recordCall(conversationId: String, callId: String, notice: SystemEvent.Call) {
+        notices += Triple(conversationId, callId, notice)
     }
 
     override fun serverNow(): Long = net.now()

@@ -12,6 +12,7 @@ import se.swahnchat.core.client.OutboxAttachment
 import se.swahnchat.core.client.OutboxEntry
 import se.swahnchat.core.client.Reaction
 import se.swahnchat.core.client.StoredMessage
+import se.swahnchat.core.client.CallOutcome
 import se.swahnchat.core.client.SystemEvent
 import se.swahnchat.core.model.Conversation
 import se.swahnchat.core.model.ConversationMember
@@ -128,6 +129,7 @@ internal fun StoredMessage.toEntity(): MessageEntity {
             is SystemEvent.MemberRemoved -> SYSTEM_MEMBER_REMOVED
             is SystemEvent.TimerChanged -> SYSTEM_TIMER_CHANGED
             SystemEvent.UpdateRequired -> SYSTEM_UPDATE_REQUIRED
+            is SystemEvent.Call -> callSystemType(sys)
         },
         systemUserId = when (sys) {
             null -> null
@@ -137,6 +139,7 @@ internal fun StoredMessage.toEntity(): MessageEntity {
             is SystemEvent.IdentityChanged -> sys.userId
             is SystemEvent.MemberAdded -> sys.userId
             is SystemEvent.MemberRemoved -> sys.userId
+            is SystemEvent.Call -> sys.peerUserId
         },
         systemDeviceId = when (sys) {
             is SystemEvent.NewDevice -> sys.deviceId
@@ -146,7 +149,7 @@ internal fun StoredMessage.toEntity(): MessageEntity {
         systemDeviceName = (sys as? SystemEvent.NewDevice)?.deviceName,
         pendingEnvelopeType = pendingEnvelopeType, pendingEnvelopeBody = pendingEnvelopeBody,
         forwarded = forwarded, imported = imported, expiresIn = expiresIn, expireAt = expireAt,
-        systemValue = (sys as? SystemEvent.TimerChanged)?.seconds,
+        systemValue = (sys as? SystemEvent.TimerChanged)?.seconds ?: (sys as? SystemEvent.Call)?.durationSeconds,
     )
 }
 
@@ -160,7 +163,7 @@ internal fun MessageEntity.toModel(): StoredMessage {
         SYSTEM_MEMBER_REMOVED -> SystemEvent.MemberRemoved(systemUserId.orEmpty())
         SYSTEM_TIMER_CHANGED -> SystemEvent.TimerChanged(systemUserId.orEmpty(), systemValue ?: 0L)
         SYSTEM_UPDATE_REQUIRED -> SystemEvent.UpdateRequired
-        else -> null
+        else -> callFromSystemType(systemType, systemUserId.orEmpty(), systemValue ?: 0L)
     }
     return StoredMessage(
         id = id, conversationId = conversationId, senderUserId = senderUserId, senderDeviceId = senderDeviceId,
@@ -172,6 +175,22 @@ internal fun MessageEntity.toModel(): StoredMessage {
         pendingEnvelopeType = pendingEnvelopeType, pendingEnvelopeBody = pendingEnvelopeBody,
         forwarded = forwarded, imported = imported, expiresIn = expiresIn, expireAt = expireAt,
     )
+}
+
+/** `call_<outcome>` or `call_<outcome>_video`, the outcome in lower case; the duration is in `systemValue`, the peer in `systemUserId`. */
+private const val SYSTEM_CALL_PREFIX = "call_"
+private const val SYSTEM_CALL_VIDEO_SUFFIX = "_video"
+
+private fun callSystemType(call: SystemEvent.Call): String =
+    SYSTEM_CALL_PREFIX + call.outcome.name.lowercase() + if (call.video) SYSTEM_CALL_VIDEO_SUFFIX else ""
+
+/** The call notice stored as [type], or null for any other (or an unknown) type. */
+private fun callFromSystemType(type: String?, peerUserId: String, seconds: Long): SystemEvent.Call? {
+    if (type == null || !type.startsWith(SYSTEM_CALL_PREFIX)) return null
+    val video = type.endsWith(SYSTEM_CALL_VIDEO_SUFFIX)
+    val name = type.removePrefix(SYSTEM_CALL_PREFIX).removeSuffix(if (video) SYSTEM_CALL_VIDEO_SUFFIX else "").uppercase()
+    val outcome = CallOutcome.entries.firstOrNull { it.name == name } ?: return null
+    return SystemEvent.Call(peerUserId, outcome, video, seconds)
 }
 
 private const val SYSTEM_NEW_DEVICE = "new_device"

@@ -13,7 +13,11 @@ import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import se.swahnchat.app.R
 import se.swahnchat.app.data.SessionManager
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
 import se.swahnchat.app.platform.notify.Notifier
+import se.swahnchat.core.client.call.CallManager
+import se.swahnchat.core.client.call.CallState
 
 /** Result of one background run, mapped to WorkManager's. */
 private fun BackgroundResult.toWork(attempt: Int, maxAttempts: Int): androidx.work.ListenableWorker.Result = when (this) {
@@ -50,6 +54,32 @@ class SyncWorker @AssistedInject constructor(
 
     /** Needed for expedited work on Android 11 and older, which runs as a short foreground service. */
     override suspend fun getForegroundInfo(): ForegroundInfo = syncForegroundInfo(applicationContext)
+}
+
+/**
+ * Keeps the process alive while a call rings and the app is in the background: expedited work that suspends until the state
+ * leaves "incoming" (answered, declined, missed, hung up) or [RING_LIMIT_MS] pass. It does nothing else (no sync of its own;
+ * while a call is active in the background the app keeps the realtime connection up, see `realtimeWanted`), so the caller's
+ * hang-up reaches the manager. When the expedited quota is spent it runs as ordinary work, which the system may delay or stop.
+ */
+@HiltWorker
+class CallRingWorker @AssistedInject constructor(
+    @Assisted context: Context,
+    @Assisted params: WorkerParameters,
+    private val calls: CallManager,
+) : CoroutineWorker(context, params) {
+    override suspend fun doWork(): Result {
+        withTimeoutOrNull(RING_LIMIT_MS) { calls.state.first { it !is CallState.Incoming } }
+        return Result.success()
+    }
+
+    /** Needed for expedited work on Android 11 and older, which runs as a short foreground service. */
+    override suspend fun getForegroundInfo(): ForegroundInfo = syncForegroundInfo(applicationContext)
+
+    companion object {
+        /** A little over the ring time (45 s) of the call manager. */
+        const val RING_LIMIT_MS = 50_000L
+    }
 }
 
 /** Removes the disappearing messages that are due, and arranges for the next removal. */

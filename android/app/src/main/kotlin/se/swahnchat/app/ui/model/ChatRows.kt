@@ -6,6 +6,7 @@ import se.swahnchat.core.client.LocalAttachment
 import se.swahnchat.core.client.MessageStatus
 import se.swahnchat.core.client.Reaction
 import se.swahnchat.core.client.StoredMessage
+import se.swahnchat.core.client.CallOutcome
 import se.swahnchat.core.client.SystemEvent
 import se.swahnchat.core.model.User
 import java.time.Instant
@@ -145,9 +146,21 @@ fun StoredMessage.toChatRow(ctx: ChatRowContext, replyTarget: StoredMessage? = n
         is SystemEvent.MemberRemoved -> Triple(event.userId, null, SystemKind.MEMBER_REMOVED)
         is SystemEvent.TimerChanged -> Triple(event.userId, null, SystemKind.TIMER_CHANGED)
         SystemEvent.UpdateRequired -> Triple("", null, SystemKind.UPDATE_REQUIRED)
+        is SystemEvent.Call -> Triple(event.peerUserId, null, event.outcome.toKind())
     }
-    val value = (event as? SystemEvent.TimerChanged)?.seconds ?: 0L
-    return ChatRow.System(id, kind, userId, ctx.users[userId]?.displayName ?: ctx.unknownName, deviceName, time, own = userId == ctx.myUserId, value = value)
+    val value = (event as? SystemEvent.TimerChanged)?.seconds ?: (event as? SystemEvent.Call)?.durationSeconds ?: 0L
+    return ChatRow.System(
+        id, kind, userId, ctx.users[userId]?.displayName ?: ctx.unknownName, deviceName, time,
+        own = userId == ctx.myUserId, value = value, video = (event as? SystemEvent.Call)?.video ?: false,
+    )
+}
+
+private fun CallOutcome.toKind(): SystemKind = when (this) {
+    CallOutcome.COMPLETED -> SystemKind.CALL_COMPLETED
+    CallOutcome.MISSED -> SystemKind.CALL_MISSED
+    CallOutcome.NO_ANSWER -> SystemKind.CALL_NO_ANSWER
+    CallOutcome.BUSY -> SystemKind.CALL_BUSY
+    CallOutcome.REJECTED -> SystemKind.CALL_REJECTED
 }
 
 private fun ChatRow.timeOrNull(): Long? = when (this) {

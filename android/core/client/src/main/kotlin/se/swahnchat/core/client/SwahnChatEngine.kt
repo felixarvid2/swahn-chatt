@@ -431,6 +431,15 @@ class SwahnChatEngine(
     /** Sends one call signal in a direct conversation right away (no outbox, no retry later); see [SendPipeline.sendSignal]. */
     suspend fun sendCallSignal(conversationId: String, signal: CallSignal) = sender.sendSignal(conversationId, signal)
 
+    /**
+     * Adds the history line of the call [callId] to the conversation, on this phone only: no request, no envelope, no outbox
+     * entry. One per call (a repeated call id adds nothing); a conversation that is gone is ignored.
+     */
+    suspend fun recordCallNotice(conversationId: String, callId: String, notice: SystemEvent.Call) {
+        val conversation = ctx.store.getConversation(conversationId) ?: return
+        directory.postNotice(conversation, "sys-call-$callId", notice)
+    }
+
     /** Fresh TURN/STUN credentials for one call (`GET /calls/turn`). */
     suspend fun fetchTurnCredentials(): TurnCredentials = ctx.api.turnCredentials()
 

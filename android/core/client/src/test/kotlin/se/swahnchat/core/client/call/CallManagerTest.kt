@@ -7,7 +7,9 @@ import kotlinx.coroutines.test.currentTime
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import se.swahnchat.core.client.CallOutcome
 import se.swahnchat.core.client.CallSignalEvent
+import se.swahnchat.core.client.SystemEvent
 import se.swahnchat.core.model.CallAction
 import se.swahnchat.core.model.CallSignal
 import se.swahnchat.core.model.IceCandidate
@@ -567,5 +569,134 @@ class CallManagerTest {
         assertEquals(CallState.Outgoing(second, AB, "b", false), a.state)
         a.manager.hangup()
         b.manager.hangup()
+    }
+
+    // --- own devices: busy ---------------------------------------------------------------------------------------------
+
+    @Test
+    fun `a busy from one of my own other devices ends this phone's ringing as missed`() = world {
+        val a = phone("a", "a1")
+        val b1 = phone("b", "b1")
+        val id = a.manager.startCall(AB, video = false)
+        testScope.runCurrent()
+        assertIs<CallState.Incoming>(b1.state)
+        val b2 = phone("b", "b2") // joins after the offer: its busy is injected below, as if it had been in another call
+        b1.receive(b2, plain(id, CallAction.BUSY))
+        testScope.runCurrent()
+        assertEquals(CallState.Ended(id, EndReason.MISSED), b1.state)
+        a.manager.hangup()
+        testScope.advanceTimeBy(5_000)
+        // a busy with another call id, or from the other member, does not touch a ringing call
+        val c = a.manager.startCall(AB, video = false)
+        testScope.runCurrent()
+        assertIs<CallState.Incoming>(b1.state)
+        b1.receive(b2, plain("other-call", CallAction.BUSY))
+        b1.receive(a, plain(c, CallAction.BUSY)) // not from our account and not locked: the caller's own busy means nothing
+        testScope.runCurrent()
+        assertEquals(CallState.Incoming(c, AB, "a", false), b1.state)
+        a.manager.hangup()
+    }
+
+    // --- history notices ---------------------------------------------------------------------------------------------
+
+    @Test
+    fun `a connected call leaves exactly one notice with its duration and sends nothing for it`() = world {
+        val a = phone("a", "a1")
+        val b = phone("b", "b1")
+        val id = connect(a, b)
+        testScope.advanceTimeBy(192_500) // 3 min 12 s
+        val sentBefore = a.signalling.sent.size
+        a.manager.hangup()
+        testScope.runCurrent()
+        val notice = SystemEvent.Call("b", CallOutcome.COMPLETED, video = false, durationSeconds = 192)
+        assertEquals(listOf(Triple(AB, id, notice)), a.signalling.notices)
+        assertEquals(sentBefore + 1, a.signalling.sent.size) // the hangup signal, nothing else
+        assertEquals(CallAction.HANGUP, a.signalling.sent.last().signal.action)
+        // the other side's phone leaves its own single line, with the same length
+        assertEquals(listOf(Triple(AB, id, SystemEvent.Call("a", CallOutcome.COMPLETED, video = false, durationSeconds = 192))), b.signalling.notices)
+        testScope.advanceTimeBy(5_000)
+        assertEquals(1, a.signalling.notices.size)
+    }
+
+    @Test
+    fun `a video call that was hung up by the other side leaves a video notice`() = world {
+        val a = phone("a", "a1")
+        val b = phone("b", "b1")
+        val id = a.manager.startCall(AB, video = true)
+        testScope.runCurrent()
+        b.manager.accept()
+        testScope.runCurrent()
+        a.session.state(MediaConnectionState.CONNECTED)
+        b.session.state(MediaConnectionState.CONNECTED)
+        testScope.advanceTimeBy(61_000)
+        b.manager.hangup()
+        testScope.runCurrent()
+        assertEquals(listOf(Triple(AB, id, SystemEvent.Call("b", CallOutcome.COMPLETED, video = true, durationSeconds = 61))), a.signalling.notices)
+    }
+
+    @Test
+    fun `a call that rings out leaves one missed notice for the callee and no answer for the caller`() = world {
+        val a = phone("a", "a1")
+        val b = phone("b", "b1")
+        val id = a.manager.startCall(AB, video = false)
+        testScope.runCurrent()
+        testScope.advanceTimeBy(46_000)
+        assertEquals(listOf(Triple(AB, id, SystemEvent.Call("a", CallOutcome.MISSED, video = false))), b.signalling.notices)
+        assertEquals(listOf(Triple(AB, id, SystemEvent.Call("b", CallOutcome.NO_ANSWER, video = false))), a.signalling.notices)
+        assertTrue(b.signalling.sent.isEmpty(), "a missed call sends nothing")
+    }
+
+    @Test
+    fun `busy, declined and cancelled calls leave their notices and an answer elsewhere or a failed setup none`() = world {
+        val a = phone("a", "a1")
+        val b = phone("b", "b1")
+        val d = phone("d", "d1")
+        // declined
+        val declined = a.manager.startCall(AB, video = false)
+        testScope.runCurrent()
+        b.manager.reject()
+        testScope.runCurrent()
+        assertEquals(Triple(AB, declined, SystemEvent.Call("b", CallOutcome.REJECTED, video = false)), a.signalling.notices.single())
+        assertEquals(Triple(AB, declined, SystemEvent.Call("a", CallOutcome.REJECTED, video = false)), b.signalling.notices.single())
+        testScope.advanceTimeBy(5_000)
+        // busy: b is in a call with d
+        val bd = d.manager.startCall(BD, video = false)
+        testScope.runCurrent()
+        b.manager.accept()
+        testScope.runCurrent()
+        val busy = a.manager.startCall(AB, video = false)
+        testScope.runCurrent()
+        assertEquals(Triple(AB, busy, SystemEvent.Call("b", CallOutcome.BUSY, video = false)), a.signalling.notices.last())
+        testScope.advanceTimeBy(5_000)
+        b.manager.hangup()
+        testScope.runCurrent()
+        testScope.advanceTimeBy(5_000)
+        // cancelled while it rings
+        val cancelled = a.manager.startCall(AB, video = false)
+        testScope.runCurrent()
+        a.manager.hangup()
+        testScope.runCurrent()
+        assertEquals(Triple(AB, cancelled, SystemEvent.Call("b", CallOutcome.NO_ANSWER, video = false)), a.signalling.notices.last())
+        assertTrue(bd.isNotEmpty())
+        testScope.advanceTimeBy(5_000)
+        // answered on another device of the callee: no notice on the phone that stopped ringing
+        val b2 = phone("b", "b2")
+        val elsewhere = a.manager.startCall(AB, video = false)
+        testScope.runCurrent()
+        b2.manager.accept()
+        testScope.runCurrent()
+        assertEquals(CallState.Ended(elsewhere, EndReason.ANSWERED_ELSEWHERE), b.state)
+        assertTrue(b.signalling.notices.none { it.second == elsewhere })
+        a.manager.hangup()
+    }
+
+    @Test
+    fun `a media setup that fails before connecting leaves no notice`() = world {
+        val a = phone("a", "a1")
+        phone("b", "b1")
+        a.media.createFailure = IOException("no audio")
+        a.manager.startCall(AB, video = false)
+        testScope.runCurrent()
+        assertTrue(a.signalling.notices.isEmpty())
     }
 }

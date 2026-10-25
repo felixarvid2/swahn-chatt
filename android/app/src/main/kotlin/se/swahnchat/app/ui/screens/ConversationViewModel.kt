@@ -36,6 +36,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -74,6 +75,8 @@ import se.swahnchat.app.ui.model.withSeparators
 import se.swahnchat.app.ui.model.ReplyUi
 import se.swahnchat.app.ui.model.attachmentKindOf
 import se.swahnchat.core.client.DownloadState
+import se.swahnchat.core.client.call.CallManager
+import se.swahnchat.core.client.call.CallState
 import se.swahnchat.core.client.SwahnChatEngine
 import se.swahnchat.core.client.LocalStore
 import se.swahnchat.core.client.MessageGoneException
@@ -120,6 +123,8 @@ data class ConversationUiState(
     val resumed: Boolean = false,
     /** In a direct chat anyone can change the timer; in a group only administrators. */
     val canSetTimer: Boolean = true,
+    /** Another call (or this one) is in progress: the call buttons are disabled. */
+    val callActive: Boolean = false,
 )
 
 /** One chosen file in the preview strip above the composer. */
@@ -161,6 +166,7 @@ class ConversationViewModel @Inject constructor(
     private val prefs: AppPrefs,
     private val connectivity: ConnectivityMonitor,
     connectionStatus: ConnectionStatus,
+    calls: CallManager,
     @ApplicationScope private val appScope: CoroutineScope,
 ) : ViewModel() {
     val conversationId: String = checkNotNull(savedState["id"])
@@ -273,11 +279,14 @@ class ConversationViewModel @Inject constructor(
     /** Everything around the list that comes from the database or the connection. */
     private class Around(
         val latest: LatestMessageRow?, val newMessages: Int, val connection: ConnectionUi, val safety: SafetyUi, val openUnread: Int,
-        val timer: Long,
+        val timer: Long, val callActive: Boolean,
     )
 
     /** -1 until the unread state at opening is known (the screen keeps the list hidden meanwhile). */
     private val openUnread = MutableStateFlow(-1)
+
+    /** A call is in progress (ringing, connecting or connected), so no second one can be placed from here. */
+    private val callActive = calls.state.map { it is CallState.InCall }.distinctUntilChanged()
 
     private val around = combine<Any?, Around>(
         repo.latestMessage(conversationId),
@@ -286,8 +295,9 @@ class ConversationViewModel @Inject constructor(
         repo.safety(conversationId),
         openUnread,
         repo.timer(conversationId),
+        callActive,
     ) { v ->
-        Around(v[0] as LatestMessageRow?, v[1] as Int, v[2] as ConnectionUi, v[3] as SafetyUi, v[4] as Int, v[5] as Long)
+        Around(v[0] as LatestMessageRow?, v[1] as Int, v[2] as ConnectionUi, v[3] as SafetyUi, v[4] as Int, v[5] as Long, v[6] as Boolean)
     }
 
     val state: StateFlow<ConversationUiState> = combine(header, composer, around) { h, c, ar ->
@@ -304,7 +314,7 @@ class ConversationViewModel @Inject constructor(
             draft = c.draft, recording = c.recording, sending = c.sending, loaded = true,
             latestId = ar.latest?.id, latestOutgoing = ar.latest?.outgoing == true, newMessages = ar.newMessages,
             openUnread = ar.openUnread, connection = ar.connection, safety = ar.safety,
-            staged = c.staged, resumed = c.resumed, timerSeconds = ar.timer, canSetTimer = !h.isGroup || h.iAmAdmin,
+            staged = c.staged, resumed = c.resumed, timerSeconds = ar.timer, canSetTimer = !h.isGroup || h.iAmAdmin, callActive = ar.callActive,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ConversationUiState())
 

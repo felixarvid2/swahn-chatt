@@ -57,6 +57,7 @@ data class SettingsUiState(
     val theme: ThemeMode = ThemeMode.SYSTEM,
     val notificationPrivacy: NotificationPrivacy = NotificationPrivacy.FULL,
     val blockScreenshots: Boolean = false,
+    val callsRelayOnly: Boolean = false,
     val appLockEnabled: Boolean = false,
     val lockTimeout: LockTimeout = LockTimeout.IMMEDIATELY,
     val versionName: String = "",
@@ -88,11 +89,19 @@ class SettingsViewModel @Inject constructor(
     private val account = combine(engine.account, repo.userMap()) { a, users -> a to a?.let { users[it.userId] } }
     private val transient = combine(busy, error, passwordChanged, invitation) { b, e, p, i -> arrayOf<Any?>(b, e, p, i) }
 
-    private class Choices(
+    private class Choices0(
         val theme: ThemeMode, val privacy: NotificationPrivacy, val blockScreenshots: Boolean, val lockEnabled: Boolean, val lockTimeout: LockTimeout,
     )
 
-    private val choices = combine(prefs.theme, prefs.notificationPrivacy, prefs.blockScreenshots, prefs.appLockEnabled, prefs.lockTimeout, ::Choices)
+    private class Choices(
+        val theme: ThemeMode, val privacy: NotificationPrivacy, val blockScreenshots: Boolean, val lockEnabled: Boolean, val lockTimeout: LockTimeout,
+        val callsRelayOnly: Boolean,
+    )
+
+    private val choices = combine(
+        combine(prefs.theme, prefs.notificationPrivacy, prefs.blockScreenshots, prefs.appLockEnabled, prefs.lockTimeout, ::Choices0),
+        prefs.callsRelayOnly,
+    ) { c, relay -> Choices(c.theme, c.privacy, c.blockScreenshots, c.lockEnabled, c.lockTimeout, relay) }
 
     val state: StateFlow<SettingsUiState> = combine(account, devices, push.status, choices, transient) { (a, user), d, ps, c, t ->
         // distributorsTick makes the list re-read when the screen is shown again (a distributor may have been installed)
@@ -104,7 +113,7 @@ class SettingsViewModel @Inject constructor(
             avatar = AvatarUi(user?.displayName ?: a?.displayName.orEmpty(), user?.avatarAttachmentId),
             isAdmin = a?.isAdmin == true, serverUrl = a?.serverUrl.orEmpty(), deviceName = a?.deviceName.orEmpty(),
             devices = d, pushStatus = ps, distributors = push.distributors(), selectedDistributor = push.selectedDistributor(),
-            theme = c.theme, notificationPrivacy = c.privacy, blockScreenshots = c.blockScreenshots,
+            theme = c.theme, notificationPrivacy = c.privacy, blockScreenshots = c.blockScreenshots, callsRelayOnly = c.callsRelayOnly,
             appLockEnabled = c.lockEnabled, lockTimeout = c.lockTimeout, versionName = BuildConfig.VERSION_NAME,
             busy = t[0] as Boolean, error = t[1] as UiError?, passwordChanged = t[2] as Boolean, invitation = t[3] as CreatedInvitation?,
             invitationQr = (t[3] as CreatedInvitation?)?.let { inv -> a?.serverUrl?.let { server -> InviteQr.payload(server, inv.code) } },
@@ -165,6 +174,7 @@ class SettingsViewModel @Inject constructor(
     fun setTheme(mode: ThemeMode) = prefs.setTheme(mode)
     fun setNotificationPrivacy(value: NotificationPrivacy) = prefs.setNotificationPrivacy(value)
     fun setBlockScreenshots(value: Boolean) = prefs.setBlockScreenshots(value)
+    fun setCallsRelayOnly(value: Boolean) = prefs.setCallsRelayOnly(value)
     fun setLockTimeout(value: LockTimeout) = prefs.setLockTimeout(value)
 
     /** Called after the user authenticated (the screen asks first). */
