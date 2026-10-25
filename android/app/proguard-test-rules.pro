@@ -71,5 +71,8 @@
 
 # Calls: WebRtcLoopbackTest builds the real factory and drives the media session interface from :core:client. org.webrtc itself is
 # kept by the app rules (WebRTC section of proguard-rules.pro), so a missing rule there fails the test.
--keep,allowobfuscation class se.swahnchat.app.call.WebRtcMediaSessionFactory { <init>(...); }
+# The video test also reads the factory's current session and the session's video tracks, which the app reaches only from the call
+# screen (R8 inlined or dropped them in the qa APK: NoSuchMethodError getCurrent()).
+-keep,allowobfuscation class se.swahnchat.app.call.WebRtcMediaSessionFactory { <init>(...); public *; }
+-keep,allowobfuscation class se.swahnchat.app.call.WebRtcMediaSession { public *; }
 -keep,allowobfuscation class se.swahnchat.core.client.call.** { *; }

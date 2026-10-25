@@ -49,7 +49,7 @@ jobs:
 
       - name: Upload detekt reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: swahnchat-detekt-reports
           path: android/**/build/reports/detekt/
@@ -134,7 +134,7 @@ jobs:
 
       - name: Upload instrumented test reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: swahnchat-instrumented-reports-api${{ matrix.api-level }}
           path: |
@@ -191,7 +191,7 @@ jobs:
 
       - name: Upload debug APK
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: swahnchat-debug-apk
           path: android/app/build/outputs/apk/debug/*.apk
@@ -199,7 +199,7 @@ jobs:
 
       - name: Upload test and lint reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: swahnchat-android-reports
           path: |

@@ -87,6 +87,24 @@ data class LocalAttachment(
     val downloadState: DownloadState,
 )
 
+/** How a call ended, for the history notice ([SystemEvent.Call]). */
+enum class CallOutcome {
+    /** The call connected; the notice carries its duration. */
+    COMPLETED,
+
+    /** Incoming: not answered here. */
+    MISSED,
+
+    /** Outgoing: nobody answered. */
+    NO_ANSWER,
+
+    /** Outgoing: the other side was in another call. */
+    BUSY,
+
+    /** Declined, by the other side (outgoing) or here (incoming). */
+    REJECTED,
+}
+
 /**
  * A notice inserted into a conversation by the engine instead of a real message. Devices are named by their immutable
  * server UUID ([deviceId]); the server's device number is never used.
@@ -117,6 +135,12 @@ sealed interface SystemEvent {
      * of a member (or by this device for its own change), never from the server's `disappearing_seconds`.
      */
     data class TimerChanged(val userId: String, val seconds: Long) : SystemEvent
+
+    /**
+     * A call with [peerUserId] ended: [outcome], and for [CallOutcome.COMPLETED] how long it lasted ([durationSeconds]).
+     * Written by this phone alone when the call ends (never sent), one per call.
+     */
+    data class Call(val peerUserId: String, val outcome: CallOutcome, val video: Boolean, val durationSeconds: Long = 0) : SystemEvent
 
     /** Content of a newer app version was received and ignored: "Update the app to see everything". At most once per conversation. */
     data object UpdateRequired : SystemEvent

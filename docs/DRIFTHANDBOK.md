@@ -25,7 +25,6 @@ Om inget annat står körs kommandona på Pi:n, i mappen `~/deployment` (där `d
 15. [Larm till din telefon (ntfy)](#15-larm-till-din-telefon-ntfy)
 16. [Databasunderhåll och HTTPS-skydd](#16-databasunderhåll-och-https-skydd)
 17. [Röst- och videosamtal (TURN)](#17-röst--och-videosamtal-turn)
-18. [Byte från FamilyChat till Swahn Chat](#18-byte-från-familychat-till-swahn-chat)
 
 ## 1. Rutiner: dagligen, veckovis, månadsvis
 
@@ -481,10 +480,21 @@ docker compose logs turn | tail
 - **Portar:** 3478 UDP+TCP och 49160-49200 UDP (och 5349 för `turns:` om du lagt certifikat i `deployment/turn-certs/`).
   Med bara Tailscale: öppna inget i routern, tillåt portarna på `tailscale0` i brandväggen. Publikt: vidarebefordra exakt
   dessa portar och sätt `TURN_EXTERNAL_IP`. Reläet använder värdnätverk och lyssnar på alla Pi:ns gränssnitt, så brandväggen avgör vem som når det.
-- **Tailnätsadresser:** reläet nekar som standard att skicka till `100.64.0.0/10` (Tailscale) och till alla privata nät, så
-  en läckt reläuppgift inte kan användas för att nå andra enheter på ditt tailnät eller hemnätet. Sätt
-  `TURN_ALLOW_TAILNET_PEERS=true` bara om samtal mellan två telefoner på tailnätet verkligen måste gå via reläet, och
-  begränsa då Pi:ns åtkomst med Tailscale-ACL:er.
+- **Vad reläet nekar:** IPv4 för privata nät (`10/8`, `172.16/12` inklusive Docker-näten, `192.168/16`), loopback,
+  länklokala adresser (`169.254/16`), `0.0.0.0/8`, `192.0.0.0/24`, `198.18.0.0/15`, multicast och reserverade adresser
+  (`224/4`, `240/4`), Tailscales `100.64.0.0/10` och som standard all IPv6. En läckt reläuppgift kan därför inte användas
+  för att nå hemnätet, andra containrar eller andra enheter på tailnätet. Kvar finns Pi:ns egen publika adress
+  (`TURN_EXTERNAL_IP`): två telefoner som båda går via reläet når varandra den vägen, så den kan inte nekas. Tjänster som
+  Pi:n lyssnar med på alla gränssnitt kan alltså nås via reläet av den som har en reläuppgift; låt bara det som måste vara
+  publikt lyssna publikt. Reläuppgifter delas bara ut till inloggade och gäller 10-20 minuter.
+- **Undantag (av som standard):** `TURN_ALLOW_TAILNET_PEERS=true` bara om samtal mellan två telefoner på tailnätet
+  verkligen måste gå via reläet (begränsa då Pi:ns åtkomst med Tailscale-ACL:er). `TURN_ALLOW_IPV6_PEERS=true` bara om
+  telefonerna verkligen behöver IPv6 via reläet; då nekas bara de särskilda IPv6-områdena.
+- **Gränser:** högst 10 allokeringar per användare och 10-minutersfönster, 40 totalt.
+- **Samtalsmeddelanden:** signalmeddelandena (typ `call`) raderas av timjobbet när de är äldre än
+  `SWAHNCHAT_CALL_RETENTION_SECONDS` (standard 600), alltså 10-70 minuter efter att de skickats. Lediga sidor ligger kvar i
+  SQLite-filen tills veckojobbets `VACUUM` skriver om den (görs bara om mer än 20 % av filen är lediga sidor); det finns
+  ingen `secure_delete`. Innehållet är krypterat hela vägen.
 - **Integritet:** reläet ser telefonernas IP-adresser och trafikmängd, aldrig innehållet. Vid direkta samtal ser
   parterna varandras IP-adresser, om inte appen använder "bara relä". Push för inkommande samtal är en vanlig
   innehållsfri push med hög prioritet; ntfy-servern ser bara "brådskande".
@@ -495,64 +505,3 @@ docker compose logs turn | tail
   pågående samtal klarar sig tills deras uppgifter går ut (en timme).
 - **Uppgradering:** bilden är fastlåst (`coturn/coturn:4.18.0`); byt version medvetet i `docker-compose.yml`, läs
   releaseanteckningarna och kör `docker compose --profile turn pull`.
-
-## 18. Byte från FamilyChat till Swahn Chat
-
-Appen och servern heter nu Swahn Chat (version 0.5.0). Namnet ändrades överallt, även i inställningsnamn och filnamn,
-så en befintlig installation måste flyttas över en gång. Servern hjälper till: den döper själv om `familychat.db`
-till `swahnchat.db` vid första starten, den läser inte längre `FAMILYCHAT_*`-variabler (den loggar ett fel som
-nämner dem, och i produktion vägrar den starta om bara `FAMILYCHAT_SECRET_KEY` är satt, så att den aldrig startar
-med en tillfällig nyckel), och `restore.sh`/`verify-backup` godtar gamla `familychat-backup-*`-arkiv.
-
-Gör så här på Pi:n:
-
-```bash
-# 1. Stoppa stacken och ta en säkerhetskopia först (med det gamla repot, som fortfarande heter familychat)
-cd ~/familychat/deployment            # den gamla klonen; justera sökvägen om din ligger någon annanstans
-./backup.sh ~/familychat-backups      # ger familychat-backup-*.tar.gz; kopiera den gärna också bort från Pi:n
-docker compose down                   # volymerna finns kvar (ingen -v!)
-
-# 2. Hämta den nya koden och flytta över .env; byt variabelprefix med ETT kommando
-git clone https://github.com/felixarvid2/swahn-chatt.git ~/swahn-chat
-cp ~/familychat/deployment/.env ~/swahn-chat/deployment/.env && chmod 600 ~/swahn-chat/deployment/.env
-sed -i 's/FAMILYCHAT_/SWAHNCHAT_/g' ~/swahn-chat/deployment/.env
-grep -n 'FAMILYCHAT\|TS_HOSTNAME' ~/swahn-chat/deployment/.env   # inga FAMILYCHAT_ kvar; behåll TS_HOSTNAME=familychat om telefonerna ska nå samma Tailscale-namn
-
-# 3. Flytta datat från de gamla Docker-volymerna (projektet hette familychat, nu swahnchat).
-#    Volymernas riktiga namn är <projekt>_<volym>: familychat_familychat-data blir swahnchat_swahnchat-data.
-#    Databasfilen familychat.db i volymen döps om till swahnchat.db av servern vid första starten.
-for v in familychat-data caddy-data caddy-config ntfy-cache tailscale-state; do
-  old="familychat_$v"; new="swahnchat_${v/familychat/swahnchat}"
-  docker volume inspect "$old" >/dev/null 2>&1 || continue          # volymen används inte i din installation
-  docker volume create --label com.docker.compose.project=swahnchat \
-    --label "com.docker.compose.volume=${v/familychat/swahnchat}" "$new" >/dev/null
-  docker run --rm -v "$old":/from -v "$new":/to alpine cp -a /from/. /to/
-done
-# Samma sak i korthet för den viktigaste volymen:
-#   docker run --rm -v familychat_familychat-data:/from -v swahnchat_swahnchat-data:/to alpine cp -a /from/. /to/
-
-# 4. Byt namn på systemd-enheterna och säkerhetskopiemappen
-sudo systemctl disable --now familychat-backup.timer familychat-verify-backup.timer
-sudo rm /etc/systemd/system/familychat-*.service /etc/systemd/system/familychat-*.timer
-mv ~/familychat-backups ~/swahnchat-backups
-[ -d /etc/familychat ] && sudo mv /etc/familychat /etc/swahnchat      # admin-ntfy.env för larmen
-sudo cp ~/swahn-chat/deployment/systemd/swahnchat-* /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now swahnchat-backup.timer swahnchat-verify-backup.timer
-
-# 5. Starta och kontrollera
-cd ~/swahn-chat/deployment
-docker compose up -d --build
-docker compose ps && curl -s http://127.0.0.1:8000/readyz
-docker compose exec backend python -m app.cli check-config      # ska sluta med "configuration OK"
-docker compose exec backend ls /data                            # swahnchat.db ska finnas, familychat.db inte
-./backup.sh ~/swahnchat-backups && ./backup.sh --verify-latest ~/swahnchat-backups
-```
-
-**Telefonerna.** Swahn Chat har ett nytt app-id (`se.swahnchat.app`), så det är en ny app: varje telefon måste
-avinstallera FamilyChat och installera Swahn Chat, och logga in på nytt. Den lokala historiken försvinner med den gamla
-appen om den inte exporteras först: öppna **Inställningar**, **Exportera historik** i FamilyChat *innan* du
-avinstallerar, och importera filen i Swahn Chat (den nya appen läser gamla exportfiler).
-
-**Städa efter en vecka** när allt fungerat: `docker volume rm familychat_familychat-data` (och övriga `familychat_*`),
-`rm -r ~/familychat` och de gamla säkerhetskopiorna när du har färska nya.

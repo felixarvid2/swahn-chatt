@@ -2,7 +2,6 @@
 
 import ipaddress
 import logging
-import os
 import secrets
 from functools import lru_cache
 from pathlib import Path
@@ -13,20 +12,6 @@ from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 log = logging.getLogger("swahnchat.config")
-
-LEGACY_ENV_PREFIX = "FAMILYCHAT_"  # the variable prefix before the rename to Swahn Chat (never read as values)
-
-
-def legacy_env_vars() -> list[str]:
-    """Names (never values) of leftover FAMILYCHAT_* environment variables."""
-    return sorted(k for k in os.environ if k.upper().startswith(LEGACY_ENV_PREFIX))
-
-
-def legacy_env_message(names: list[str]) -> str:
-    return (
-        f"the old FAMILYCHAT_* variables are set ({', '.join(names)}) but are no longer read: "
-        "rename them to SWAHNCHAT_* (see docs/DRIFTHANDBOK.md, 'Byte från FamilyChat till Swahn Chat')"
-    )
 
 
 class ConfigError(RuntimeError):
@@ -97,19 +82,11 @@ class Settings(BaseSettings):
     turn_urls: str = ""
     turn_secret: str = ""
     stun_urls: str = ""
-    turn_ttl_seconds: int = Field(3600, ge=60, le=86400)
+    turn_ttl_seconds: int = Field(600, ge=60, le=86400)
 
     @model_validator(mode="after")
     def _finish(self) -> "Settings":
-        legacy = legacy_env_vars()
-        if legacy:
-            log.error(legacy_env_message(legacy))
         if len(self.secret_key.encode()) < 32:
-            if self.env == "production" and "FAMILYCHAT_SECRET_KEY" in legacy:
-                # Never start with an ephemeral key because the operator forgot to rename the variable.
-                raise ConfigError(
-                    "SWAHNCHAT_SECRET_KEY is not set but FAMILYCHAT_SECRET_KEY is: " + legacy_env_message(legacy)
-                )
             if self.env == "production":
                 raise ConfigError(
                     "SWAHNCHAT_SECRET_KEY must be set to at least 32 bytes in production "

@@ -27,6 +27,22 @@ cp /etc/coturn/turnserver.conf "$conf"
     echo "denied-peer-ip=100.64.0.0-100.127.255.255"
     echo "denied-peer-ip=fd7a:115c:a1e0::-fd7a:115c:a1e0:ffff:ffff:ffff:ffff:ffff"
   fi
+  # IPv6 peers: all denied by default (phones relay over IPv4; an allowed IPv6 range would be a way past the IPv4 rules
+  # above, for example through NAT64 or IPv4-mapped addresses). Opt in only if phones really need IPv6 relaying: then
+  # just the special-purpose ranges are denied and global unicast peers are allowed.
+  if [ "${TURN_ALLOW_IPV6_PEERS:-false}" != "true" ]; then
+    echo "denied-peer-ip=::-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff"
+  else
+    echo "denied-peer-ip=::1"
+    echo "denied-peer-ip=::ffff:0:0-::ffff:ffff:ffff"
+    echo "denied-peer-ip=64:ff9b::-64:ff9b::ffff:ffff"
+    echo "denied-peer-ip=64:ff9b:1::-64:ff9b:1:ffff:ffff:ffff:ffff:ffff"
+    echo "denied-peer-ip=100::-100::ffff:ffff:ffff:ffff"
+    echo "denied-peer-ip=2001:db8::-2001:db8:ffff:ffff:ffff:ffff:ffff:ffff"
+    echo "denied-peer-ip=fc00::-fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff"
+    echo "denied-peer-ip=fe80::-febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff"
+    echo "denied-peer-ip=ff00::-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff"
+  fi
   if [ -r /certs/fullchain.pem ] && [ -r /certs/privkey.pem ]; then
     echo "tls-listening-port=5349"
     echo "cert=/certs/fullchain.pem"

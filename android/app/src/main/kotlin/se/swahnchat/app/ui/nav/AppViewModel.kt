@@ -6,6 +6,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import se.swahnchat.app.data.AppPrefs
 import se.swahnchat.app.data.SessionManager
@@ -14,6 +15,8 @@ import se.swahnchat.app.data.ThemeMode
 import se.swahnchat.app.platform.security.AppLock
 import se.swahnchat.app.ui.components.isInsecureUrl
 import se.swahnchat.core.client.SwahnChatEngine
+import se.swahnchat.core.client.call.CallManager
+import se.swahnchat.core.client.call.CallState
 import java.io.File
 import javax.inject.Inject
 
@@ -24,6 +27,7 @@ class AppViewModel @Inject constructor(
     prefs: AppPrefs,
     private val engine: SwahnChatEngine,
     private val lock: AppLock,
+    calls: CallManager,
 ) : ViewModel() {
     val session: StateFlow<SessionState> = sessionManager.state
 
@@ -32,6 +36,10 @@ class AppViewModel @Inject constructor(
     /** True while the app lock hides the app (only with an account). */
     val locked: StateFlow<Boolean> = combine(lock.locked, sessionManager.state) { l, s -> l && s is SessionState.SignedIn }
         .stateIn(viewModelScope, SharingStarted.Eagerly, lock.locked.value)
+
+    /** The call in progress (ringing or running), for the bar at the top of the app; null between calls. */
+    val activeCall: StateFlow<CallState.InCall?> = calls.state.map { it as? CallState.InCall }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     fun unlock() = lock.unlock()
 

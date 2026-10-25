@@ -18,7 +18,6 @@ from app.services.attachments import InvalidStoragePath, check_storage_path
 
 FORMAT = 1
 DB_NAME = "swahnchat.db"
-LEGACY_DB_NAME = "familychat.db"  # archives made before the rename to Swahn Chat contain the database under this name
 ATT_RE = re.compile(r"^attachments/[0-9a-f]{2}/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
 
@@ -213,8 +212,6 @@ def _extract_verified(archive: Path, staging: Path, keep_attachments: bool = Tru
         with tarfile.open(archive, "r:gz") as tar:
             for member in tar:
                 name = member.name
-                if name == LEGACY_DB_NAME:
-                    name = DB_NAME  # old archive: read the database under its new name
                 if not member.isfile():
                     raise BackupError(f"unexpected non-file entry in archive: {name!r}")
                 if name not in ("manifest.json", DB_NAME) and not ATT_RE.match(name):
@@ -244,7 +241,7 @@ def _extract_verified(archive: Path, staging: Path, keep_attachments: bool = Tru
     try:
         manifest = json.loads((staging / "manifest.json").read_text())
         db_path = manifest["database"]["path"]
-        expected = {DB_NAME if db_path == LEGACY_DB_NAME else db_path: manifest["database"]}
+        expected = {db_path: manifest["database"]}
         expected.update({e["path"]: e for e in manifest["attachments"]})
     except (ValueError, KeyError, TypeError) as exc:
         raise BackupError("manifest is invalid") from exc

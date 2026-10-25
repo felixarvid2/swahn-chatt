@@ -26,6 +26,9 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.Apps
+import androidx.compose.material.icons.filled.Call
+import se.swahnchat.app.call.canShowFullScreenCalls
+import se.swahnchat.app.call.openFullScreenIntentSettings
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
@@ -108,6 +111,10 @@ class SettingsCallbacks(
     val onTheme: (ThemeMode) -> Unit = {},
     val onNotificationPrivacy: (NotificationPrivacy) -> Unit = {},
     val onBlockScreenshots: (Boolean) -> Unit = {},
+    val onCallsRelayOnly: (Boolean) -> Unit = {},
+    /** Whether incoming calls may take over the screen (Android 14+ lets the user switch that off); false shows a row that opens the setting. */
+    val fullScreenIntentAllowed: Boolean = true,
+    val onOpenFullScreenIntentSettings: () -> Unit = {},
     val onLockTimeout: (LockTimeout) -> Unit = {},
     /** Turn the app lock on or off; the screen has already checked that the user can authenticate. */
     val onAppLock: (Boolean) -> Unit = {},
@@ -141,7 +148,9 @@ fun SettingsScreen(
     val state by vm.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri -> uri?.let(vm::setAvatar) }
-    LifecycleResumeEffect(vm) { vm.onShown(); onPauseOrDispose {} }
+    // checked again when the person comes back from the system page that switches it
+    var fullScreenAllowed by remember { mutableStateOf(canShowFullScreenCalls(context)) }
+    LifecycleResumeEffect(vm) { vm.onShown(); fullScreenAllowed = canShowFullScreenCalls(context); onPauseOrDispose {} }
     val activity = LocalActivity.current as? FragmentActivity
     val promptTitle = stringResource(R.string.lock_prompt_title)
     SettingsContent(
@@ -151,7 +160,9 @@ fun SettingsScreen(
             onPickAvatar = { pick.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
             onClearAvatar = vm::clearAvatar, onChangePassword = vm::changePassword, onRevokeDevice = vm::revokeDevice,
             onSelectDistributor = vm::selectDistributor, onTheme = vm::setTheme,
-            onNotificationPrivacy = vm::setNotificationPrivacy, onBlockScreenshots = vm::setBlockScreenshots,
+            onNotificationPrivacy = vm::setNotificationPrivacy, onBlockScreenshots = vm::setBlockScreenshots, onCallsRelayOnly = vm::setCallsRelayOnly,
+            fullScreenIntentAllowed = fullScreenAllowed,
+            onOpenFullScreenIntentSettings = { openFullScreenIntentSettings(context) },
             onLockTimeout = vm::setLockTimeout, onAppLock = vm::setAppLock, lockAvailable = Authenticator.isAvailable(context),
             onAuthenticate = { done -> if (activity != null) Authenticator.prompt(activity, promptTitle, null) { ok -> if (ok) done() } }, onCreateInvitation = vm::createInvitation,
             onDismissInvitation = vm::dismissInvitation, onDismissPasswordChanged = vm::dismissPasswordChanged, onLogout = vm::logout,
@@ -246,6 +257,12 @@ fun SettingsContent(state: SettingsUiState, cb: SettingsCallbacks, modifier: Mod
                 stringResource(if (notificationsOn) R.string.notifications_on else R.string.notifications_off), onClick = cb.onOpenSystemNotificationSettings,
             )
             SettingRow(Icons.Filled.Apps, stringResource(R.string.push_title), pushSummary(state), onClick = { pickDistributor = true })
+            if (!cb.fullScreenIntentAllowed) {
+                SettingRow(
+                    Icons.Filled.Call, stringResource(R.string.calls_full_screen), stringResource(R.string.calls_full_screen_hint),
+                    onClick = cb.onOpenFullScreenIntentSettings,
+                )
+            }
 
             // --- privacy and security ---
             Section(R.string.settings_privacy)
@@ -256,6 +273,10 @@ fun SettingsContent(state: SettingsUiState, cb: SettingsCallbacks, modifier: Mod
             SwitchRow(
                 Icons.Filled.PhoneAndroid, stringResource(R.string.block_screenshots), stringResource(R.string.block_screenshots_hint),
                 state.blockScreenshots, cb.onBlockScreenshots,
+            )
+            SwitchRow(
+                Icons.Filled.Call, stringResource(R.string.calls_relay_only), stringResource(R.string.calls_relay_only_hint),
+                state.callsRelayOnly, cb.onCallsRelayOnly,
             )
             SwitchRow(
                 Icons.Filled.Lock, stringResource(R.string.app_lock), stringResource(R.string.app_lock_hint), state.appLockEnabled,

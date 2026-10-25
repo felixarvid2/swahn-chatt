@@ -505,20 +505,42 @@ block UDP (copy `fullchain.pem` and `privkey.pem` to `deployment/turn-certs/`, r
 from Caddy's certificate volume or `tailscale cert`, and add `turns:your.host:5349?transport=tcp` to
 `SWAHNCHAT_TURN_URLS`). Certificate renewals need a copy and a `docker compose restart turn`.
 
-**Tailscale addresses and the relay (`TURN_ALLOW_TAILNET_PEERS`)**
+**What the relay may send to (`TURN_ALLOW_TAILNET_PEERS`, `TURN_ALLOW_IPV6_PEERS`)**
 
-coturn only relays to peer addresses it is allowed to, and the configuration denies the private ranges (RFC 1918, ULA,
-link-local, loopback, `0.0.0.0/8`), so a stolen credential cannot be used to reach your home network or other containers
-through the Pi. The Tailscale range `100.64.0.0/10` (and `fd7a:115c:a1e0::/48`) is denied by default too, because the Pi
-is normally a member of your tailnet and the relay would otherwise let any credential holder send packets to every
-other tailnet host the Pi can reach (a NAS, a laptop, an admin interface). The cost: if both phones are on the tailnet
-and the relay is the only path between them, relaying to their `100.x` addresses is refused. That case is rare, because
-tailnet phones connect directly (or through Tailscale's own DERP) and do not use a relay. If you do need it, set
-`TURN_ALLOW_TAILNET_PEERS=true`, restart `turn`, and restrict what the Pi's node may reach with Tailscale ACLs.
+coturn only relays to peer addresses it is allowed to. The configuration denies, for IPv4: `0.0.0.0/8`, `10.0.0.0/8`,
+loopback `127.0.0.0/8`, link-local `169.254.0.0/16` (cloud metadata), `172.16.0.0/12` (also the Docker bridge networks),
+`192.0.0.0/24`, `192.168.0.0/16`, `198.18.0.0/15`, multicast `224.0.0.0/4` and `240.0.0.0/4` (reserved, including the
+broadcast address). The Tailscale range `100.64.0.0/10` (and `fd7a:115c:a1e0::/48`) is denied by default too, because the
+Pi is normally a member of your tailnet and the relay would otherwise let any credential holder send packets to every
+other tailnet host the Pi can reach (a NAS, a laptop, an admin interface). All IPv6 peers are denied by default as well.
 
-**Limits** (in `turnserver.conf`): 10 allocations per user, 40 in total, about 12 Mbit/s per allocation, UDP relays only
-(no TCP relay), relay ports 49160-49200, nonces valid 10 minutes, STUN `fingerprint` on, no admin CLI. coturn 4.18 already
-requires TLS 1.2 and starts no DTLS listener, so no extra options are set for that.
+Opt-ins (both default to `false` in `.env`, restart `turn` after changing them):
+
+- `TURN_ALLOW_TAILNET_PEERS=true` lifts the tailnet rule. Only needed if two phones on the tailnet must relay through the
+  Pi, which is rare because tailnet phones connect directly (or through Tailscale's own DERP). Restrict what the Pi's node
+  may reach with Tailscale ACLs.
+- `TURN_ALLOW_IPV6_PEERS=true` replaces the blanket IPv6 denial with the special ranges only (loopback, IPv4-mapped,
+  NAT64, documentation, discard, ULA, link-local, multicast), so global IPv6 peers are allowed. Enable it only if phones
+  really need IPv6 relaying.
+
+What remains reachable, and cannot be closed without breaking calls: the Pi's own public address (`TURN_EXTERNAL_IP`).
+Two phones that both relay through this server reach each other via that address (relay to relay), so it is not denied.
+A credential holder can therefore send packets, through the relay, to any service the Pi binds on all interfaces. Bind
+only what must be public (the compose stack publishes the backend on `127.0.0.1` only) and keep the host firewall
+closed for everything else. Credentials only go to logged-in family members and are valid for 10 to 20 minutes
+(`SWAHNCHAT_TURN_TTL_SECONDS`, default 600).
+
+**Limits** (in `turnserver.conf`): 10 allocations per user per 10-minute window (the credential's user name is the same
+for every fetch inside a window, so the quota counts the user, not each credential), 40 in total, about 12 Mbit/s per
+allocation, UDP relays only (no TCP relay), relay ports 49160-49200, nonces valid 10 minutes, STUN `fingerprint` on, no
+admin CLI. The credential endpoint is limited to 10 requests per minute and user. coturn 4.18 already requires TLS 1.2
+and starts no DTLS listener, so no extra options are set for that.
+
+**Call messages on the server.** The encrypted signalling messages (`call`) are deleted by the hourly maintenance job once
+they are older than `SWAHNCHAT_CALL_RETENTION_SECONDS` (default 600), that is 10 to 70 minutes after sending. SQLite does
+not overwrite deleted rows: the freed pages stay in the database file until a `VACUUM` rewrites it, which the weekly
+database maintenance does only when more than 20 % of the file is free pages and the server is quiet (there is no
+`secure_delete`). The messages are ciphertext either way.
 
 **Privacy.** The relay sees both phones' IP addresses and how much and when they send, never the content. In a direct
 (non-relayed) call the two phones learn each other's current IP addresses. If someone should not learn the other's IP,
@@ -530,6 +552,8 @@ Verified in this repository's test environment: `docker compose --profile turn c
 allocating a relay with generated credentials and exchanging packets (`turnutils_uclient`), refusal of bad and expired
 credentials, and refusal to relay to the denied ranges. Not verified: calls between real phones, `turns:` with real
 certificates, behind-NAT operation, Raspberry Pi hardware.
+The later peer-range changes (extra IPv4 ranges, blanket IPv6 denial, `TURN_ALLOW_IPV6_PEERS`) were checked in the generated
+configuration only, not against a running coturn.
 
 ## Troubleshooting
 
@@ -542,62 +566,3 @@ certificates, behind-NAT operation, Raspberry Pi hardware.
 | Revoked device still shows connected | The CLI cannot reach the running server's sockets; they close within `SWAHNCHAT_WS_REVALIDATE_SECONDS` (60 s) |
 | No push notifications | ntfy health URL, battery optimisation for the ntfy app, `docker compose logs backend \| grep push` |
 | Disk filling up | `docker system df`; attachments live in the `swahnchat-data` volume (per-user quota `SWAHNCHAT_USER_QUOTA_MB`) |
-
-## Byte från FamilyChat till Swahn Chat
-
-(Switching an existing install from FamilyChat to Swahn Chat, v0.5.0. The commands are the same as in
-`DRIFTHANDBOK.md` section 18.) The rename touched every setting, file and unit name, so an existing install is moved
-once. The server helps: on first start it renames `familychat.db` to `swahnchat.db` inside the data volume; it no
-longer reads `FAMILYCHAT_*` variables (it logs an error naming them, and in production it refuses to start when only
-`FAMILYCHAT_SECRET_KEY` is set, so it never runs with an ephemeral key); and `restore.sh` / `verify-backup` accept
-old `familychat-backup-*` archives. The steps (comments are Swedish, as in the handbook):
-
-```bash
-# 1. Stoppa stacken och ta en säkerhetskopia först (med det gamla repot, som fortfarande heter familychat)
-cd ~/familychat/deployment            # den gamla klonen; justera sökvägen om din ligger någon annanstans
-./backup.sh ~/familychat-backups      # ger familychat-backup-*.tar.gz; kopiera den gärna också bort från Pi:n
-docker compose down                   # volymerna finns kvar (ingen -v!)
-
-# 2. Hämta den nya koden och flytta över .env; byt variabelprefix med ETT kommando
-git clone https://github.com/felixarvid2/swahn-chatt.git ~/swahn-chat
-cp ~/familychat/deployment/.env ~/swahn-chat/deployment/.env && chmod 600 ~/swahn-chat/deployment/.env
-sed -i 's/FAMILYCHAT_/SWAHNCHAT_/g' ~/swahn-chat/deployment/.env
-grep -n 'FAMILYCHAT\|TS_HOSTNAME' ~/swahn-chat/deployment/.env   # inga FAMILYCHAT_ kvar; behåll TS_HOSTNAME=familychat om telefonerna ska nå samma Tailscale-namn
-
-# 3. Flytta datat från de gamla Docker-volymerna (projektet hette familychat, nu swahnchat).
-#    Volymernas riktiga namn är <projekt>_<volym>: familychat_familychat-data blir swahnchat_swahnchat-data.
-#    Databasfilen familychat.db i volymen döps om till swahnchat.db av servern vid första starten.
-for v in familychat-data caddy-data caddy-config ntfy-cache tailscale-state; do
-  old="familychat_$v"; new="swahnchat_${v/familychat/swahnchat}"
-  docker volume inspect "$old" >/dev/null 2>&1 || continue          # volymen används inte i din installation
-  docker volume create --label com.docker.compose.project=swahnchat \
-    --label "com.docker.compose.volume=${v/familychat/swahnchat}" "$new" >/dev/null
-  docker run --rm -v "$old":/from -v "$new":/to alpine cp -a /from/. /to/
-done
-# Samma sak i korthet för den viktigaste volymen:
-#   docker run --rm -v familychat_familychat-data:/from -v swahnchat_swahnchat-data:/to alpine cp -a /from/. /to/
-
-# 4. Byt namn på systemd-enheterna och säkerhetskopiemappen
-sudo systemctl disable --now familychat-backup.timer familychat-verify-backup.timer
-sudo rm /etc/systemd/system/familychat-*.service /etc/systemd/system/familychat-*.timer
-mv ~/familychat-backups ~/swahnchat-backups
-[ -d /etc/familychat ] && sudo mv /etc/familychat /etc/swahnchat      # admin-ntfy.env för larmen
-sudo cp ~/swahn-chat/deployment/systemd/swahnchat-* /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now swahnchat-backup.timer swahnchat-verify-backup.timer
-
-# 5. Starta och kontrollera
-cd ~/swahn-chat/deployment
-docker compose up -d --build
-docker compose ps && curl -s http://127.0.0.1:8000/readyz
-docker compose exec backend python -m app.cli check-config      # ska sluta med "configuration OK"
-docker compose exec backend ls /data                            # swahnchat.db ska finnas, familychat.db inte
-./backup.sh ~/swahnchat-backups && ./backup.sh --verify-latest ~/swahnchat-backups
-```
-
-**Phones.** Swahn Chat has a new application id (`se.swahnchat.app`), so it is a different app: every phone must
-uninstall FamilyChat, install Swahn Chat and log in again. The local history is lost with the old app unless it is
-exported first (**Settings**, **Export history** in FamilyChat); the new app can import that file.
-
-**Clean up after a week:** `docker volume rm familychat_familychat-data` (and the other `familychat_*` volumes),
-`rm -r ~/familychat`, and the old backups once you have fresh ones.

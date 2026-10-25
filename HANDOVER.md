@@ -1,6 +1,6 @@
 # Swahn Chat handover
 
-> Formerly FamilyChat; renamed to Swahn Chat in v0.5.0 (new app id `se.swahnchat.app`, `SWAHNCHAT_*` settings, `swahnchat.db`). Older entries below that say "FamilyChat" describe the past.
+> Formerly FamilyChat; renamed to Swahn Chat in v0.5.0.
 
 Last updated: 2026-10-24. Branch `ccr-187bef76-iz1nsw` (PR #54: first version; PR #55: security fixes).
 
@@ -97,6 +97,21 @@ Do not relax it without asking.
   to localhost and private LAN ranges. Release builds are HTTPS-only.
 - Build sandbox quirk: Maven Central returned random 404/429 here, so a local retrying mirror
   (`/root/maven-mirror`, outside the repo) was used. A normal machine does not need it.
+
+## Calls status (parts A and B)
+
+- **Part A** (merged): call signalling over encrypted `call` messages, `CallManager` state machine, WebRTC audio, TURN credentials.
+- **Part B** (branch `calls-part-b`): video, audio routing (speaker/earpiece/headset, proximity), incoming-call notification with ringtone,
+  Answer/Decline and full-screen intent, ring worker, `CallService` (foreground service), `CallActivity`/`CallScreen` over the lock screen,
+  call buttons in direct conversations, ongoing-call bar, settings "Koppla samtal via servern" and the full-screen row, local call history
+  notices, the BUSY-from-own-device fix and the test that an unapproved device cannot ring. See `docs/ARCHITECTURE.md` "Calls (client)",
+  `docs/SECURITY.md` "Calls (the app)" and `docs/ANVANDARGUIDE.md` "Samtal".
+- **Verified in the sandbox:** unit tests (core and app, Robolectric), lint, detekt, `run-e2e.sh` against a real backend, R8 release and qa builds (the qa APK contains `org.webrtc` and `libjingle_peerconnection_so.so` for arm64-v8a and x86_64), and the instrumented tests *compile* (debug and qa); they were not run.
+- **Not verified (needs a phone or emulator):** everything with real audio and video: the loopback test `WebRtcLoopbackTest` (voice and video),
+  ringing with the app killed and in Doze, the full-screen intent on Android 14+, the foreground service types on Android 14/15, the camera,
+  Bluetooth routing, the proximity sensor, the ringtone with ringer mode and do-not-disturb.
+- **Known gaps:** no Telecom/`ConnectionService` integration (no system call log, no car/Bluetooth call controls); no voice-to-video upgrade in a
+  call; the ring worker can run as ordinary work when the expedited quota is spent; the caller's picture is not shown in the notification.
 
 ## Next steps (in order)
 

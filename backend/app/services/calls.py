@@ -8,6 +8,8 @@ import hmac
 from app import clock
 from app.config import Settings
 
+USERNAME_WINDOW_S = 600
+
 
 def turn_credentials(settings: Settings, user_id: str) -> dict:
     stun = settings.stun_url_list
@@ -15,6 +17,9 @@ def turn_credentials(settings: Settings, user_id: str) -> dict:
     ttl = settings.turn_ttl_seconds
     if not turn:  # no relay configured: clients still try host/STUN candidates
         return {"urls": stun, "username": None, "credential": None, "ttl": ttl}
-    username = f"{clock.now_ms() // 1000 + ttl}:{user_id}"
+    # The expiry is rounded to a 10-minute window, so a user gets the same username (and coturn's `user-quota` counts
+    # per user, not per credential) for every fetch within a window.
+    now = clock.now_ms() // 1000
+    username = f"{(now // USERNAME_WINDOW_S + 1) * USERNAME_WINDOW_S + ttl}:{user_id}"
     mac = hmac.new(settings.turn_secret.encode(), username.encode(), hashlib.sha1).digest()  # coturn mandates SHA-1
     return {"urls": stun + turn, "username": username, "credential": base64.b64encode(mac).decode(), "ttl": ttl}
