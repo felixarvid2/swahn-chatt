@@ -22,13 +22,13 @@ class Dispatcher:
         self.hub = hub
         self.push = push
 
-    def dispatch(self, pending: dict[str, int], kicks: set[str]) -> None:
+    def dispatch(self, pending: dict[str, int], kicks: set[str], urgent: set[str] = frozenset()) -> None:
         offline = []
         for device_id, cursor in pending.items():
             if not self.hub.send(device_id, {"type": "sync", "cursor": cursor}):
                 offline.append(device_id)
         if offline:
-            self.push.notify(offline)
+            self.push.notify(offline, urgent=[d for d in offline if d in urgent])
         for device_id in kicks:
             self.hub.kick(device_id)
 
@@ -39,6 +39,7 @@ def emit(
     type_: str,
     payload: dict,
     conversation_id: str | None = None,
+    urgent: bool = False,
 ) -> None:
     ids = list(dict.fromkeys(device_ids))
     if not ids:
@@ -52,6 +53,8 @@ def emit(
     pending: dict[str, int] = db.info.setdefault("pending_notify", {})
     for row in rows:
         pending[row.device_id] = max(pending.get(row.device_id, 0), row.seq)
+    if urgent:
+        db.info.setdefault("pending_urgent", set()).update(ids)  # offline ones get a high priority push
 
 
 def emit_receipt(db: Session, device_ids: Iterable[str], payload: dict, conversation_id: str) -> None:

@@ -4,7 +4,8 @@
 #   docker compose --profile caddy up -d    # + public HTTPS reverse proxy (ports 80/443)
 #   docker compose --profile ntfy up -d     # + self-hosted UnifiedPush server (ntfy)
 #   docker compose --profile tailscale up -d  # + Tailscale sidecar: HTTPS on your tailnet, no host-level tailscale
-# Profiles can be made permanent with COMPOSE_PROFILES=caddy,ntfy in .env (install-pi.sh does that).
+#   docker compose --profile turn up -d     # + coturn relay for audio/video calls (needs FAMILYCHAT_TURN_* in .env)
+# Profiles can be made permanent with COMPOSE_PROFILES=caddy,ntfy,turn in .env (install-pi.sh does that).
 # See ../docs/RASPBERRY_PI_SETUP.md.
 name: familychat
 
@@ -126,6 +127,47 @@ services:
       - ./tailscale-serve.json:/config/serve.json:ro
     security_opt:
       - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  # coturn: TURN/STUN relay for calls (WebRTC). Calls go phone to phone when they can; this relays when they cannot.
+  # Host networking on purpose: a relay needs the real source addresses and a UDP port range (49160-49200), which
+  # Docker's port publishing NAT handles badly. It listens on 3478 (udp+tcp) and, with certificates in ./turn-certs, 5349.
+  # Ports and the exposure story: docs/RASPBERRY_PI_SETUP.md, section "Calls". Do not publish ports with
+  # network_mode: host; open them in the host firewall or router only for a public setup.
+  turn:
+    profiles: ["turn"]
+    image: coturn/coturn:4.18.0   # pinned; bump deliberately (release notes), then `docker compose pull`
+    network_mode: host
+    restart: unless-stopped
+    entrypoint: ["/bin/bash", "/etc/coturn/turn-start.sh"]
+    command: []
+    environment:
+      TURN_SECRET: ${FAMILYCHAT_TURN_SECRET:-}
+      TURN_REALM: ${TURN_REALM:-familychat}
+      TURN_EXTERNAL_IP: ${TURN_EXTERNAL_IP:-}
+      TURN_ALLOW_TAILNET_PEERS: ${TURN_ALLOW_TAILNET_PEERS:-false}
+    volumes:
+      - ./turnserver.conf:/etc/coturn/turnserver.conf:ro
+      - ./turn-start.sh:/etc/coturn/turn-start.sh:ro
+      - ${TURN_CERT_DIR:-./turn-certs}:/certs:ro   # optional fullchain.pem + privkey.pem for turns: on 5349
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=8m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE   # the turnserver binary carries this file capability; without it the exec is refused
+    healthcheck:
+      test: ["CMD", "turnutils_stunclient", "-p", "3478", "127.0.0.1"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
     logging:
       driver: json-file
       options:

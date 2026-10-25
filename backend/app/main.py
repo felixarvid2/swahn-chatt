@@ -24,6 +24,7 @@ from app.routers import (
     admin,
     attachments,
     auth,
+    calls,
     conversations,
     devices,
     health,
@@ -268,7 +269,7 @@ def create_app(settings: Settings | None = None, push_transport=None, alert_tran
     app.include_router(metrics.router)  # Prometheus; local or admin only, see app/metrics.py
     api = "/api/v1"
     app.include_router(health.router, prefix=api)
-    for module in (auth, admin, users, devices, keys, conversations, messages, sync, attachments, ws):
+    for module in (auth, admin, users, devices, keys, conversations, messages, calls, sync, attachments, ws):
         app.include_router(module.router, prefix=api)
     install_openapi(app)
     return app
