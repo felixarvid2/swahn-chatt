@@ -448,6 +448,8 @@ class TwoUserEndToEndTest {
             // the offer reached bob end to end encrypted and with the DTLS fingerprint the media layer needs
             bobCalls.accept()
             eventually(timeout, "alice gets the answer") { aliceCalls.state.value is CallState.Connecting }
+            // Connecting comes first; the answer is handed to the media layer right after, in its own coroutine
+            eventually(timeout, "alice's media takes the answer") { aliceMedia.last.acceptedAnswers.isNotEmpty() }
             assertEquals(1, aliceMedia.last.acceptedAnswers.size)
             assertTrue(bobMedia.last.acceptedOffers.single().contains("a=fingerprint:"))
 

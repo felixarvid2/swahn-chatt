@@ -54,8 +54,7 @@ prune() {
   local dir="$1" keep="$2" i
   local -a files
   shopt -s nullglob
-  # Archives from before the rename (familychat-backup-*) sort first, which is also chronologically right.
-  files=("$dir"/familychat-backup-*.tar.gz "$dir"/swahnchat-backup-*.tar.gz) # sorted by name, oldest first
+  files=("$dir"/swahnchat-backup-*.tar.gz) # sorted by name, oldest first
   shopt -u nullglob
   for ((i = 0; i < ${#files[@]} - keep; i++)); do
     rm -f -- "${files[i]}"
@@ -66,9 +65,9 @@ prune() {
 if [ "$mode" = verify ]; then
   [ -d "$DEST" ] || { echo "no such directory: $DEST" >&2; exit 1; }
   shopt -s nullglob
-  archives=("$DEST"/familychat-backup-*.tar.gz "$DEST"/swahnchat-backup-*.tar.gz) # old name first, then by name
+  archives=("$DEST"/swahnchat-backup-*.tar.gz) # sorted by name, oldest first
   shopt -u nullglob
-  [ "${#archives[@]}" -gt 0 ] || { echo "no swahnchat-backup-*.tar.gz (or old familychat-backup-*.tar.gz) in $DEST" >&2; exit 1; }
+  [ "${#archives[@]}" -gt 0 ] || { echo "no swahnchat-backup-*.tar.gz in $DEST" >&2; exit 1; }
   newest="${archives[${#archives[@]} - 1]}"
   if [ -n "$(find "$newest" -mtime "+$MAX_AGE_DAYS" -print)" ]; then
     echo "newest backup $(basename "$newest") is older than $MAX_AGE_DAYS day(s): the nightly backup has stopped" >&2
@@ -109,7 +108,7 @@ status=0
 if [ -n "$RCLONE_REMOTE" ]; then
   RCLONE_BIN="${RCLONE:-rclone}"
   if command -v "$RCLONE_BIN" >/dev/null 2>&1; then
-    "$RCLONE_BIN" copy "$DEST" "$RCLONE_REMOTE" --include 'swahnchat-backup-*.tar.gz' --include 'familychat-backup-*.tar.gz' >&2 ||
+    "$RCLONE_BIN" copy "$DEST" "$RCLONE_REMOTE" --include 'swahnchat-backup-*.tar.gz' >&2 ||
       { echo "rclone copy to $RCLONE_REMOTE failed; the local backup $name is intact" >&2; status=3; }
   else
     echo "SWAHNCHAT_BACKUP_RCLONE_REMOTE is set but rclone is not installed; the local backup $name is intact" >&2

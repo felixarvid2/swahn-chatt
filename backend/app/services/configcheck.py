@@ -7,7 +7,7 @@ from pathlib import Path
 
 from sqlalchemy.engine import make_url
 
-from app.config import Settings, legacy_env_message, legacy_env_vars
+from app.config import Settings
 from app.services.push import parse_hosts
 from app.services.stats import free_disk_bytes
 
@@ -72,10 +72,6 @@ def check(settings: Settings, secret_key_bytes: int) -> ConfigReport:
         ),  # the secret is never printed
         ("admin_alerts", "on" if settings.admin_ntfy_url else "off"),  # the topic URL itself is never printed
     ]
-
-    legacy = legacy_env_vars()
-    if legacy:
-        r.errors.append(legacy_env_message(legacy))
 
     if secret_key_bytes < MIN_SECRET_BYTES:
         problem = (

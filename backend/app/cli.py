@@ -23,11 +23,9 @@ def _settings() -> Settings:
 
 def _open(settings: Settings):
     from app.db import make_engine, make_session_factory
-    from app.legacy import adopt_legacy_database
     from app.migrate import upgrade
 
     settings.data_dir.mkdir(parents=True, exist_ok=True)
-    adopt_legacy_database(settings)
     upgrade(settings)  # no-op when current; lets the CLI run before the first server start
     return make_session_factory(make_engine(settings.database_url))
 
