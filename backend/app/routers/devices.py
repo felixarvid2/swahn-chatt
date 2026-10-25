@@ -6,8 +6,9 @@ from app.deps import Principal, get_db, get_ip, get_limiter, get_principal, get_
 from app.errors import conflict, error_responses, invalid, not_found
 from app.models import Device
 from app.ratelimit import RateLimiter
-from app.schemas import OwnDeviceOut, PushRegistration, PushTestQueued
+from app.schemas import DeviceOut, DeviceRename, OwnDeviceOut, PushRegistration, PushTestQueued
 from app.services import accounts, audit
+from app.services.events import active_device_ids, co_member_user_ids, emit
 from app.services.push import endpoint_allowed, parse_hosts
 from app.services.views import device_out_db
 
@@ -93,6 +94,37 @@ def clear_push(p: Principal = Depends(get_principal), db: Session = Depends(get_
     device.push_endpoint = None
     db.commit()
     return Response(status_code=204)
+
+
+DEVICE_RENAMES_PER_MINUTE = 20
+
+
+@router.patch(
+    "/{device_id}",
+    response_model=DeviceOut,
+    summary="Rename one of the caller's own devices",
+    responses=error_responses(404, 413, 422, 429),
+)
+def rename_device(
+    device_id: str,
+    body: DeviceRename,
+    p: Principal = Depends(get_principal),
+    addr: str = Depends(get_ip),
+    limiter: RateLimiter = Depends(get_limiter),
+    db: Session = Depends(get_db),
+):
+    limiter.check(f"device-rename:{p.user_id}", DEVICE_RENAMES_PER_MINUTE)
+    device = db.get(Device, device_id)
+    if device is None or device.user_id != p.user_id or device.revoked_at is not None:
+        raise not_found("device not found")
+    if device.name != body.name:
+        device.name = body.name
+        # The name is free text, so the audit entry carries only the device id, like the other device entries.
+        audit.record(db, "device_renamed", actor=p.user_id, target_user=p.user_id, target=device_id, ip=addr)
+        targets = [d for d in active_device_ids(db, co_member_user_ids(db, p.user_id)) if d != p.device_id]
+        emit(db, targets, "devices_changed", {"user_id": p.user_id})
+        db.commit()
+    return device_out_db(db, device)
 
 
 @router.delete(
