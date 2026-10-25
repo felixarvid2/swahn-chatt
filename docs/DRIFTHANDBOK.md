@@ -480,10 +480,21 @@ docker compose logs turn | tail
 - **Portar:** 3478 UDP+TCP och 49160-49200 UDP (och 5349 för `turns:` om du lagt certifikat i `deployment/turn-certs/`).
   Med bara Tailscale: öppna inget i routern, tillåt portarna på `tailscale0` i brandväggen. Publikt: vidarebefordra exakt
   dessa portar och sätt `TURN_EXTERNAL_IP`. Reläet använder värdnätverk och lyssnar på alla Pi:ns gränssnitt, så brandväggen avgör vem som når det.
-- **Tailnätsadresser:** reläet nekar som standard att skicka till `100.64.0.0/10` (Tailscale) och till alla privata nät, så
-  en läckt reläuppgift inte kan användas för att nå andra enheter på ditt tailnät eller hemnätet. Sätt
-  `TURN_ALLOW_TAILNET_PEERS=true` bara om samtal mellan två telefoner på tailnätet verkligen måste gå via reläet, och
-  begränsa då Pi:ns åtkomst med Tailscale-ACL:er.
+- **Vad reläet nekar:** IPv4 för privata nät (`10/8`, `172.16/12` inklusive Docker-näten, `192.168/16`), loopback,
+  länklokala adresser (`169.254/16`), `0.0.0.0/8`, `192.0.0.0/24`, `198.18.0.0/15`, multicast och reserverade adresser
+  (`224/4`, `240/4`), Tailscales `100.64.0.0/10` och som standard all IPv6. En läckt reläuppgift kan därför inte användas
+  för att nå hemnätet, andra containrar eller andra enheter på tailnätet. Kvar finns Pi:ns egen publika adress
+  (`TURN_EXTERNAL_IP`): två telefoner som båda går via reläet når varandra den vägen, så den kan inte nekas. Tjänster som
+  Pi:n lyssnar med på alla gränssnitt kan alltså nås via reläet av den som har en reläuppgift; låt bara det som måste vara
+  publikt lyssna publikt. Reläuppgifter delas bara ut till inloggade och gäller 10-20 minuter.
+- **Undantag (av som standard):** `TURN_ALLOW_TAILNET_PEERS=true` bara om samtal mellan två telefoner på tailnätet
+  verkligen måste gå via reläet (begränsa då Pi:ns åtkomst med Tailscale-ACL:er). `TURN_ALLOW_IPV6_PEERS=true` bara om
+  telefonerna verkligen behöver IPv6 via reläet; då nekas bara de särskilda IPv6-områdena.
+- **Gränser:** högst 10 allokeringar per användare och 10-minutersfönster, 40 totalt.
+- **Samtalsmeddelanden:** signalmeddelandena (typ `call`) raderas av timjobbet när de är äldre än
+  `SWAHNCHAT_CALL_RETENTION_SECONDS` (standard 600), alltså 10-70 minuter efter att de skickats. Lediga sidor ligger kvar i
+  SQLite-filen tills veckojobbets `VACUUM` skriver om den (görs bara om mer än 20 % av filen är lediga sidor); det finns
+  ingen `secure_delete`. Innehållet är krypterat hela vägen.
 - **Integritet:** reläet ser telefonernas IP-adresser och trafikmängd, aldrig innehållet. Vid direkta samtal ser
   parterna varandras IP-adresser, om inte appen använder "bara relä". Push för inkommande samtal är en vanlig
   innehållsfri push med hög prioritet; ntfy-servern ser bara "brådskande".

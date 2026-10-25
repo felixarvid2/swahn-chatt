@@ -505,20 +505,42 @@ block UDP (copy `fullchain.pem` and `privkey.pem` to `deployment/turn-certs/`, r
 from Caddy's certificate volume or `tailscale cert`, and add `turns:your.host:5349?transport=tcp` to
 `SWAHNCHAT_TURN_URLS`). Certificate renewals need a copy and a `docker compose restart turn`.
 
-**Tailscale addresses and the relay (`TURN_ALLOW_TAILNET_PEERS`)**
+**What the relay may send to (`TURN_ALLOW_TAILNET_PEERS`, `TURN_ALLOW_IPV6_PEERS`)**
 
-coturn only relays to peer addresses it is allowed to, and the configuration denies the private ranges (RFC 1918, ULA,
-link-local, loopback, `0.0.0.0/8`), so a stolen credential cannot be used to reach your home network or other containers
-through the Pi. The Tailscale range `100.64.0.0/10` (and `fd7a:115c:a1e0::/48`) is denied by default too, because the Pi
-is normally a member of your tailnet and the relay would otherwise let any credential holder send packets to every
-other tailnet host the Pi can reach (a NAS, a laptop, an admin interface). The cost: if both phones are on the tailnet
-and the relay is the only path between them, relaying to their `100.x` addresses is refused. That case is rare, because
-tailnet phones connect directly (or through Tailscale's own DERP) and do not use a relay. If you do need it, set
-`TURN_ALLOW_TAILNET_PEERS=true`, restart `turn`, and restrict what the Pi's node may reach with Tailscale ACLs.
+coturn only relays to peer addresses it is allowed to. The configuration denies, for IPv4: `0.0.0.0/8`, `10.0.0.0/8`,
+loopback `127.0.0.0/8`, link-local `169.254.0.0/16` (cloud metadata), `172.16.0.0/12` (also the Docker bridge networks),
+`192.0.0.0/24`, `192.168.0.0/16`, `198.18.0.0/15`, multicast `224.0.0.0/4` and `240.0.0.0/4` (reserved, including the
+broadcast address). The Tailscale range `100.64.0.0/10` (and `fd7a:115c:a1e0::/48`) is denied by default too, because the
+Pi is normally a member of your tailnet and the relay would otherwise let any credential holder send packets to every
+other tailnet host the Pi can reach (a NAS, a laptop, an admin interface). All IPv6 peers are denied by default as well.
 
-**Limits** (in `turnserver.conf`): 10 allocations per user, 40 in total, about 12 Mbit/s per allocation, UDP relays only
-(no TCP relay), relay ports 49160-49200, nonces valid 10 minutes, STUN `fingerprint` on, no admin CLI. coturn 4.18 already
-requires TLS 1.2 and starts no DTLS listener, so no extra options are set for that.
+Opt-ins (both default to `false` in `.env`, restart `turn` after changing them):
+
+- `TURN_ALLOW_TAILNET_PEERS=true` lifts the tailnet rule. Only needed if two phones on the tailnet must relay through the
+  Pi, which is rare because tailnet phones connect directly (or through Tailscale's own DERP). Restrict what the Pi's node
+  may reach with Tailscale ACLs.
+- `TURN_ALLOW_IPV6_PEERS=true` replaces the blanket IPv6 denial with the special ranges only (loopback, IPv4-mapped,
+  NAT64, documentation, discard, ULA, link-local, multicast), so global IPv6 peers are allowed. Enable it only if phones
+  really need IPv6 relaying.
+
+What remains reachable, and cannot be closed without breaking calls: the Pi's own public address (`TURN_EXTERNAL_IP`).
+Two phones that both relay through this server reach each other via that address (relay to relay), so it is not denied.
+A credential holder can therefore send packets, through the relay, to any service the Pi binds on all interfaces. Bind
+only what must be public (the compose stack publishes the backend on `127.0.0.1` only) and keep the host firewall
+closed for everything else. Credentials only go to logged-in family members and are valid for 10 to 20 minutes
+(`SWAHNCHAT_TURN_TTL_SECONDS`, default 600).
+
+**Limits** (in `turnserver.conf`): 10 allocations per user per 10-minute window (the credential's user name is the same
+for every fetch inside a window, so the quota counts the user, not each credential), 40 in total, about 12 Mbit/s per
+allocation, UDP relays only (no TCP relay), relay ports 49160-49200, nonces valid 10 minutes, STUN `fingerprint` on, no
+admin CLI. The credential endpoint is limited to 10 requests per minute and user. coturn 4.18 already requires TLS 1.2
+and starts no DTLS listener, so no extra options are set for that.
+
+**Call messages on the server.** The encrypted signalling messages (`call`) are deleted by the hourly maintenance job once
+they are older than `SWAHNCHAT_CALL_RETENTION_SECONDS` (default 600), that is 10 to 70 minutes after sending. SQLite does
+not overwrite deleted rows: the freed pages stay in the database file until a `VACUUM` rewrites it, which the weekly
+database maintenance does only when more than 20 % of the file is free pages and the server is quiet (there is no
+`secure_delete`). The messages are ciphertext either way.
 
 **Privacy.** The relay sees both phones' IP addresses and how much and when they send, never the content. In a direct
 (non-relayed) call the two phones learn each other's current IP addresses. If someone should not learn the other's IP,
@@ -530,6 +552,8 @@ Verified in this repository's test environment: `docker compose --profile turn c
 allocating a relay with generated credentials and exchanging packets (`turnutils_uclient`), refusal of bad and expired
 credentials, and refusal to relay to the denied ranges. Not verified: calls between real phones, `turns:` with real
 certificates, behind-NAT operation, Raspberry Pi hardware.
+The later peer-range changes (extra IPv4 ranges, blanket IPv6 denial, `TURN_ALLOW_IPV6_PEERS`) were checked in the generated
+configuration only, not against a running coturn.
 
 ## Troubleshooting
 

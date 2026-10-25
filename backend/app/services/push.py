@@ -23,9 +23,6 @@ PUSH_PAYLOAD = {"t": "sync"}
 # Call signalling (kind "call") pushes carry the same content-free payload but ask for immediate delivery: ntfy reads
 # Priority (5 = max, wakes the phone through the distributor's high priority path), RFC 8030 push services read Urgency.
 URGENT_HEADERS = {"Priority": "5", "Urgency": "high"}
-# Call signalling (kind "call") pushes carry the same content-free payload but ask for immediate delivery: ntfy reads
-# Priority (5 = max, wakes the phone through the distributor's high priority path), RFC 8030 push services read Urgency.
-URGENT_HEADERS = {"Priority": "5", "Urgency": "high"}
 # Waits before the 2nd, 3rd ... attempt (so 3 attempts in all). The wait happens in a schedule, not in the worker.
 RETRY_DELAYS = (5.0, 30.0, 120.0)
 NO_RESPONSE = 0  # last_push_status when the request got no HTTP answer (network error, timeout)
