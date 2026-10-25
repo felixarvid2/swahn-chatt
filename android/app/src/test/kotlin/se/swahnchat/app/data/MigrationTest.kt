@@ -326,6 +326,96 @@ class MigrationTest {
         }
     }
 
+    /** Version 5 as the phone of an updated user holds it: a received and a sent message, a reaction, a timer, an unsent message. */
+    @Suppress("MaxLineLength") // SQL fixtures
+    private fun fillVersion5(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+        fillVersion1(db)
+        db.execSQL("INSERT INTO reactions (messageId, userId, conversationId, emoji, seq, at) VALUES ('m1', 'bob', 'c1', 'x', 3, 4)")
+        db.execSQL("INSERT INTO conversation_timers (conversationId, seconds, setBy, seq, at) VALUES ('c1', 3600, 'bob', 3, 4)")
+        db.execSQL("INSERT INTO outbox (messageId, conversationId, kind, targetMessageId, text, replyTo, attachments, clientTs, envelopes, attempts, lastError, createdAt, forwarded, expiresIn, `remove`) VALUES ('p1', 'c1', 'message', NULL, 'väntar', NULL, '[]', 11, NULL, 2, 'network', 12, 0, 3600, 0)")
+    }
+
+    @Test fun `version 5 to 6 keeps every row, old messages have no mentions, poll or schedule, and the new tables work`() {
+        helper.createDatabase("migration-v5-v6", 5).use { fillVersion5(it) }
+        // validated against 6.json
+        helper.runMigrationsAndValidate("migration-v5-v6", 6, true, AppDatabase.MIGRATION_5_6).use { db ->
+            fun count(table: String) = db.query("SELECT COUNT(*) FROM $table").use { it.moveToFirst(); it.getLong(0) }
+            assertEquals(1L, count("conversations"))
+            assertEquals(2L, count("messages"))
+            assertEquals(1L, count("reactions"))
+            assertEquals(1L, count("conversation_timers"))
+            assertEquals(1L, count("outbox"))
+            assertEquals(0L, count("poll_votes"))
+            assertEquals(0L, count("starred_messages"))
+            db.query("SELECT mentions, poll, scheduledAt, text FROM messages WHERE id = 'm1'").use { c ->
+                assertTrue(c.moveToFirst())
+                assertEquals("", c.getString(0)); assertTrue(c.isNull(1) && c.isNull(2)); assertEquals("hej 1", c.getString(3))
+            }
+            db.query("SELECT mentions, poll, optionIds, `close`, sendAt, text, expiresIn FROM outbox WHERE messageId = 'p1'").use { c ->
+                assertTrue(c.moveToFirst())
+                assertEquals("", c.getString(0)); assertTrue(c.isNull(1) && c.isNull(2)); assertEquals(0, c.getInt(3)); assertTrue(c.isNull(4))
+                assertEquals("väntar", c.getString(5)); assertEquals(3600L, c.getLong(6))
+            }
+            assertEquals(listOf("m1", "m2"), matches(db, "hej")) // the search index survived the ALTERs
+            db.execSQL("INSERT INTO poll_votes (messageId, userId, conversationId, optionIds, seq, at) VALUES ('m1', 'bob', 'c1', '0,2', 5, 6)")
+            db.execSQL("INSERT INTO starred_messages (messageId, conversationId, starredAt) VALUES ('m1', 'c1', 7)")
+            assertEquals(1L, count("poll_votes"))
+            assertEquals(1L, count("starred_messages"))
+        }
+    }
+
+    @Test fun `the whole chain from version 2 reaches version 6 with the data intact`() {
+        helper.createDatabase("migration-v2-v6", 2).use { db ->
+            fillVersion1(db)
+            db.execSQL("INSERT INTO drafts (conversationId, text, updatedAt) VALUES ('c1', 'Utkast', 5)")
+        }
+        helper.runMigrationsAndValidate("migration-v2-v6", 6, true, *AppDatabase.MIGRATIONS).use { db ->
+            fun count(table: String) = db.query("SELECT COUNT(*) FROM $table").use { it.moveToFirst(); it.getLong(0) }
+            assertEquals(2L, count("messages"))
+            assertEquals(1L, count("drafts"))
+            assertEquals(listOf("m1", "m2"), matches(db, "hej"))
+            for (t in listOf("poll_votes", "starred_messages", "reactions", "message_receipts")) assertEquals(0L, count(t), t)
+            db.query("SELECT cursor FROM sync_state WHERE id = 1").use { c -> assertTrue(c.moveToFirst()); assertEquals(77L, c.getLong(0)) }
+        }
+    }
+
+    @Test fun `the app opens a version 5 file through the real builder and polls, stars, mentions and schedules work on it`() {
+        val context = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
+        helper.createDatabase("swahnchat-upgrade5.db", 5).use { fillVersion5(it) }
+        val db = AppDatabase.build(context, factory = null, name = "swahnchat-upgrade5.db") { it.allowMainThreadQueries() }
+        try {
+            kotlinx.coroutines.runBlocking {
+                val store = se.swahnchat.app.data.db.RoomLocalStore(db)
+                val old = store.getMessage("m1")!!
+                assertEquals(emptyList(), old.mentions); assertEquals(null, old.poll); assertEquals(null, old.scheduledAt)
+                assertEquals(null, store.getOutboxEntry("p1")!!.sendAt)
+                store.updateMessage("m2") { it.copy(mentions = listOf("me")) } // unread: the conversation is read up to 1
+                store.updateMessage("m1") {
+                    it.copy(
+                        mentions = listOf("me"), scheduledAt = null,
+                        poll = se.swahnchat.core.client.PollInfo(
+                            listOf(se.swahnchat.core.model.PollOption(0, "Ja"), se.swahnchat.core.model.PollOption(1, "Nej")), true,
+                        ),
+                    )
+                }
+                assertEquals(listOf("me"), store.getMessage("m2")!!.mentions)
+                assertEquals(listOf("Ja", "Nej"), store.getMessage("m1")!!.poll!!.options.map { it.text })
+                assertEquals(1, store.unreadMentionCount("c1", "me"))
+                store.putPollVote(se.swahnchat.core.client.PollVote("m1", "c1", "bob", listOf(0, 1), 9, 10))
+                assertEquals(listOf(0, 1), store.getPollVotes("m1").single().optionIds)
+                store.setStarred("m2", "c1", true, 5)
+                assertEquals(listOf("m2"), store.starredMessages().map { it.id })
+                store.deleteMessageLocally("m2", "c1", 11)
+                assertEquals(emptyList(), store.starredMessages().map { it.id })
+                store.removeConversation("c1")
+                assertEquals(emptyList(), store.getPollVotes("m1"))
+            }
+        } finally {
+            db.close()
+            context.deleteDatabase("swahnchat-upgrade5.db")
+        }
+    }
+
     @Test fun `every version from 1 to the current one has a migration`() {
         val covered = AppDatabase.MIGRATIONS.map { it.startVersion to it.endVersion }.toSet()
         var v = 1

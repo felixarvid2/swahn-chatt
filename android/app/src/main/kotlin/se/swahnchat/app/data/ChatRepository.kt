@@ -14,6 +14,7 @@ import se.swahnchat.app.data.db.MessageEntity
 import se.swahnchat.app.data.db.MemberEntity
 import se.swahnchat.app.data.db.UserEntity
 import se.swahnchat.app.data.db.toModel
+import se.swahnchat.app.data.db.toPollVote
 import se.swahnchat.app.ui.model.AvatarUi
 import se.swahnchat.app.ui.model.ConversationItemUi
 import se.swahnchat.app.ui.model.MemberUi
@@ -22,6 +23,7 @@ import se.swahnchat.app.ui.model.SafetyUi
 import se.swahnchat.app.ui.model.UserUi
 import se.swahnchat.app.ui.model.delivery
 import se.swahnchat.core.client.SwahnChatEngine
+import se.swahnchat.core.client.PollVote
 import se.swahnchat.core.client.Reaction
 import se.swahnchat.core.client.ReceiptTimes
 import se.swahnchat.core.client.StoredMessage
@@ -68,6 +70,7 @@ class ChatRepository @Inject constructor(
                         unread = row.unread, typing = typing[row.id]?.isNotEmpty() == true,
                         draft = draftBy[row.id]?.takeIf { it.isNotBlank() },
                         pinned = row.pinnedAt != null, muted = isMuted(row.mutedUntil, now), archived = row.archived,
+                        mentioned = row.mentioned > 0,
                     )
                 }
             }
@@ -83,6 +86,7 @@ class ChatRepository @Inject constructor(
             "voice" -> PreviewKind.VOICE to null
             else -> PreviewKind.FILE to m.attachments.first().name
         }
+        m.poll != null -> PreviewKind.TEXT to "\uD83D\uDCCA ${m.text.orEmpty()}"
         else -> PreviewKind.TEXT to m.text
     }
 
@@ -100,6 +104,22 @@ class ChatRepository @Inject constructor(
     /** The reactions that stand in a conversation, by message id (oldest reaction first). */
     fun reactions(conversationId: String): Flow<Map<String, List<Reaction>>> =
         ui.observeReactions(conversationId).map { list -> list.map { it.toModel() }.groupBy { it.messageId } }.distinctUntilChanged()
+
+    /** The poll votes that stand in a conversation, by poll message id (oldest first). */
+    fun pollVotes(conversationId: String): Flow<Map<String, List<PollVote>>> =
+        ui.observePollVotes(conversationId).map { list -> list.map { it.toPollVote() }.groupBy { it.messageId } }.distinctUntilChanged()
+
+    /** Ids of the starred messages of a conversation. */
+    fun starredIds(conversationId: String): Flow<Set<String>> =
+        ui.observeStarredIds(conversationId).map { it.toSet() }.distinctUntilChanged()
+
+    /** The starred messages ([conversationId] null: all conversations), the most recently starred first. */
+    fun starred(conversationId: String?): Flow<List<StoredMessage>> =
+        ui.observeStarred(conversationId).map { list -> list.map { it.toModel() } }
+
+    /** Messages waiting for their time ([conversationId] null: all), earliest first. */
+    fun scheduled(conversationId: String?): Flow<List<StoredMessage>> =
+        ui.observeScheduled(conversationId).map { list -> list.map { it.toModel() } }
 
     /** The disappearing-messages timer this phone applies in the conversation, in seconds (0: off). */
     fun timer(conversationId: String): Flow<Long> = ui.observeTimer(conversationId).map { it?.seconds ?: 0L }.distinctUntilChanged()

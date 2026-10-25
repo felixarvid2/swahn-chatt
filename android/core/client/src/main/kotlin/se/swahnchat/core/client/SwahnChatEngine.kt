@@ -118,6 +118,7 @@ class SwahnChatEngine(
     private var sessionWatchJob: Job? = null
     private val syncRequests = Channel<Unit>(Channel.CONFLATED)
     private val outboxRequests = Channel<Unit>(Channel.CONFLATED)
+    private val scheduleChanged = Channel<Unit>(Channel.CONFLATED)
     private val typingJobs = HashMap<Pair<String, String>, Job>()
     private val lastTypingSent = HashMap<String, Long>()
 
@@ -466,9 +467,22 @@ class SwahnChatEngine(
     // Sending
     // =========================================================================================================
 
-    /** Queues a text message and returns its id immediately (the message is PENDING until the server has it). */
-    suspend fun sendText(conversationId: String, text: String, replyTo: String? = null): String =
-        sender.enqueueText(conversationId, text, replyTo).also { requestOutbox() }
+    /**
+     * Queues a text message and returns its id immediately (the message is PENDING until the server has it). [mentions] are the
+     * user ids named with `@` in [text] (a group only; each must be a member), carried inside the encrypted content. With
+     * [sendAt] (epoch ms, one minute to 30 days ahead) the message stays on this phone until then (see [scheduledMessages]).
+     */
+    suspend fun sendText(
+        conversationId: String,
+        text: String,
+        replyTo: String? = null,
+        mentions: List<String> = emptyList(),
+        sendAt: Long? = null,
+    ): String = sender.enqueueText(conversationId, text, replyTo, mentions, sendAt).also { afterEnqueue(sendAt) }
+
+    private fun afterEnqueue(sendAt: Long?) {
+        if (sendAt != null) scheduleChanged.trySend(Unit) else requestOutbox()
+    }
 
     /**
      * Queues a message with attachments. The files are read at send time and must stay in place until the message
@@ -479,13 +493,83 @@ class SwahnChatEngine(
         files: List<OutgoingAttachment>,
         caption: String? = null,
         replyTo: String? = null,
+        sendAt: Long? = null,
     ): String = sender.enqueueAttachments(
         conversationId,
         files.map {
             OutboxAttachment(it.file.absolutePath, it.mime, it.name ?: it.file.name, it.kind, it.width, it.height, it.durationMs, it.thumbnailBase64)
         },
-        caption, replyTo,
-    ).also { requestOutbox() }
+        caption, replyTo, sendAt,
+    ).also { afterEnqueue(sendAt) }
+
+    // --- polls -----------------------------------------------------------------------------------------------------
+
+    /** Sends a poll: [question] (up to 200 characters), 2 to 10 [options] (up to 100 each), [multiple] allows several choices. */
+    suspend fun sendPoll(conversationId: String, question: String, options: List<String>, multiple: Boolean = false): String =
+        sender.enqueuePoll(conversationId, question, options, multiple).also { requestOutbox() }
+
+    /** Votes on a poll: [optionIds] replace your earlier vote (empty: withdraw it). Not possible once the poll is closed. */
+    suspend fun votePoll(pollId: String, optionIds: List<Int>) {
+        sender.enqueueVote(pollId, optionIds)
+        requestOutbox()
+    }
+
+    /** The creator of a poll closes it; the votes stay, nobody can vote any more. */
+    suspend fun closePoll(pollId: String) {
+        sender.enqueueClosePoll(pollId)
+        requestOutbox()
+    }
+
+    /** The votes that stand on a poll (a withdrawn vote is not among them). */
+    suspend fun pollVotes(pollId: String): List<PollVote> = ctx.store.getPollVotes(pollId)
+
+    // --- stars (local only) ------------------------------------------------------------------------------------------
+
+    /** Stars or un-stars a message on this phone only; nothing is sent. */
+    suspend fun setStarred(messageId: String, starred: Boolean) {
+        val m = ctx.store.getMessage(messageId) ?: return
+        if (starred) require(!m.deleted && !m.isSystem) { "That message cannot be starred" }
+        ctx.store.setStarred(messageId, m.conversationId, starred, ctx.now())
+        ctx.emit(EngineEvent.MessageChanged(m.conversationId, messageId))
+    }
+
+    suspend fun isStarred(messageId: String): Boolean = ctx.store.isStarred(messageId)
+
+    /** Starred messages, the most recently starred first; of one conversation or (null) of all. */
+    suspend fun starredMessages(conversationId: String? = null): List<StoredMessage> = ctx.store.starredMessages(conversationId)
+
+    // --- scheduled messages ------------------------------------------------------------------------------------------
+
+    /** Messages written for later and not sent yet, earliest first (of one conversation, or of all when null). */
+    suspend fun scheduledMessages(conversationId: String? = null): List<StoredMessage> =
+        ctx.store.getOutbox().filter { it.sendAt != null && (conversationId == null || it.conversationId == conversationId) }
+            .sortedBy { it.sendAt }.mapNotNull { ctx.store.getMessage(it.messageId) }
+
+    /** Moves a scheduled message to another time (a minute to 30 days from now). */
+    suspend fun rescheduleMessage(messageId: String, sendAt: Long) {
+        sender.reschedule(messageId, sendAt)
+        scheduleChanged.trySend(Unit)
+    }
+
+    /** Sends a scheduled message now. */
+    suspend fun sendScheduledNow(messageId: String) {
+        sender.sendScheduledNow(messageId)
+        scheduleChanged.trySend(Unit)
+        requestOutbox()
+    }
+
+    /** Throws a scheduled message away (nothing was ever sent). Returns the removed message, whose copies of files the app may delete. */
+    suspend fun cancelScheduled(messageId: String): StoredMessage? =
+        sender.cancelScheduled(messageId).also { scheduleChanged.trySend(Unit) }
+
+    /** When the next scheduled message is due (epoch ms), or null; for the app to arrange a wake-up (WorkManager). */
+    suspend fun nextScheduledAt(): Long? = sender.nextScheduledAt()
+
+    /** Group messages that mention this account and are still unread in [conversationId]. */
+    suspend fun unreadMentions(conversationId: String): Int {
+        val me = ctx.account?.userId ?: return 0
+        return ctx.store.unreadMentionCount(conversationId, me)
+    }
 
     /** Replaces the text of one of your own messages (everyone sees "edited"). */
     suspend fun editMessage(messageId: String, newText: String) {
@@ -623,7 +707,7 @@ class SwahnChatEngine(
         val targets = conversationIds.distinct()
         require(targets.isNotEmpty() && targets.size <= MAX_FORWARD_TARGETS) { "1..$MAX_FORWARD_TARGETS conversations" }
         val source = ctx.store.getMessage(messageId) ?: throw IllegalArgumentException("Unknown message")
-        require(!source.deleted && !source.isSystem && source.decryptError == null) { "That message cannot be forwarded" }
+        require(!source.deleted && !source.isSystem && source.decryptError == null && source.poll == null) { "That message cannot be forwarded" }
         require(source.status != MessageStatus.PENDING && source.status != MessageStatus.FAILED) { "The message has not been sent yet" }
         for (t in targets) ctx.store.getConversation(t) ?: throw IllegalArgumentException("Unknown conversation")
         val files = source.attachments.map { a ->
@@ -832,6 +916,7 @@ class SwahnChatEngine(
                     }
                 }
             }
+            launch { watchSchedule() }
             launch {
                 var failures = 0
                 val backoff = BackoffPolicy(baseMs = 2_000, maxMs = 60_000)
@@ -847,6 +932,31 @@ class SwahnChatEngine(
                 }
             }
         }
+    }
+
+    /** Scheduled messages: wakes the outbox when the earliest one is due, and looks again when the schedule changes. */
+    private suspend fun watchSchedule() {
+        scheduleChanged.trySend(Unit)
+        for (r in scheduleChanged) {
+            var next = nextScheduledOrNull()
+            while (next != null) {
+                val wait = next - ctx.now()
+                val changed = wait > 0 && kotlinx.coroutines.withTimeoutOrNull(wait) { scheduleChanged.receive() } != null
+                if (!changed) {
+                    outboxRequests.trySend(Unit)
+                    delay(SCHEDULE_RECHECK_MS)
+                }
+                next = nextScheduledOrNull()
+            }
+        }
+    }
+
+    private suspend fun nextScheduledOrNull(): Long? = try {
+        sender.nextScheduledAt()
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        null
     }
 
     /** Re-arms [channel] after a delay so a transient failure is retried without an external trigger. */
@@ -976,5 +1086,11 @@ class OutgoingAttachment(
 const val MAX_FORWARD_TARGETS = 5
 
 internal const val MAX_AVATAR_BYTES = 2 * 1024 * 1024
+/** A scheduled message goes out between a minute and 30 days from the moment it is scheduled. */
+const val MIN_SCHEDULE_MS = 60_000L
+const val MAX_SCHEDULE_MS = 30L * 24 * 60 * 60 * 1000
+
+/** After waking the outbox for a due scheduled message, the schedule is looked at again after this long. */
+internal const val SCHEDULE_RECHECK_MS = 5_000L
 internal const val META_KEYS_UPLOADED = "keys_uploaded"
 internal const val META_PENDING_READ = "pending_read:"

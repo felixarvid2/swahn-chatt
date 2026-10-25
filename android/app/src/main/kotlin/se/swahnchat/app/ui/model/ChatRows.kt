@@ -4,6 +4,7 @@ import se.swahnchat.core.client.DecryptError
 import se.swahnchat.core.client.DownloadState
 import se.swahnchat.core.client.LocalAttachment
 import se.swahnchat.core.client.MessageStatus
+import se.swahnchat.core.client.PollVote
 import se.swahnchat.core.client.Reaction
 import se.swahnchat.core.client.StoredMessage
 import se.swahnchat.core.client.CallOutcome
@@ -35,6 +36,10 @@ class ChatRowContext(
     val unknownName: String = "?",
     /** Message id -> the reactions that stand on it (not taken back), oldest first. */
     val reactions: Map<String, List<Reaction>> = emptyMap(),
+    /** Message id -> the votes that stand on that poll. */
+    val votes: Map<String, List<PollVote>> = emptyMap(),
+    /** Ids of the starred messages. */
+    val starred: Set<String> = emptySet(),
 )
 
 fun attachmentKindOf(kind: String): AttachmentKindUi = when (kind) {
@@ -89,6 +94,26 @@ internal fun groupReactions(reactions: List<Reaction>, ctx: ChatRowContext): Lis
         )
     }.sortedByDescending { it.count }
 
+private fun reactorOf(userId: String, ctx: ChatRowContext): ReactorUi {
+    val user = ctx.users[userId]
+    val name = user?.displayName ?: ctx.unknownName
+    return ReactorUi(userId, name, AvatarUi(name, user?.avatarAttachmentId), userId == ctx.myUserId)
+}
+
+/** The poll of a message with the votes that stand; options keep the creator's order. */
+private fun StoredMessage.pollUi(ctx: ChatRowContext, sentAndUsable: Boolean): PollUi? {
+    val info = poll ?: return null
+    val votes = ctx.votes[id].orEmpty().filter { it.optionIds.isNotEmpty() }
+    val options = info.options.map { o ->
+        val voters = votes.filter { o.id in it.optionIds }
+        PollOptionUi(o.id, o.text, voters.map { reactorOf(it.userId, ctx) }, voters.any { it.userId == ctx.myUserId })
+    }
+    return PollUi(
+        options = options, multiple = info.multiple, closed = info.closed, voterCount = votes.size,
+        canVote = sentAndUsable && !info.closed, canClose = sentAndUsable && !info.closed && outgoing,
+    )
+}
+
 private fun StoredMessage.toUi(ctx: ChatRowContext, replyTarget: StoredMessage?): MessageUi {
     val outgoingMine = outgoing
     val sentAndUsable = !deleted && decryptError == null && status != MessageStatus.PENDING && status != MessageStatus.FAILED
@@ -116,7 +141,7 @@ private fun StoredMessage.toUi(ctx: ChatRowContext, replyTarget: StoredMessage?)
             }
         },
         failed = outgoingMine && status == MessageStatus.FAILED,
-        canEdit = outgoingMine && !deleted && status != MessageStatus.FAILED && !text.isNullOrBlank(),
+        canEdit = outgoingMine && !deleted && status != MessageStatus.FAILED && !text.isNullOrBlank() && poll == null,
         canDelete = outgoingMine && !deleted,
         canDeleteForMe = !(outgoingMine && status == MessageStatus.PENDING),
         canShowInfo = outgoingMine && !deleted && (status == MessageStatus.SENT || status == MessageStatus.DELIVERED || status == MessageStatus.READ),
@@ -124,8 +149,12 @@ private fun StoredMessage.toUi(ctx: ChatRowContext, replyTarget: StoredMessage?)
         speaker = if (outgoingMine) null else name ?: ctx.unknownName,
         reactions = if (deleted) emptyList() else groupReactions(ctx.reactions[id].orEmpty(), ctx),
         myReaction = ctx.reactions[id]?.firstOrNull { it.userId == ctx.myUserId }?.emoji,
-        canReact = sentAndUsable, canForward = sentAndUsable && (!text.isNullOrBlank() || attachments.isNotEmpty()),
+        canReact = sentAndUsable, canForward = sentAndUsable && poll == null && (!text.isNullOrBlank() || attachments.isNotEmpty()),
         forwarded = forwarded, imported = imported, expiresIn = expiresIn,
+        mentions = if (deleted) emptyList() else mentions.map { MentionUi(it, ctx.users[it]?.displayName ?: ctx.unknownName, it == ctx.myUserId) },
+        poll = if (deleted) null else pollUi(ctx, sentAndUsable),
+        starred = id in ctx.starred, canStar = !deleted && decryptError == null,
+        scheduledAt = scheduledAt,
     )
 }
 

@@ -34,6 +34,8 @@ data class ConversationItemUi(
     val muted: Boolean = false,
     /** Archived conversations are shown in their own section at the end of the list. */
     val archived: Boolean = false,
+    /** A message that mentions this account is unread: the row shows an "@". */
+    val mentioned: Boolean = false,
 )
 
 /** The conversation list in two parts: the main list (pinned first) and the archived ones. */
@@ -112,6 +114,38 @@ data class ReactionUi(val emoji: String, val reactors: List<ReactorUi>) {
     val mine: Boolean get() = reactors.any { it.isMe }
 }
 
+/** A person named with `@` in a message. */
+@Immutable
+data class MentionUi(val userId: String, val name: String, val isMe: Boolean)
+
+/** One answer of a poll with what has been voted for it. */
+@Immutable
+data class PollOptionUi(
+    val id: Int,
+    val text: String,
+    /** The people who chose it, in the order they voted. */
+    val voters: List<ReactorUi>,
+    val mine: Boolean,
+) {
+    val count: Int get() = voters.size
+}
+
+/** A poll as the bubble shows it; the question is the message text. */
+@Immutable
+data class PollUi(
+    val options: List<PollOptionUi>,
+    val multiple: Boolean,
+    val closed: Boolean,
+    /** People who voted at all (in a poll with several choices this is less than the sum of the counts). */
+    val voterCount: Int,
+    /** The vote can be changed: sent, not deleted, not closed. */
+    val canVote: Boolean,
+    /** Only the creator, while it is open. */
+    val canClose: Boolean,
+) {
+    val myChoice: List<Int> get() = options.filter { it.mine }.map { it.id }
+}
+
 @Immutable
 data class MessageUi(
     val id: String,
@@ -152,6 +186,15 @@ data class MessageUi(
     val imported: Boolean = false,
     /** Seconds this message lives once displayed (the sender's timer), null: it stays. */
     val expiresIn: Long? = null,
+    /** People named with `@` in the text (only members, as the receiver checked). */
+    val mentions: List<MentionUi> = emptyList(),
+    val poll: PollUi? = null,
+    /** Starred on this phone (local only). */
+    val starred: Boolean = false,
+    /** A starred message can be marked: it is not deleted and could be decrypted. */
+    val canStar: Boolean = false,
+    /** Written for later and not sent yet: shown dimmed with the time it will go out (epoch ms). */
+    val scheduledAt: Long? = null,
 )
 
 enum class SystemKind {

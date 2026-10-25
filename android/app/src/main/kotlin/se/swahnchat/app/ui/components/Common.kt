@@ -163,6 +163,28 @@ fun rememberClockFormatter(zone: ZoneId = ZoneId.systemDefault()): (Long) -> Str
     }
 }
 
+/** "Today 14:05" / "Wed 4 Nov 14:05" / "4 Nov 2027 14:05": when a scheduled message goes out. */
+@Composable
+fun rememberScheduleFormatter(now: Long = LocalNowMillis.current, zone: ZoneId = ZoneId.systemDefault()): (Long) -> String {
+    val clock = rememberClockFormatter(zone)
+    val locale = currentLocale()
+    val today = stringResource(R.string.today)
+    return remember(clock, locale, now, zone, today) {
+        val sameYear = DateTimeFormatter.ofPattern("EEE d MMM", locale)
+        val otherYear = DateTimeFormatter.ofPattern("d MMM yyyy", locale);
+        { ms: Long ->
+            val d = Instant.ofEpochMilli(ms).atZone(zone)
+            val nowDay = Instant.ofEpochMilli(now).atZone(zone).toLocalDate()
+            val day = when {
+                d.toLocalDate() == nowDay -> today
+                d.year == nowDay.year -> sameYear.format(d)
+                else -> otherYear.format(d)
+            }
+            "$day ${clock(ms)}"
+        }
+    }
+}
+
 /** For the conversation list: time today, weekday this week, else the date. */
 @Composable
 fun rememberListTimeFormatter(now: Long = LocalNowMillis.current, zone: ZoneId = ZoneId.systemDefault()): (Long) -> String {

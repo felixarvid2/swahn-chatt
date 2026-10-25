@@ -61,7 +61,9 @@ import se.swahnchat.app.ui.screens.MediaViewerScreen
 import se.swahnchat.app.ui.screens.NewConversationScreen
 import se.swahnchat.app.ui.screens.ServerSettingsScreen
 import se.swahnchat.app.ui.screens.SearchScreen
+import se.swahnchat.app.ui.screens.ScheduledScreen
 import se.swahnchat.app.ui.screens.SettingsScreen
+import se.swahnchat.app.ui.screens.StarredScreen
 
 private const val JUMP_KEY = "jump_to_message"
 
@@ -81,6 +83,8 @@ object Routes {
     const val STORAGE = "storage"
     const val AUTO_DOWNLOAD = "auto-download"
     const val FORWARD = "forward/{messageId}"
+    const val STARRED = "starred?conversation={conversation}"
+    const val SCHEDULED = "scheduled/{conversationId}"
     const val HISTORY = "history"
 
     /** [jump]: a message to scroll to on opening (from the search). */
@@ -91,6 +95,10 @@ object Routes {
     fun media(messageId: String, attachmentId: String) = "media/$messageId/$attachmentId"
     fun messageInfo(messageId: String) = "message-info/$messageId"
     fun forward(messageId: String) = "forward/$messageId"
+
+    /** The starred messages of one conversation, or (null) of all. */
+    fun starred(conversationId: String? = null) = if (conversationId == null) "starred" else "starred?conversation=$conversationId"
+    fun scheduled(conversationId: String) = "scheduled/$conversationId"
 }
 
 /** The window: a persistent red strip on top while the connection is insecure, then the app. */
@@ -167,7 +175,29 @@ private fun AppNavHost(nav: androidx.navigation.NavHostController, signedIn: Boo
                 onNew = { nav.navigate(Routes.NEW) },
                 onSettings = { nav.navigate(Routes.SETTINGS) },
                 onSearch = { nav.navigate(Routes.search()) },
+                onStarred = { nav.navigate(Routes.starred()) },
             )
+        }
+        composable(
+            Routes.STARRED,
+            arguments = listOf(navArgument("conversation") { type = NavType.StringType; nullable = true; defaultValue = null }),
+        ) { entry ->
+            val inConversation = entry.arguments?.getString("conversation") != null
+            StarredScreen(
+                onBack = { nav.popBackStack() },
+                onOpen = { conversationId, messageId ->
+                    if (inConversation) {
+                        // back to the open conversation, which scrolls to the message
+                        nav.previousBackStackEntry?.savedStateHandle?.set(JUMP_KEY, messageId)
+                        nav.popBackStack()
+                    } else {
+                        nav.navigate(Routes.conversation(conversationId, messageId))
+                    }
+                },
+            )
+        }
+        composable(Routes.SCHEDULED, arguments = listOf(navArgument("conversationId") { type = NavType.StringType })) {
+            ScheduledScreen(onBack = { nav.popBackStack() })
         }
         composable(
             Routes.SEARCH,
@@ -211,6 +241,9 @@ private fun AppNavHost(nav: androidx.navigation.NavHostController, signedIn: Boo
                     onOpenContact = { nav.navigate(Routes.contact(it)) },
                     onOpenMessageInfo = { nav.navigate(Routes.messageInfo(it)) },
                     onForward = { nav.navigate(Routes.forward(it)) },
+                    onOpenStarred = { nav.navigate(Routes.starred(it)) },
+                    onOpenScheduled = { nav.navigate(Routes.scheduled(it)) },
+                    onOpenConversation = { nav.navigate(Routes.conversation(it)) },
                 ),
             )
         }

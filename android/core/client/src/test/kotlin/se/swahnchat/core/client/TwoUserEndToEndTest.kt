@@ -487,6 +487,59 @@ class TwoUserEndToEndTest {
         assertFailsWith<ApiException.Invalid> { api.sendMessage(call(conv, target = UUID.randomUUID().toString())) }
     }
 
+    @Test
+    fun pollWithVotesMentionsAndAScheduledMessageThroughTheRealServer() = runBlocking<Unit> {
+        val g = alice.engine.createGroup("Omröstning $run", listOf(bob.userId, carol.userId))
+        listOf(bob, carol).forEach { it.engine.refreshDirectory(); it.engine.sync() }
+        eventually(timeout, "members know the group") { bob.store.getConversation(g.id) != null && carol.store.getConversation(g.id) != null }
+        listOf(alice, bob, carol).forEach { it.approveAllPending() }
+
+        // a poll is an ordinary message; its options are only in the encrypted content
+        val poll = alice.engine.sendPoll(g.id, "Pizza ikväll? $run", listOf("Ja", "Nej", "Kanske"), multiple = false)
+        eventually(timeout, "poll sent") { alice.store.getMessage(poll)!!.status != MessageStatus.PENDING }
+        bob.engine.sync(); carol.engine.sync()
+        assertEquals(listOf("Ja", "Nej", "Kanske"), bob.store.getMessage(poll)!!.poll!!.options.map { it.text })
+
+        // votes travel as `reaction` messages: the real server accepts them and the receivers count them
+        bob.engine.votePoll(poll, listOf(0))
+        carol.engine.votePoll(poll, listOf(1))
+        eventually(timeout, "votes sent") { bob.store.getOutbox().isEmpty() && carol.store.getOutbox().isEmpty() }
+        alice.engine.sync(); bob.engine.sync(); carol.engine.sync()
+        for (p in listOf(alice, bob, carol)) {
+            assertEquals(mapOf(bob.userId to listOf(0), carol.userId to listOf(1)), p.engine.pollVotes(poll).associate { it.userId to it.optionIds }, p.label)
+        }
+        // the server saw reactions to the poll, not messages
+        val onServer = alice.rawApi().listMessages(g.id, null, 50).filter { it.targetMessageId == poll }
+        assertEquals(2, onServer.size)
+        assertTrue(onServer.all { it.kind == MessageKind.REACTION })
+
+        // a changed and a withdrawn vote, then the creator closes the poll
+        bob.engine.votePoll(poll, listOf(2)); carol.engine.votePoll(poll, emptyList())
+        eventually(timeout, "changes sent") { bob.store.getOutbox().isEmpty() && carol.store.getOutbox().isEmpty() }
+        alice.engine.closePoll(poll)
+        eventually(timeout, "close sent") { alice.store.getOutbox().isEmpty() }
+        bob.engine.sync(); carol.engine.sync()
+        assertEquals(mapOf(bob.userId to listOf(2)), carol.engine.pollVotes(poll).associate { it.userId to it.optionIds })
+        assertTrue(carol.store.getMessage(poll)!!.poll!!.closed && bob.store.getMessage(poll)!!.poll!!.closed)
+        assertFailsWith<IllegalArgumentException> { carol.engine.votePoll(poll, listOf(0)) }
+
+        // a mention is inside the encrypted content, and counts as unread for the person named
+        val hello = alice.engine.sendText(g.id, "hej @Bob", mentions = listOf(bob.userId))
+        eventually(timeout, "mention sent") { alice.store.getMessage(hello)!!.status != MessageStatus.PENDING }
+        bob.engine.sync(); carol.engine.sync()
+        assertEquals(listOf(bob.userId), carol.store.getMessage(hello)!!.mentions)
+        assertEquals(1, bob.engine.unreadMentions(g.id))
+
+        // a scheduled message stays on the phone: the server knows nothing until the time has come
+        val at = System.currentTimeMillis() + 61_000
+        val later = alice.engine.sendText(g.id, "senare $run", sendAt = at)
+        alice.engine.processOutbox()
+        assertTrue(alice.rawApi().listMessages(g.id, null, 50).none { it.id == later })
+        assertEquals(at, alice.engine.scheduledMessages(g.id).single().scheduledAt)
+        alice.engine.cancelScheduled(later)
+        assertNull(alice.store.getMessage(later))
+    }
+
     private fun indexOf(haystack: ByteArray, needle: ByteArray): Int {
         outer@ for (i in 0..haystack.size - needle.size) {
             for (j in needle.indices) if (haystack[i + j] != needle[j]) continue@outer

@@ -143,6 +143,55 @@ Kommer aviseringarna ändå inte? Då kommer meddelandena ändå fram, bara sena
 
 ![Utan uppkoppling](../android/app/screenshots/2d_conversation_offline_light.png)
 
+### Formatera text
+
+Skriv `*fet*`, `_kursiv_`, `~genomstruken~` och `` `kod` `` så visas texten formaterad hos alla som har en nyare app
+(tecknen göms). Ett stycke kod skriver du mellan tre bakåtstreck (```) på egna rader. Tecknet måste ligga tätt intill
+texten (`* så här *` blir ingenting), ett tecken utan par visas som det skrevs, och en snedstreck före (`\*`) visar tecknet
+utan formatering. Länkar och adresser påverkas aldrig. Texten skickas som vanlig text; sökningen letar i den.
+
+![Formaterad text](../android/app/screenshots/50d_formatting_light.png)
+
+### Nämna någon (@) i en grupp
+
+Skriv `@` i en grupp så visas gruppens medlemmar; skriv några bokstäver för att välja ut en och tryck på namnet. Namnet
+markeras i meddelandet, ännu tydligare för den som nämns, och ett tryck på det öppnar ett samtal med personen. Den som
+nämns får en avisering ("Bertil nämnde dig") även om gruppen är avstängd, och samtalslistan visar ett **@** tills
+meddelandet är läst. Systemets *Stör ej* gäller som vanligt. Vad aviseringen visar följer inställningen för aviseringar.
+
+![Nämna någon](../android/app/screenshots/50c_mention_picker_light.png)
+
+### Omröstning
+
+Tryck på gemet och välj *Omröstning*: skriv en fråga (högst 200 tecken) och 2 till 10 alternativ (högst 100 tecken
+vardera), och slå på *Tillåt flera val* om det ska gå att välja flera. Tryck på ett alternativ för att rösta, tryck på det
+igen för att ta tillbaka rösten. Talet vid alternativet visar antalet röster; tryck på det för att se vem som röstat. Den
+som skapade omröstningen kan avsluta den (håll in meddelandet, *Avsluta omröstningen*); därefter går det inte att rösta
+mer. Röster är krypterade precis som meddelanden.
+
+![Omröstning](../android/app/screenshots/50_poll_light.png)
+
+### Stjärnmärkta meddelanden
+
+Håll in ett meddelande och välj *Stjärnmärk* (eller *Ta bort stjärna*). Meddelandet får en stjärna. I samtalets meny
+finns *Stjärnmärkta* för det samtalet, och i menyn på samtalslistan för alla samtal; ett tryck på en rad visar
+meddelandet i samtalet. Stjärnorna finns bara på den här telefonen: de skickas aldrig och ingen annan ser dem. De
+försvinner när meddelandet tas bort eller försvinner av sig självt.
+
+![Stjärnmärkta](../android/app/screenshots/50e_starred_light.png)
+
+### Schemalägga ett meddelande
+
+Skriv meddelandet (eller välj bilagor) och **håll in skicka-knappen**. Välj datum och tid, mellan en minut och 30 dagar
+framåt, och tryck *Schemalägg*. Meddelandet ligger kvar på din telefon, syns avtonat med en klocka och tiden, och skickas
+först då. Det krypteras först när det skickas, och en tid för försvinnande meddelanden räknas från när det verkligen
+skickas. Telefonen måste vara online och Android kan skjuta upp jobbet, så det kan bli några minuter sent. I samtalets
+meny finns *Schemalagda*: där kan du ändra tid, skicka direkt eller ta bort. Schemat överlever att appen stängs och att
+telefonen startas om.
+
+![Schemalagt meddelande](../android/app/screenshots/50f_scheduled_bubble_light.png)
+![Schemalagda meddelanden](../android/app/screenshots/50g_scheduled_list_light.png)
+
 ## Samtal: ringa, svara och videosamtal
 
 Du kan ringa ett röstsamtal eller videosamtal till en person i ett vanligt samtal mellan två. Det går inte i grupper, och

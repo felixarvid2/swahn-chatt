@@ -150,6 +150,29 @@ Client data flow:
 - Unread counts and conversation order come from Room (`last_message_seq`), corrected by the server's
   `GET /conversations` on full refresh.
 
+### Content types and local-only data (batch 5)
+
+Encrypted `Content` (version 2, every new field optional and omitted when unset) has these types: `text`, `edit`, `delete`,
+`reaction`, `timer`, `call`, and since batch 5 `poll` and `poll_vote`.
+
+- `text` may carry `mentions` (user ids, at most 50). The sender names only members (and not itself) and only in groups;
+  the receiver keeps only ids that are members of the conversation as it knows it, and the name `@Name` stays plain text.
+- `poll` is sent as an ordinary `message`: the question is `text` (at most 200 characters), `poll` holds 2-10 options
+  (`id` 0-9, at most 100 characters) and `multiple`. It has no target and no attachments.
+- `poll_vote` is sent as message kind `reaction` with `target_message_id` = the poll, carrying `option_ids` (empty: withdrawn)
+  or `close: true`. The receiver applies it only if the target is a poll, the sender is a member, the ids belong to the poll,
+  a single-choice poll gets at most one id and the poll is not closed; the newest vote of a member by server `seq` wins
+  (an own unsent vote wins until it has a `seq`); only the creator's close counts. A vote on a deleted poll is dropped, and
+  deleting the poll removes its votes. The server needs no change: it treats the event as a reaction (no unread, no
+  `last_message` change, any encrypted content).
+- Text formatting (`*bold*` etc.) is presentation only and is not part of the content.
+
+Room schema version 6 adds `poll_votes`, `starred_messages` (local only) and columns `messages.mentions/poll/scheduledAt`,
+`outbox.mentions/poll/optionIds/close/sendAt`. Stars and scheduled messages never leave the phone: a scheduled message is
+an outbox entry with `sendAt` that `SendPipeline.process` leaves alone until due; at that moment the entry is released
+(time of writing and disappearing-messages timer are those of that moment), encrypted for the devices of that moment and
+sent. `ScheduledSendWorker` (WorkManager, with an initial delay) and an in-process timer in the engine wake the outbox.
+
 ### App internals (`:app`)
 
 - **Storage.** One Room database, encrypted with SQLCipher, holds `LocalStore` (messages, conversations, outbox, cursor),

@@ -142,19 +142,21 @@ internal class SyncProcessor(private val ctx: EngineContext, private val directo
             var invisible = false
             decryptAndWrite(
                 m.senderUserId, m.senderDeviceId.takeIf { deviceKnown }, envelope.type, envelope.body,
-                // Text, a timer change, or a type of a newer app (which is consumed and not shown); never another known type.
+                // Text, a poll, a timer change, or a type of a newer app (which is consumed and not shown); never another known type.
                 check = { c ->
                     member && isBoundToEvent(c, m) &&
-                        (c.type == ContentType.TEXT || c.type == ContentType.TIMER || !c.isKnownType)
+                        (c.type == ContentType.TEXT || c.type == ContentType.POLL || c.type == ContentType.TIMER || !c.isKnownType)
                 },
             ) { r ->
                 when (r) {
-                    is Decrypted.Ok -> if (r.content.type != ContentType.TEXT) {
+                    is Decrypted.Ok -> if (r.content.type != ContentType.TEXT && r.content.type != ContentType.POLL) {
                         invisible = true
                         consume(m, r.content)
                     } else write(
                         base.copy(
                             text = r.content.text, replyTo = r.content.replyTo,
+                            mentions = validMentions(m.conversationId, r.content),
+                            poll = r.content.poll?.takeIf { r.content.type == ContentType.POLL }?.let(PollInfo::of),
                             forwarded = r.content.forwarded == true, expiresIn = validExpiry(r.content.expiresIn),
                             attachments = r.content.attachments.map { a ->
                                 LocalAttachment(
@@ -207,6 +209,17 @@ internal class SyncProcessor(private val ctx: EngineContext, private val directo
     /** Conversation, message id and target of the content are the ones of the event (the type is checked by the caller). */
     private fun isBoundToEvent(c: Content, m: Message): Boolean =
         c.conversationId == m.conversationId && c.messageId == m.id && c.targetMessageId == m.targetMessageId
+
+    /**
+     * The `mentions` of a group message, reduced to the users who are members of the conversation as this phone sees it now
+     * (what the sender wrote about anybody else is ignored), without duplicates. Direct conversations have no mentions.
+     */
+    private suspend fun validMentions(conversationId: String, c: Content): List<String> {
+        val ids = c.mentions?.takeIf { c.type == ContentType.TEXT && it.isNotEmpty() } ?: return emptyList()
+        val conversation = ctx.store.getConversation(conversationId)?.takeIf { it.type == ConversationType.GROUP } ?: return emptyList()
+        val members = conversation.members.mapTo(HashSet()) { it.userId }
+        return ids.filter { it in members }.distinct()
+    }
 
     /** `expires_in` is the sender's word, but only the range the timer settings allow is believed. */
     private fun validExpiry(seconds: Long?): Long? =
@@ -300,6 +313,8 @@ internal class SyncProcessor(private val ctx: EngineContext, private val directo
      * A reaction: encrypted content from a member, bound to the event and to the target, which must be a message of this
      * conversation. Unlike an edit the sender need not be the author of the target. The ciphertext is always decrypted, even
      * if the target is unknown (a first prekey message that is dropped unread would leave the session unset).
+     *
+     * Poll votes travel the same way (message kind `reaction`, content type `poll_vote`) and are applied by [applyPollVote].
      */
     private suspend fun applyReaction(m: Message) {
         val envelope = m.envelope ?: return
@@ -311,14 +326,48 @@ internal class SyncProcessor(private val ctx: EngineContext, private val directo
         val member = deviceKnown && senderIsMember(m.conversationId, m.senderUserId)
         val changed = decryptAndWrite(
             m.senderUserId, m.senderDeviceId.takeIf { deviceKnown }, envelope.type, envelope.body,
-            check = { c -> member && targetOk && c.type == ContentType.REACTION && isBoundToEvent(c, m) },
+            check = { c ->
+                member && targetOk && (c.type == ContentType.REACTION || c.type == ContentType.POLL_VOTE) && isBoundToEvent(c, m)
+            },
         ) { r ->
             val c = (r as? Decrypted.Ok)?.content ?: return@decryptAndWrite false
+            if (c.type == ContentType.POLL_VOTE) return@decryptAndWrite applyPollVote(m, c)
             val emoji = if (c.remove == true) null else c.emoji
             // The reactor is the sender of the event, bound by the check above (a member), never a field of the content.
             storeReaction(Reaction(m.targetMessageId!!, m.conversationId, m.senderUserId, emoji, m.seq, m.serverTs))
         }
         if (changed == true) ctx.emit(EngineEvent.MessageChanged(m.conversationId, m.targetMessageId!!))
+    }
+
+    /**
+     * A vote on a poll, or its closing. Applied only to a message that is a poll, from a member (checked by the caller). A vote
+     * naming an option the poll does not have, several options in a single-choice poll, or arriving after the poll was closed is
+     * ignored; the newest vote of a member by server order replaces the earlier one (an empty list withdraws it). Only the
+     * poll's creator can close it. Runs inside the decrypt transaction.
+     */
+    private suspend fun applyPollVote(m: Message, c: Content): Boolean {
+        val target = m.targetMessageId?.let { ctx.store.getMessage(it) }
+        val poll = target?.poll
+        return when {
+            target == null || poll == null -> false
+            c.close == true -> closePoll(target, poll, m.senderUserId)
+            else -> storePollVote(target, poll, m, c.optionIds)
+        }
+    }
+
+    private suspend fun closePoll(target: StoredMessage, poll: PollInfo, sender: String): Boolean {
+        if (target.senderUserId != sender || poll.closed) return false
+        ctx.store.updateMessage(target.id) { it.copy(poll = it.poll?.copy(closed = true)) }
+        return true
+    }
+
+    private suspend fun storePollVote(target: StoredMessage, poll: PollInfo, m: Message, ids: List<Int>?): Boolean {
+        val valid = ids != null && !poll.closed && poll.options.map { it.id }.containsAll(ids) && (poll.multiple || ids.size <= 1)
+        val current = ctx.store.getPollVote(target.id, m.senderUserId)
+        val newer = current == null || (current.seq != null && current.seq < m.seq)
+        if (!valid || !newer) return false
+        ctx.store.putPollVote(PollVote(target.id, m.conversationId, m.senderUserId, ids.orEmpty(), m.seq, m.serverTs))
+        return true
     }
 
     /** Latest by server order wins; a reaction of ours that is not sent yet stays on top until it is. */
@@ -445,11 +494,13 @@ internal class SyncProcessor(private val ctx: EngineContext, private val directo
         applyChange(m, ContentType.DELETE) { target, _ ->
             ctx.store.updateMessage(target.id) {
                 it.copy(
-                    text = null, replyTo = null, attachments = emptyList(), deleted = true, decryptError = null,
+                    text = null, replyTo = null, attachments = emptyList(), deleted = true, decryptError = null, mentions = emptyList(), poll = null,
                     pendingEnvelopeType = null, pendingEnvelopeBody = null,
                 )
             }
             ctx.store.removeReactions(target.id)
+            ctx.store.removePollVotes(target.id)
+            ctx.store.setStarred(target.id, target.conversationId, false, 0)
             wiped = target
             true
         }
@@ -528,14 +579,17 @@ internal class SyncProcessor(private val ctx: EngineContext, private val directo
             val done = decryptAndWrite(
                 userId, deviceId.takeIf { deviceKnown }, type, body,
                 check = { c ->
-                    member && c.type == ContentType.TEXT && c.conversationId == m.conversationId &&
+                    member && (c.type == ContentType.TEXT || c.type == ContentType.POLL) && c.conversationId == m.conversationId &&
                         c.messageId == m.id && c.targetMessageId == null
                 },
             ) { r ->
+                val mentions = (r as? Decrypted.Ok)?.let { validMentions(m.conversationId, it.content) }.orEmpty()
                 ctx.store.updateMessage(m.id) {
                     when (r) {
                         is Decrypted.Ok -> it.copy(
                             text = r.content.text, replyTo = r.content.replyTo, decryptError = null,
+                            mentions = mentions,
+                            poll = r.content.poll?.takeIf { r.content.type == ContentType.POLL }?.let(PollInfo::of),
                             forwarded = r.content.forwarded == true, expiresIn = validExpiry(r.content.expiresIn),
                             pendingEnvelopeType = null, pendingEnvelopeBody = null,
                             attachments = r.content.attachments.map { a ->

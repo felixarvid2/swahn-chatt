@@ -153,6 +153,8 @@ class SessionManager @Inject constructor(
         work.schedulePeriodicSync()
         push.onSignedIn()
         work.enqueueOutbox()
+        // after an update, a restart or a reboot: make sure the wake-up for the next scheduled message exists
+        scope.launch { runCatching { work.scheduleSend(engine.nextScheduledAt()) } }
     }
 
     /** Signs out without being tied to a screen (the screen that asked for it disappears with the session). */
@@ -214,6 +216,8 @@ class SessionManager @Inject constructor(
         if (engine.account.value == null) return BackgroundResult.DONE
         return try {
             val result = engine.processOutbox()
+            // scheduled messages that are still waiting need their own wake-up (this pass may have sent the one that was due)
+            work.scheduleSend(engine.nextScheduledAt())
             if (result.offline || result.pending > 0) BackgroundResult.RETRY else BackgroundResult.DONE
         } catch (e: CancellationException) {
             throw e

@@ -136,11 +136,15 @@ class Notifier @Inject constructor(
     internal suspend fun notifyNow(ids: Collection<String>, quiet: Boolean = false) {
         for (id in ids) {
             if (foreground.isForeground.value && active.current.value == id) continue // the user is looking at it
-            if (db.storeDao().settings(id)?.let { isMuted(it.mutedUntil, System.currentTimeMillis()) } == true) {
-                cancel(id) // muted: no notification, the unread count stays
-                continue
+            val muted = db.storeDao().settings(id)?.let { isMuted(it.mutedUntil, System.currentTimeMillis()) } == true
+            // A muted conversation is silent, except for messages that mention this account. They use the same channel as every
+            // message, so the system's do-not-disturb settings still decide whether they make a sound.
+            val me = engine.account.value?.userId
+            val unread = if (muted) {
+                if (me == null) emptyList() else db.storeDao().unreadMentions(id, me, MAX_LINES).map { it.toModel() }
+            } else {
+                db.uiDao().unreadMessages(id, MAX_LINES).map { it.toModel() }
             }
-            val unread = db.uiDao().unreadMessages(id, MAX_LINES).map { it.toModel() }
             if (unread.isEmpty()) {
                 cancel(id)
                 continue
@@ -176,7 +180,7 @@ class Notifier @Inject constructor(
                         .setName(store.getUser(m.senderUserId)?.displayName ?: context.getString(R.string.unknown_user))
                         .build()
                 }
-                val text = if (privacy == NotificationPrivacy.FULL) previewText(m) else context.getString(R.string.notification_new_message)
+                val text = lineFor(m, me.userId, privacy)
                 style.addMessage(NotificationCompat.MessagingStyle.Message(text, m.serverTs ?: m.clientTs, sender))
             }
         }
@@ -225,6 +229,23 @@ class Notifier @Inject constructor(
                 .setOnlyAlertOnce(true)
                 .build(),
         )
+    }
+
+    /**
+     * One line of a notification. A message that mentions this account reads "Anna nämnde dig: ..." where the privacy setting
+     * shows names and text, "Anna nämnde dig" where it shows names only, and is as generic as any other message otherwise.
+     */
+    private suspend fun lineFor(m: StoredMessage, myUserId: String, privacy: NotificationPrivacy): String {
+        val mentionsMe = m.mentions.contains(myUserId)
+        val name = store.getUser(m.senderUserId)?.displayName
+        return when {
+            mentionsMe && privacy == NotificationPrivacy.FULL ->
+                name?.let { context.getString(R.string.notification_mentioned_text, it, previewText(m)) } ?: previewText(m)
+            mentionsMe && name != null -> context.getString(R.string.notification_mentioned, name)
+            mentionsMe -> context.getString(R.string.notification_mentioned_unknown)
+            privacy == NotificationPrivacy.FULL -> previewText(m)
+            else -> context.getString(R.string.notification_new_message)
+        }
     }
 
     /**

@@ -43,6 +43,19 @@ class OutboxWorker @AssistedInject constructor(
     }
 }
 
+/**
+ * Runs when a scheduled message is due: the outbox sends it (it is encrypted and sent now, for the devices of this moment),
+ * and the next wake-up is arranged. Survives an app restart and a reboot, like any WorkManager job.
+ */
+@HiltWorker
+class ScheduledSendWorker @AssistedInject constructor(
+    @Assisted context: Context,
+    @Assisted params: WorkerParameters,
+    private val session: SessionManager,
+) : CoroutineWorker(context, params) {
+    override suspend fun doWork(): Result = session.runOutbox().toWork(runAttemptCount, 12)
+}
+
 /** Expedited sync after a push wake-up: pull, ack, store, notify, send the outbox, top up keys. */
 @HiltWorker
 class SyncWorker @AssistedInject constructor(

@@ -83,7 +83,26 @@ class WorkScheduler @Inject constructor(@ApplicationContext private val context:
         wm.cancelUniqueWork(EXPIRY)
     }
 
+    /**
+     * Wakes the outbox when the next scheduled message is due ([atMillis], epoch ms; null: none is waiting), replacing an earlier
+     * schedule. Needs a network, like any send. Android may hold the work back a few minutes in Doze or a battery saver, which
+     * is why the app says "may be a few minutes late"; the in-process timer of the engine is exact while the app runs.
+     */
+    fun scheduleSend(atMillis: Long?, now: Long = System.currentTimeMillis()) {
+        if (atMillis == null) {
+            wm.cancelUniqueWork(SCHEDULED_SEND)
+            return
+        }
+        val request = OneTimeWorkRequestBuilder<ScheduledSendWorker>()
+            .setConstraints(needsNetwork)
+            .setInitialDelay((atMillis - now).coerceAtLeast(0), TimeUnit.MILLISECONDS)
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, BACKOFF_SECONDS, TimeUnit.SECONDS)
+            .build()
+        wm.enqueueUniqueWork(SCHEDULED_SEND, ExistingWorkPolicy.REPLACE, request)
+    }
+
     fun cancelAll() {
+        wm.cancelUniqueWork(SCHEDULED_SEND)
         wm.cancelUniqueWork(EXPIRY)
         wm.cancelUniqueWork(OUTBOX)
         wm.cancelUniqueWork(SYNC)
@@ -96,6 +115,7 @@ class WorkScheduler @Inject constructor(@ApplicationContext private val context:
         const val SYNC = "sync"
         const val PERIODIC = "periodic-sync"
         const val EXPIRY = "expiry"
+        const val SCHEDULED_SEND = "scheduled-send"
         const val CALL_RING = "call-ring"
         const val BACKOFF_SECONDS = 30L
     }

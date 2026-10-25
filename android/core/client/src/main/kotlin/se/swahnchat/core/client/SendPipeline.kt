@@ -21,6 +21,8 @@ import se.swahnchat.core.model.MemberRole
 import se.swahnchat.core.model.Emoji
 import se.swahnchat.core.model.Envelope
 import se.swahnchat.core.model.MessageKind
+import se.swahnchat.core.model.PollOption
+import se.swahnchat.core.model.PollSpec
 import se.swahnchat.core.model.SendMessageRequest
 import se.swahnchat.core.model.StartUploadRequest
 import se.swahnchat.core.model.UploadProgress
@@ -70,10 +72,39 @@ internal class SendPipeline(private val ctx: EngineContext, private val director
 
     // --- enqueue ------------------------------------------------------------------------------------------------------
 
-    suspend fun enqueueText(conversationId: String, text: String, replyTo: String?): String {
+    suspend fun enqueueText(
+        conversationId: String,
+        text: String,
+        replyTo: String?,
+        mentions: List<String> = emptyList(),
+        sendAt: Long? = null,
+    ): String {
         require(text.isNotBlank()) { "Message text is empty" }
         require(text.toByteArray().size <= MAX_TEXT_BYTES) { "Message text is too long" }
-        return enqueueMessage(conversationId, text, replyTo, emptyList())
+        return enqueueMessage(conversationId, text, replyTo, emptyList(), mentions = checkedMentions(conversationId, mentions), sendAt = sendAt)
+    }
+
+    /**
+     * The users named with `@` in a group message: at most [Content.MAX_MENTIONS], each a member of the conversation right now
+     * (and not ourselves), no duplicates. A direct conversation has no mentions. Anything else is refused before it is queued.
+     */
+    private suspend fun checkedMentions(conversationId: String, mentions: List<String>): List<String> {
+        if (mentions.isEmpty()) return emptyList()
+        val account = ctx.requireAccount()
+        val conversation = ctx.store.getConversation(conversationId) ?: throw IllegalArgumentException("Unknown conversation")
+        require(conversation.type == ConversationType.GROUP) { "Only groups have mentions" }
+        val distinct = mentions.distinct().filter { it != account.userId }
+        require(distinct.size <= Content.MAX_MENTIONS) { "Too many mentions" }
+        val members = conversation.members.mapTo(HashSet()) { it.userId }
+        require(distinct.all { it in members }) { "A mention names someone who is not a member" }
+        return distinct
+    }
+
+    /** A schedule must lie between a minute and [MAX_SCHEDULE_MS] ahead (by this phone's clock). */
+    private fun requireSchedule(sendAt: Long) {
+        val now = ctx.now()
+        require(sendAt >= now + MIN_SCHEDULE_MS) { "A scheduled message goes out at least a minute from now" }
+        require(sendAt <= now + MAX_SCHEDULE_MS) { "A scheduled message goes out within 30 days" }
     }
 
     suspend fun enqueueAttachments(
@@ -81,6 +112,7 @@ internal class SendPipeline(private val ctx: EngineContext, private val director
         attachments: List<OutboxAttachment>,
         caption: String?,
         replyTo: String?,
+        sendAt: Long? = null,
     ): String {
         require(attachments.isNotEmpty() && attachments.size <= MAX_ATTACHMENTS) { "1..$MAX_ATTACHMENTS attachments" }
         for (a in attachments) {
@@ -88,7 +120,18 @@ internal class SendPipeline(private val ctx: EngineContext, private val director
             require(f.isFile) { "Attachment file does not exist: ${a.localPath}" }
             require(f.length() <= ctx.config.maxAttachmentBytes) { "Attachment is too large" }
         }
-        return enqueueMessage(conversationId, caption?.takeIf { it.isNotBlank() }, replyTo, attachments)
+        return enqueueMessage(conversationId, caption?.takeIf { it.isNotBlank() }, replyTo, attachments, sendAt = sendAt)
+    }
+
+    /** A poll: [question] (up to 200 characters) and 2 to 10 options (up to 100 each); options get the ids 0.. in order. */
+    suspend fun enqueuePoll(conversationId: String, question: String, options: List<String>, multiple: Boolean): String {
+        val q = question.trim()
+        val texts = options.map { it.trim() }
+        require(q.isNotEmpty() && q.length <= Content.MAX_POLL_QUESTION) { "A poll question is 1..${Content.MAX_POLL_QUESTION} characters" }
+        require(texts.size in Content.MIN_POLL_OPTIONS..Content.MAX_POLL_OPTIONS) { "A poll has 2..10 options" }
+        require(texts.all { it.isNotEmpty() && it.length <= Content.MAX_POLL_OPTION }) { "A poll option is 1..${Content.MAX_POLL_OPTION} characters" }
+        val spec = PollSpec(texts.mapIndexed { i, t -> PollOption(i, t) }, multiple)
+        return enqueueMessage(conversationId, q, null, emptyList(), poll = spec)
     }
 
     /** A copy of a message of another conversation; [attachments] are copies of the files, uploaded afresh (new keys). */
@@ -105,17 +148,23 @@ internal class SendPipeline(private val ctx: EngineContext, private val director
         replyTo: String?,
         attachments: List<OutboxAttachment>,
         forwarded: Boolean = false,
+        mentions: List<String> = emptyList(),
+        poll: PollSpec? = null,
+        sendAt: Long? = null,
     ): String {
         val account = ctx.requireAccount()
         ctx.store.getConversation(conversationId) ?: throw IllegalArgumentException("Unknown conversation")
+        if (sendAt != null) requireSchedule(sendAt)
         val id = ctx.config.newId()
         val ts = ctx.now()
-        // The timer of the conversation as of now goes into the content, so every phone treats this message alike.
-        val expiresIn = ctx.store.getTimer(conversationId)?.seconds?.takeIf { it > 0 }
+        // The timer of the conversation as of now goes into the content, so every phone treats this message alike. A scheduled
+        // message takes the timer that stands when it is actually sent (see [releaseScheduled]).
+        val expiresIn = if (sendAt != null) null else ctx.store.getTimer(conversationId)?.seconds?.takeIf { it > 0 }
         val message = StoredMessage(
             id = id, conversationId = conversationId, senderUserId = account.userId, senderDeviceId = account.deviceId,
-            outgoing = true, status = MessageStatus.PENDING, seq = null, clientTs = ts, serverTs = null,
+            outgoing = true, status = MessageStatus.PENDING, seq = null, clientTs = sendAt ?: ts, serverTs = null,
             text = text, replyTo = replyTo, forwarded = forwarded, expiresIn = expiresIn,
+            mentions = mentions, poll = poll?.let(PollInfo::of), scheduledAt = sendAt,
             attachments = attachments.mapIndexed { i, a ->
                 LocalAttachment(
                     id = "local-$id-$i", key = null, sha256 = null, size = File(a.localPath).length(), mime = a.mime,
@@ -127,13 +176,115 @@ internal class SendPipeline(private val ctx: EngineContext, private val director
         val entry = OutboxEntry(
             messageId = id, conversationId = conversationId, kind = MessageKind.MESSAGE, targetMessageId = null,
             text = text, replyTo = replyTo, attachments = attachments, clientTs = ts, createdAt = stamp(),
-            forwarded = forwarded, expiresIn = expiresIn,
+            forwarded = forwarded, expiresIn = expiresIn, mentions = mentions, poll = poll, sendAt = sendAt,
         )
         ctx.store.transaction {
             ctx.store.upsertMessage(message)
             ctx.store.putOutbox(entry)
         }
         ctx.emit(EngineEvent.MessageReceived(conversationId, id, fromSelfOtherDevice = false))
+        return id
+    }
+
+    // --- scheduled messages ---------------------------------------------------------------------------------------------
+
+    /** Moves a scheduled message to [sendAt] (same limits as when it was scheduled). */
+    suspend fun reschedule(messageId: String, sendAt: Long) {
+        requireSchedule(sendAt)
+        val entry = ctx.store.getOutboxEntry(messageId)?.takeIf { it.sendAt != null } ?: throw IllegalArgumentException("Not a scheduled message")
+        ctx.store.transaction {
+            ctx.store.putOutbox(entry.copy(sendAt = sendAt))
+            ctx.store.updateMessage(messageId) { it.copy(scheduledAt = sendAt, clientTs = sendAt) }
+        }
+        ctx.emit(EngineEvent.MessageChanged(entry.conversationId, messageId))
+    }
+
+    /** "Send now": the scheduled message joins the outbox queue straight away (the caller asks for a pass). */
+    suspend fun sendScheduledNow(messageId: String) {
+        val entry = ctx.store.getOutboxEntry(messageId)?.takeIf { it.sendAt != null } ?: throw IllegalArgumentException("Not a scheduled message")
+        releaseScheduled(entry, ctx.now())
+        ctx.emit(EngineEvent.MessageChanged(entry.conversationId, messageId))
+    }
+
+    /** Throws a scheduled message away before it was sent: nothing ever reached the server. Returns the removed message. */
+    suspend fun cancelScheduled(messageId: String): StoredMessage? {
+        val entry = ctx.store.getOutboxEntry(messageId)?.takeIf { it.sendAt != null } ?: throw IllegalArgumentException("Not a scheduled message")
+        val removed = ctx.store.transaction {
+            ctx.store.removeOutbox(messageId)
+            ctx.store.deleteMessageLocally(messageId, entry.conversationId, ctx.now())
+        }
+        ctx.emit(EngineEvent.MessageChanged(entry.conversationId, messageId))
+        return removed
+    }
+
+    /** The earliest time any scheduled message is due (epoch ms), or null when none is waiting. */
+    suspend fun nextScheduledAt(): Long? = ctx.store.getOutbox().mapNotNull { it.sendAt }.minOrNull()
+
+    /**
+     * The time has come (or "send now" was pressed): the entry becomes an ordinary one. Its time of writing and its
+     * disappearing-messages timer are those of the moment it is really sent, and it queues behind what was written before.
+     */
+    private suspend fun releaseScheduled(entry: OutboxEntry, now: Long): OutboxEntry {
+        val expiresIn = ctx.store.getTimer(entry.conversationId)?.seconds?.takeIf { it > 0 }
+        val released = entry.copy(sendAt = null, clientTs = now, createdAt = stamp(), expiresIn = expiresIn, envelopes = null)
+        ctx.store.transaction {
+            ctx.store.putOutbox(released)
+            ctx.store.updateMessage(entry.messageId) { it.copy(scheduledAt = null, clientTs = now, expiresIn = expiresIn) }
+        }
+        return released
+    }
+
+    // --- polls -----------------------------------------------------------------------------------------------------------
+
+    /**
+     * Votes on the poll [pollId]: [optionIds] replaces our earlier vote (empty: withdraws it). Shown at once; sent as an
+     * encrypted `poll_vote` in a message of kind `reaction`. Returns the id of that message.
+     */
+    suspend fun enqueueVote(pollId: String, optionIds: List<Int>): String {
+        val account = ctx.requireAccount()
+        val target = ctx.store.getMessage(pollId) ?: throw IllegalArgumentException("Unknown message")
+        val poll = target.poll ?: throw IllegalArgumentException("Not a poll")
+        require(!target.deleted && target.decryptError == null) { "That poll cannot be voted on" }
+        require(target.status != MessageStatus.PENDING && target.status != MessageStatus.FAILED) { "The poll has not been sent yet" }
+        require(!poll.closed) { "The poll is closed" }
+        val ids = optionIds.distinct()
+        require(poll.options.map { it.id }.containsAll(ids)) { "Not an option of the poll" }
+        require(poll.multiple || ids.size <= 1) { "Only one choice in this poll" }
+        val id = ctx.config.newId()
+        val ts = ctx.now()
+        ctx.store.transaction {
+            ctx.store.putPollVote(PollVote(pollId, target.conversationId, account.userId, ids, null, ts))
+            ctx.store.putOutbox(
+                OutboxEntry(
+                    messageId = id, conversationId = target.conversationId, kind = OutboxKind.POLL_VOTE, targetMessageId = pollId,
+                    text = null, replyTo = null, attachments = emptyList(), clientTs = ts, createdAt = stamp(), optionIds = ids,
+                ),
+            )
+        }
+        ctx.emit(EngineEvent.MessageChanged(target.conversationId, pollId))
+        return id
+    }
+
+    /** The creator ends the poll: nobody can vote afterwards. Only the author of the poll can; shown at once. */
+    suspend fun enqueueClosePoll(pollId: String): String {
+        val account = ctx.requireAccount()
+        val target = ctx.store.getMessage(pollId) ?: throw IllegalArgumentException("Unknown message")
+        val poll = target.poll ?: throw IllegalArgumentException("Not a poll")
+        require(target.outgoing && target.senderUserId == account.userId) { "Only the creator can close the poll" }
+        require(!target.deleted && !poll.closed) { "The poll is closed already" }
+        require(target.status != MessageStatus.PENDING && target.status != MessageStatus.FAILED) { "The poll has not been sent yet" }
+        val id = ctx.config.newId()
+        val ts = ctx.now()
+        ctx.store.transaction {
+            ctx.store.updateMessage(pollId) { it.copy(poll = it.poll?.copy(closed = true)) }
+            ctx.store.putOutbox(
+                OutboxEntry(
+                    messageId = id, conversationId = target.conversationId, kind = OutboxKind.POLL_VOTE, targetMessageId = pollId,
+                    text = null, replyTo = null, attachments = emptyList(), clientTs = ts, createdAt = stamp(), close = true,
+                ),
+            )
+        }
+        ctx.emit(EngineEvent.MessageChanged(target.conversationId, pollId))
         return id
     }
 
@@ -145,6 +296,7 @@ internal class SendPipeline(private val ctx: EngineContext, private val director
         require(target.outgoing && target.senderUserId == account.userId && !target.deleted && !target.isSystem) {
             "Only your own messages can be edited"
         }
+        require(target.poll == null) { "A poll cannot be edited" }
         val now = ctx.now()
         val pending = ctx.store.getOutboxEntry(messageId)
         ctx.store.transaction {
@@ -176,6 +328,8 @@ internal class SendPipeline(private val ctx: EngineContext, private val director
         ctx.store.transaction {
             ctx.store.updateMessage(messageId) { wipe(it) }
             ctx.store.removeReactions(messageId)
+            ctx.store.removePollVotes(messageId)
+            ctx.store.setStarred(messageId, target.conversationId, false, 0)
             if (pending != null) {
                 // Never reached the server: nothing to tell anybody.
                 ctx.store.removeOutbox(messageId)
@@ -262,6 +416,7 @@ internal class SendPipeline(private val ctx: EngineContext, private val director
                 }
             },
             clientTs = m.clientTs, createdAt = stamp(), forwarded = m.forwarded, expiresIn = m.expiresIn,
+            mentions = m.mentions, poll = m.poll?.toSpec(),
         )
         ctx.store.transaction {
             ctx.store.updateMessage(m.id) { it.copy(status = MessageStatus.PENDING, failureReason = null) }
@@ -280,7 +435,7 @@ internal class SendPipeline(private val ctx: EngineContext, private val director
     }
 
     private fun wipe(m: StoredMessage) = m.copy(
-        text = null, attachments = emptyList(), deleted = true, replyTo = null,
+        text = null, attachments = emptyList(), deleted = true, replyTo = null, mentions = emptyList(), poll = null,
         pendingEnvelopeType = null, pendingEnvelopeBody = null, decryptError = null,
     )
 
@@ -292,7 +447,15 @@ internal class SendPipeline(private val ctx: EngineContext, private val director
         var failed = 0
         var pending = 0
         var offline = false
-        val entries = ctx.store.getOutbox()
+        // A scheduled message whose time has not come is not part of the queue (and must not hold it up); one that is due joins it.
+        val now = ctx.now()
+        val entries = ctx.store.getOutbox().mapNotNull { e ->
+            when {
+                e.sendAt == null -> e
+                e.sendAt <= now -> releaseScheduled(e, now)
+                else -> null
+            }
+        }
         try {
             retryPendingTimerPatches()
         } catch (e: ApiException) {
@@ -406,6 +569,7 @@ internal class SendPipeline(private val ctx: EngineContext, private val director
                 ctx.store.updateMessage(entry.messageId) { it.copy(status = MessageStatus.FAILED, failureReason = reason) }
             }
             if (entry.kind == MessageKind.REACTION) dropUnsentReaction(entry)
+            if (entry.kind == OutboxKind.POLL_VOTE) dropUnsentPollVote(entry)
         }
         ctx.emit(EngineEvent.MessageChanged(entry.conversationId, entry.targetMessageId ?: entry.messageId))
         return SendOutcome.Failed(reason)
@@ -431,6 +595,11 @@ internal class SendPipeline(private val ctx: EngineContext, private val director
                 val own = ctx.store.getReaction(entry.targetMessageId!!, me)
                 if (own != null && own.seq == null && own.at == entry.clientTs) ctx.store.putReaction(own.copy(seq = seq))
             }
+            if (entry.kind == OutboxKind.POLL_VOTE && !entry.close) {
+                val me = ctx.requireAccount().userId
+                val own = ctx.store.getPollVote(entry.targetMessageId!!, me)
+                if (own != null && own.seq == null && own.at == entry.clientTs) ctx.store.putPollVote(own.copy(seq = seq))
+            }
             if (entry.kind == OutboxKind.TIMER) {
                 val own = ctx.store.getTimer(entry.conversationId)
                 if (own != null && own.seq == null && own.at == entry.clientTs) ctx.store.putTimer(own.copy(seq = seq))
@@ -441,7 +610,11 @@ internal class SendPipeline(private val ctx: EngineContext, private val director
     }
 
     /** A timer change is an ordinary `message` for the server; everything else is sent under its own kind. */
-    private fun serverKind(entry: OutboxEntry): String = if (entry.kind == OutboxKind.TIMER) MessageKind.MESSAGE else entry.kind
+    private fun serverKind(entry: OutboxEntry): String = when (entry.kind) {
+        OutboxKind.TIMER -> MessageKind.MESSAGE
+        OutboxKind.POLL_VOTE -> MessageKind.REACTION // the server sees a reaction, not that it is a vote
+        else -> entry.kind
+    }
 
     private suspend fun afterSent(entry: OutboxEntry, seq: Long, serverTs: Long) {
         markSent(entry, seq, serverTs)
@@ -452,6 +625,18 @@ internal class SendPipeline(private val ctx: EngineContext, private val director
         val me = ctx.requireAccount().userId
         val own = ctx.store.getReaction(entry.targetMessageId ?: return, me)
         if (own != null && own.seq == null && own.at == entry.clientTs) ctx.store.removeReaction(own.messageId, me)
+    }
+
+    /** A vote or closing that failed for good: our unsent vote is forgotten, a closing we showed is taken back. */
+    private suspend fun dropUnsentPollVote(entry: OutboxEntry) {
+        val pollId = entry.targetMessageId ?: return
+        if (entry.close) {
+            ctx.store.updateMessage(pollId) { it.copy(poll = it.poll?.copy(closed = false)) }
+            return
+        }
+        val me = ctx.requireAccount().userId
+        val own = ctx.store.getPollVote(pollId, me)
+        if (own != null && own.seq == null && own.at == entry.clientTs) ctx.store.removePollVote(pollId, me)
     }
 
     /**
@@ -580,10 +765,19 @@ internal class SendPipeline(private val ctx: EngineContext, private val director
             OutboxKind.TIMER -> Content(
                 type = ContentType.TIMER, seconds = entry.expiresIn, conversationId = entry.conversationId, messageId = entry.messageId,
             )
-            else -> Content(
+            OutboxKind.POLL_VOTE -> Content(
+                type = ContentType.POLL_VOTE, optionIds = if (entry.close) null else entry.optionIds.orEmpty(),
+                close = true.takeIf { entry.close }, conversationId = entry.conversationId, messageId = entry.messageId,
+                targetMessageId = entry.targetMessageId,
+            )
+            else -> if (entry.poll != null) Content(
+                type = ContentType.POLL, text = entry.text, poll = entry.poll, conversationId = entry.conversationId,
+                messageId = entry.messageId, expiresIn = entry.expiresIn,
+            ) else Content(
                 type = ContentType.TEXT, text = entry.text, attachments = refs, replyTo = entry.replyTo,
                 conversationId = entry.conversationId, messageId = entry.messageId,
                 expiresIn = entry.expiresIn, forwarded = true.takeIf { entry.forwarded },
+                mentions = entry.mentions.takeIf { it.isNotEmpty() },
             )
         }
         if (ContentCodec.encode(content).size > MAX_CONTENT_BYTES) {
@@ -722,6 +916,7 @@ internal class SendPipeline(private val ctx: EngineContext, private val director
     companion object {
         const val MAX_ATTACHMENTS = 10
         const val MAX_TEXT_BYTES = 40_000
+
         private const val MAX_CHUNK_FAILURES = 5
         private const val SIGNAL_SEND_RETRIES = 2
         private const val SIGNAL_SEND_TIMEOUT_MS = 3_000L

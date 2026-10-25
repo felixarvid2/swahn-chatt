@@ -297,6 +297,35 @@ class NotifierTest {
         assertTrue(conversationNotifications().isEmpty(), "muting removes a notification that is already shown")
     }
 
+    @Test fun `a mention notifies even in a muted conversation, saying who mentioned you, and the other messages stay silent`() = runBlocking<Unit> {
+        ConversationSettingsStore(db).mute("group", MuteDuration.ALWAYS, System.currentTimeMillis())
+        store.upsertMessage(incoming("m1", "group", "cia", 1, "Vem tar kaffe?"))
+        notifier.notifyNow(listOf("group"))
+        assertTrue(conversationNotifications().isEmpty(), "muted, nothing mentions me")
+        store.upsertMessage(incoming("m2", "group", "bob", 2, "@Anna kan du ta kaffe?").copy(mentions = listOf("me")))
+        notifier.notifyNow(listOf("group"))
+        val style = NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(conversationNotifications().single())!!
+        assertEquals(listOf("Bertil nämnde dig: @Anna kan du ta kaffe?"), style.messages.map { it.text.toString() }, "only the mention, not the muted chatter")
+        assertEquals(2, store.unreadCount("group"))
+    }
+
+    @Test fun `a mention in a conversation that is not muted reads who mentioned you, within what the privacy setting shows`() = runBlocking<Unit> {
+        store.upsertMessage(incoming("m1", "group", "cia", 1, "Hej alla"))
+        store.upsertMessage(incoming("m2", "group", "bob", 2, "Hemligt @Anna").copy(mentions = listOf("me")))
+        notifier.notifyNow(listOf("group"))
+        fun texts() = NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(conversationNotifications().single())!!
+            .messages.map { it.text.toString() }
+        assertEquals(listOf("Hej alla", "Bertil nämnde dig: Hemligt @Anna"), texts())
+        prefs.setNotificationPrivacy(NotificationPrivacy.NAME_ONLY)
+        notifier.notifyNow(listOf("group"))
+        assertEquals(listOf("Nytt meddelande", "Bertil nämnde dig"), texts(), "the name, not the text")
+        prefs.setNotificationPrivacy(NotificationPrivacy.HIDDEN)
+        notifier.notifyNow(listOf("group"))
+        val n = conversationNotifications().single()
+        val everything = NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(n)!!.messages.map { it.text.toString() } + titleOf(n).orEmpty()
+        assertTrue(everything.none { it.contains("Bertil") || it.contains("Hemligt") || it.contains("nämnde") }, "nothing about the mention leaks: $everything")
+    }
+
     @Test fun `after an inline reply the notification becomes a short confirmation`() = runBlocking<Unit> {
         store.upsertMessage(incoming("m1", "direct", "bob", 1, "Hej"))
         notifier.notifyNow(listOf("direct"))

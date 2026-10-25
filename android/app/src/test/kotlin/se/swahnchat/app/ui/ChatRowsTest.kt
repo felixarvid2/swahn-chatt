@@ -10,10 +10,13 @@ import se.swahnchat.app.ui.model.buildChatRows
 import se.swahnchat.core.client.DecryptError
 import se.swahnchat.core.client.DownloadState
 import se.swahnchat.core.client.LocalAttachment
+import se.swahnchat.core.client.PollInfo
+import se.swahnchat.core.client.PollVote
 import se.swahnchat.core.client.MessageStatus
 import se.swahnchat.core.client.StoredMessage
 import se.swahnchat.core.client.CallOutcome
 import se.swahnchat.core.client.SystemEvent
+import se.swahnchat.core.model.PollOption
 import se.swahnchat.core.model.User
 import java.time.ZoneId
 import java.time.ZonedDateTime
@@ -265,5 +268,58 @@ class ChatRowsTest {
         val queued = LocalAttachment("local-1", null, null, 100, "image/jpeg", "f.jpg", "image", 10, 10, null, null, "/src", DownloadState.DONE)
         val pending = uiOf(m("q", "me", status = MessageStatus.PENDING, attachments = listOf(queued)), ctx(validated = mapOf("local-1" to true)))
         assertIs<TransferUi.Uploading>(pending.attachments.single().transfer)
+    }
+
+    // --- batch 5: mentions, polls, stars, scheduled messages -------------------------------------------------------------------
+
+    private val poll = PollInfo(listOf(PollOption(0, "Ja"), PollOption(1, "Nej"), PollOption(2, "Kanske")), multiple = false)
+
+    private fun pollMessage(from: String = "me", info: PollInfo = poll, status: MessageStatus? = null) =
+        m("p", from, seq = 1, text = "Pizza?", status = status).copy(poll = info)
+
+    private fun row(message: StoredMessage, context: ChatRowContext) =
+        buildChatRows(listOf(message), context).filterIsInstance<ChatRow.Message>().single().message
+
+    @Test fun `mentions are named from the directory and the own mention is marked`() {
+        val ui = row(m("a", "bob", seq = 1, text = "@Anna och @Cy").copy(mentions = listOf("me", "cy", "gone")), ctx(group = true))
+        assertEquals(listOf("Anna" to true, "Cy" to false, "?" to false), ui.mentions.map { it.name to it.isMe })
+        val deleted = m("b", "bob", seq = 2, text = "hej").copy(mentions = listOf("me"), deleted = true, text = null)
+        assertTrue(row(deleted, ctx(group = true)).mentions.isEmpty())
+    }
+
+    @Test fun `a poll shows its votes per option, who voted, and your choice`() {
+        val votes = listOf(
+            PollVote("p", "c", "bob", listOf(0), 2, 20), PollVote("p", "c", "me", listOf(0), null, 30), PollVote("p", "c", "cy", listOf(2), 3, 40),
+            PollVote("p", "c", "gone", emptyList(), 4, 50),
+        )
+        val ui = row(pollMessage(), ChatRowContext("me", true, users, votes = mapOf("p" to votes), zone = zone)).poll!!
+        assertEquals(listOf(2, 0, 1), ui.options.map { it.count })
+        assertEquals(listOf("Bob", "Anna"), ui.options[0].voters.map { it.name })
+        assertEquals(listOf(0), ui.myChoice)
+        assertEquals(3, ui.voterCount)
+        assertTrue(ui.canVote && ui.canClose && !ui.closed && !ui.multiple)
+    }
+
+    @Test fun `only the creator can close, nobody can vote on a closed poll or one that is not sent yet`() {
+        val c = ChatRowContext("me", true, users, zone = zone)
+        assertTrue(row(pollMessage(from = "bob"), c).poll!!.let { it.canVote && !it.canClose })
+        assertTrue(row(pollMessage(info = poll.copy(closed = true)), c).poll!!.let { it.closed && !it.canVote && !it.canClose })
+        assertTrue(row(pollMessage(status = MessageStatus.PENDING), c).poll!!.let { !it.canVote && !it.canClose })
+        // a poll cannot be edited, quoted as text for forwarding, or shown after it was deleted
+        val ui = row(pollMessage(), c)
+        assertFalse(ui.canEdit); assertFalse(ui.canForward)
+        assertNull(row(pollMessage().copy(deleted = true, text = null, poll = null), c).poll)
+    }
+
+    @Test fun `stars and schedules reach the bubble`() {
+        val starred = row(m("a", "bob", seq = 1), ChatRowContext("me", false, users, starred = setOf("a")))
+        assertTrue(starred.starred && starred.canStar)
+        assertFalse(row(m("b", "bob", seq = 2), ChatRowContext("me", false, users, starred = setOf("a"))).starred)
+        assertFalse(row(m("c", "bob", seq = 3).copy(deleted = true, text = null), ChatRowContext("me", false, users)).canStar)
+        val later = row(m("s", "me", ts = at(12, 9), text = "senare", status = MessageStatus.PENDING).copy(scheduledAt = at(12, 9)), ctx())
+        assertEquals(at(12, 9), later.scheduledAt)
+        assertEquals(DeliveryUi.PENDING, later.delivery)
+        assertFalse(later.canReact)
+        assertNull(row(m("t", "me", seq = 1), ctx()).scheduledAt)
     }
 }

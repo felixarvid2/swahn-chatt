@@ -10,6 +10,8 @@ import se.swahnchat.core.client.LocalAttachment
 import se.swahnchat.core.client.MessageStatus
 import se.swahnchat.core.client.OutboxAttachment
 import se.swahnchat.core.client.OutboxEntry
+import se.swahnchat.core.client.PollInfo
+import se.swahnchat.core.client.PollVote
 import se.swahnchat.core.client.Reaction
 import se.swahnchat.core.client.StoredMessage
 import se.swahnchat.core.client.CallOutcome
@@ -18,6 +20,8 @@ import se.swahnchat.core.model.Conversation
 import se.swahnchat.core.model.ConversationMember
 import se.swahnchat.core.model.Device
 import se.swahnchat.core.model.Envelope
+import se.swahnchat.core.model.PollOption
+import se.swahnchat.core.model.PollSpec
 import se.swahnchat.core.model.SwahnChatJson
 import se.swahnchat.core.model.User
 
@@ -54,6 +58,33 @@ internal data class OutboxAttachmentJson(
     val uploadedSha256: String? = null,
     val plaintextSize: Long? = null,
 )
+
+/** JSON form of [PollInfo] inside a message row. */
+@Serializable
+internal data class PollJson(val options: List<PollOption>, val multiple: Boolean = false, val closed: Boolean = false)
+
+internal fun PollInfo.toJson(): String = SwahnChatJson.encodeToString(PollJson.serializer(), PollJson(options, multiple, closed))
+
+internal fun String.toPollInfo(): PollInfo? = try {
+    SwahnChatJson.decodeFromString(PollJson.serializer(), this).let { PollInfo(it.options, it.multiple, it.closed) }
+} catch (e: Exception) {
+    null
+}
+
+internal fun PollSpec.toJson(): String = SwahnChatJson.encodeToString(PollSpec.serializer(), this)
+
+internal fun String.toPollSpec(): PollSpec? = try {
+    SwahnChatJson.decodeFromString(PollSpec.serializer(), this)
+} catch (e: Exception) {
+    null
+}
+
+/** `,id1,id2,` so that a query can look for `,id,`; empty for none. */
+internal fun List<String>.toMentionColumn(): String = if (isEmpty()) "" else joinToString(",", prefix = ",", postfix = ",")
+internal fun String.toMentionList(): List<String> = split(',').filter { it.isNotEmpty() }
+
+internal fun List<Int>.toIdColumn(): String = joinToString(",")
+internal fun String.toIdList(): List<Int> = split(',').mapNotNull { it.toIntOrNull() }
 
 private val attachmentsSerializer = ListSerializer(AttachmentJson.serializer())
 private val outboxAttachmentsSerializer = ListSerializer(OutboxAttachmentJson.serializer())
@@ -150,6 +181,7 @@ internal fun StoredMessage.toEntity(): MessageEntity {
         pendingEnvelopeType = pendingEnvelopeType, pendingEnvelopeBody = pendingEnvelopeBody,
         forwarded = forwarded, imported = imported, expiresIn = expiresIn, expireAt = expireAt,
         systemValue = (sys as? SystemEvent.TimerChanged)?.seconds ?: (sys as? SystemEvent.Call)?.durationSeconds,
+        mentions = mentions.toMentionColumn(), poll = poll?.toJson(), scheduledAt = scheduledAt,
     )
 }
 
@@ -174,6 +206,7 @@ internal fun MessageEntity.toModel(): StoredMessage {
         deliveredTo = deliveredTo.toSet(), readBy = readBy.toSet(), systemEvent = sys,
         pendingEnvelopeType = pendingEnvelopeType, pendingEnvelopeBody = pendingEnvelopeBody,
         forwarded = forwarded, imported = imported, expiresIn = expiresIn, expireAt = expireAt,
+        mentions = mentions.toMentionList(), poll = poll?.toPollInfo(), scheduledAt = scheduledAt,
     )
 }
 
@@ -218,6 +251,7 @@ internal fun OutboxEntry.toEntity() = OutboxEntity(
     clientTs = clientTs, envelopes = envelopes?.let { SwahnChatJson.encodeToString(envelopesSerializer, it) },
     attempts = attempts, lastError = lastError, createdAt = createdAt,
     forwarded = forwarded, expiresIn = expiresIn, remove = remove,
+    mentions = mentions.toMentionColumn(), poll = poll?.toJson(), optionIds = optionIds?.toIdColumn(), close = close, sendAt = sendAt,
 )
 
 internal fun OutboxEntity.toModel() = OutboxEntry(
@@ -232,6 +266,11 @@ internal fun OutboxEntity.toModel() = OutboxEntry(
     clientTs = clientTs, envelopes = envelopes?.let { SwahnChatJson.decodeFromString(envelopesSerializer, it) },
     attempts = attempts, lastError = lastError, createdAt = createdAt,
     forwarded = forwarded, expiresIn = expiresIn, remove = remove,
+    mentions = mentions.toMentionList(), poll = poll?.toPollSpec(), optionIds = optionIds?.toIdList(), close = close, sendAt = sendAt,
 )
 
 internal fun ReactionEntity.toModel() = Reaction(messageId, conversationId, userId, emoji, seq, at)
+
+fun PollVoteEntity.toPollVote() = PollVote(messageId, conversationId, userId, optionIds.toIdList(), seq, at)
+internal fun PollVoteEntity.toModel() = PollVote(messageId, conversationId, userId, optionIds.toIdList(), seq, at)
+internal fun PollVote.toEntity() = PollVoteEntity(messageId, userId, conversationId, optionIds.toIdColumn(), seq, at)

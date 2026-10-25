@@ -8,6 +8,7 @@ import se.swahnchat.core.client.Account
 import se.swahnchat.core.client.LocalStore
 import se.swahnchat.core.client.ConversationTimer
 import se.swahnchat.core.client.OutboxEntry
+import se.swahnchat.core.client.PollVote
 import se.swahnchat.core.client.Reaction
 import se.swahnchat.core.client.ReceiptTimes
 import se.swahnchat.core.client.StoredMessage
@@ -110,6 +111,8 @@ class RoomLocalStore(
         dao.deleteReceiptsOf(id)
         dao.deleteLocalDeletionsOf(id)
         dao.deleteReactionsOf(id)
+        dao.deletePollVotesOf(id)
+        dao.deleteStarsOf(id)
         dao.deleteTimer(id)
         dao.deleteOutboxOf(id)
         dao.deleteDraft(id)
@@ -161,6 +164,8 @@ class RoomLocalStore(
         dao.putLocalDeletion(LocalDeletionEntity(id, conversationId, at))
         dao.deleteReceipts(id)
         dao.deleteReactionsOfMessage(id)
+        dao.deletePollVotesOfMessage(id)
+        dao.deleteStar(id)
         dao.deleteMessage(id)
         existing
     }
@@ -179,6 +184,22 @@ class RoomLocalStore(
     override suspend fun removeReaction(messageId: String, userId: String) = io { dao.deleteReaction(messageId, userId) }
     override suspend fun removeReactions(messageId: String) = io { dao.deleteReactionsOfMessage(messageId) }
     override suspend fun getReactions(messageId: String): List<Reaction> = io { dao.reactions(messageId).map { it.toModel() } }
+
+    override suspend fun getPollVote(messageId: String, userId: String): PollVote? = io { dao.pollVote(messageId, userId)?.toModel() }
+    override suspend fun putPollVote(vote: PollVote) = io { dao.putPollVote(vote.toEntity()) }
+    override suspend fun removePollVote(messageId: String, userId: String) = io { dao.deletePollVote(messageId, userId) }
+    override suspend fun removePollVotes(messageId: String) = io { dao.deletePollVotesOfMessage(messageId) }
+    override suspend fun getPollVotes(messageId: String): List<PollVote> = io { dao.pollVotes(messageId).map { it.toModel() } }
+
+    override suspend fun setStarred(messageId: String, conversationId: String, starred: Boolean, at: Long) = io {
+        if (starred) dao.putStar(StarredMessageEntity(messageId, conversationId, at)) else dao.deleteStar(messageId)
+    }
+
+    override suspend fun isStarred(messageId: String): Boolean = io { dao.starCount(messageId) > 0 }
+    override suspend fun starredMessages(conversationId: String?): List<StoredMessage> =
+        io { dao.starredMessages(conversationId).map { it.toModel() } }
+
+    override suspend fun unreadMentionCount(conversationId: String, userId: String): Int = io { dao.unreadMentionCount(conversationId, userId) }
 
     override suspend fun getTimer(conversationId: String): ConversationTimer? =
         io { dao.timer(conversationId)?.let { ConversationTimer(it.conversationId, it.seconds, it.setBy, it.seq, it.at) } }

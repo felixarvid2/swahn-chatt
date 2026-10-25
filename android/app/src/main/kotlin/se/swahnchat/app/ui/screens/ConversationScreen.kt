@@ -13,6 +13,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
@@ -46,6 +47,9 @@ import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Photo
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.Poll
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Timer
@@ -142,6 +146,10 @@ import se.swahnchat.app.ui.components.MessageBubble
 import se.swahnchat.app.ui.components.PlaybackUi
 import se.swahnchat.app.ui.components.ReplyQuote
 import se.swahnchat.app.ui.components.DisappearingDialog
+import se.swahnchat.app.ui.components.MentionPicker
+import se.swahnchat.app.ui.components.PollCreateDialog
+import se.swahnchat.app.ui.components.ScheduleDialog
+import se.swahnchat.app.ui.components.defaultScheduleTime
 import se.swahnchat.app.ui.components.StagedStrip
 import se.swahnchat.app.ui.components.dayLabel
 import se.swahnchat.app.ui.components.timerLabel
@@ -168,6 +176,12 @@ class ConversationNav(
     val onCall: (conversationId: String, video: Boolean) -> Unit = { _, _ -> },
     val onOpenMessageInfo: (messageId: String) -> Unit = {},
     val onForward: (messageId: String) -> Unit = {},
+    /** The starred messages of this conversation; the screen it opens brings a chosen message back as a jump. */
+    val onOpenStarred: (conversationId: String) -> Unit = {},
+    /** The list of messages scheduled in this conversation. */
+    val onOpenScheduled: (conversationId: String) -> Unit = {},
+    /** Opens another conversation (the direct chat of a tapped mention). */
+    val onOpenConversation: (conversationId: String) -> Unit = {},
 )
 
 @Composable
@@ -187,6 +201,9 @@ fun ConversationScreen(
     var confirmDelete by remember { mutableStateOf<String?>(null) }
     var confirmDeleteForMe by remember { mutableStateOf<String?>(null) }
     var confirmLink by remember { mutableStateOf<String?>(null) }
+    var confirmClosePoll by remember { mutableStateOf<String?>(null) }
+    var confirmCancelScheduled by remember { mutableStateOf<String?>(null) }
+    var rescheduleTarget by remember { mutableStateOf<String?>(null) }
     // a quoted message that was not loaded: the list restarts around it, then we scroll to it
     var pendingScroll by remember { mutableStateOf<String?>(null) }
     val listState = rememberLazyListState()
@@ -219,6 +236,8 @@ fun ConversationScreen(
                 is ConversationEffect.Notice -> snackbar.showSnackbar(context.getString(effect.message))
                 is ConversationEffect.OpenFile -> openFile(context, effect.path, effect.mime, effect.name)
                 is ConversationEffect.ScrollTo -> scrollTo(effect.messageId)
+                is ConversationEffect.OpenConversation -> nav.onOpenConversation(effect.conversationId)
+                is ConversationEffect.OpenContact -> nav.onOpenContact(effect.userId)
             }
         }
     }
@@ -267,6 +286,13 @@ fun ConversationScreen(
             onOpenLink = { confirmLink = it },
             onReact = vm::react,
             onForward = nav.onForward,
+            onStar = vm::star,
+            onVote = vm::vote,
+            onClosePoll = { confirmClosePoll = it },
+            onOpenMention = vm::openMention,
+            onReschedule = { rescheduleTarget = it },
+            onSendScheduledNow = vm::sendScheduledNow,
+            onCancelScheduled = { confirmCancelScheduled = it },
         )
     }
 
@@ -293,7 +319,7 @@ fun ConversationScreen(
             onSearch = { nav.onSearch(vm.conversationId) },
             onCall = { video -> nav.onCall(vm.conversationId, video) },
             onDraft = vm::onDraft,
-            onSend = vm::send,
+            onSend = { vm.send() },
             onCancelReply = vm::cancelReply,
             onCancelEdit = vm::cancelEdit,
             onPickMedia = { pickMedia.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)) },
@@ -321,8 +347,45 @@ fun ConversationScreen(
             onMessageDisplayed = vm::onMessageDisplayed,
             onUnstage = vm::unstage,
             onSetTimer = vm::setTimer,
+            onSendAt = { sendAt -> vm.send(sendAt) },
+            onPickMention = vm::pickMention,
+            onCreatePoll = vm::sendPoll,
+            onOpenStarred = { nav.onOpenStarred(vm.conversationId) },
+            onOpenScheduled = { nav.onOpenScheduled(vm.conversationId) },
         ),
     )
+
+    confirmClosePoll?.let { id ->
+        AlertDialog(
+            onDismissRequest = { confirmClosePoll = null },
+            title = { Text(stringResource(R.string.poll_close_title)) },
+            text = { Text(stringResource(R.string.poll_close_text)) },
+            confirmButton = { TextButton(onClick = { vm.closePoll(id); confirmClosePoll = null }) { Text(stringResource(R.string.poll_close_action)) } },
+            dismissButton = { TextButton(onClick = { confirmClosePoll = null }) { Text(stringResource(R.string.action_cancel)) } },
+        )
+    }
+
+    confirmCancelScheduled?.let { id ->
+        AlertDialog(
+            onDismissRequest = { confirmCancelScheduled = null },
+            title = { Text(stringResource(R.string.scheduled_delete_title)) },
+            text = { Text(stringResource(R.string.scheduled_delete_text)) },
+            confirmButton = {
+                TextButton(onClick = { vm.cancelScheduled(id); confirmCancelScheduled = null }) { Text(stringResource(R.string.scheduled_delete)) }
+            },
+            dismissButton = { TextButton(onClick = { confirmCancelScheduled = null }) { Text(stringResource(R.string.action_cancel)) } },
+        )
+    }
+
+    rescheduleTarget?.let { id ->
+        val current = items.itemSnapshotList.firstNotNullOfOrNull { (it as? ChatRow.Message)?.message?.takeIf { m -> m.id == id }?.scheduledAt }
+        ScheduleDialog(
+            initial = current ?: defaultScheduleTime(System.currentTimeMillis()), now = System::currentTimeMillis,
+            onConfirm = { vm.reschedule(id, it); rescheduleTarget = null },
+            onDismiss = { rescheduleTarget = null },
+            confirmLabel = stringResource(R.string.schedule_save),
+        )
+    }
 
     confirmDelete?.let { id ->
         AlertDialog(
@@ -495,6 +558,13 @@ class ConversationCallbacks(
     /** Takes a chosen file out of the preview strip. */
     val onUnstage: (id: String) -> Unit = {},
     val onSetTimer: (seconds: Long) -> Unit = {},
+    /** Sends the draft; with a time (epoch ms) it is scheduled instead. */
+    val onSendAt: (sendAt: Long?) -> Unit = {},
+    /** A person of the mention picker was chosen. */
+    val onPickMention: (userId: String) -> Unit = {},
+    val onCreatePoll: (question: String, options: List<String>, multiple: Boolean) -> Unit = { _, _, _ -> },
+    val onOpenStarred: () -> Unit = {},
+    val onOpenScheduled: () -> Unit = {},
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -593,6 +663,21 @@ fun ConversationContent(
                                     onClick = { menuOpen = false; callbacks.onSearch() },
                                 )
                             }
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.menu_starred)) },
+                                leadingIcon = { Icon(Icons.Filled.Star, null) },
+                                onClick = { menuOpen = false; callbacks.onOpenStarred() },
+                            )
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        if (state.scheduledCount > 0) "${stringResource(R.string.scheduled_menu)} (${state.scheduledCount})"
+                                        else stringResource(R.string.scheduled_menu),
+                                    )
+                                },
+                                leadingIcon = { Icon(Icons.Filled.Schedule, null) },
+                                onClick = { menuOpen = false; callbacks.onOpenScheduled() },
+                            )
                             DropdownMenuItem(
                                 text = { Text(stringResource(R.string.disappearing_title)) },
                                 leadingIcon = { Icon(Icons.Filled.Timer, null) },
@@ -934,6 +1019,7 @@ private fun Composer(state: ConversationUiState, callbacks: ConversationCallback
                 }
             }
             StagedStrip(state.staged, callbacks.onUnstage)
+            MentionPicker(state.mentionSuggestions, callbacks.onPickMention)
             val recording = state.recording
             if (recording != null && recording.locked) {
                 LockedRecordingBar(recording, callbacks)
@@ -944,9 +1030,12 @@ private fun Composer(state: ConversationUiState, callbacks: ConversationCallback
     }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun InputRow(state: ConversationUiState, callbacks: ConversationCallbacks) {
     var attachMenu by remember { mutableStateOf(false) }
+    var pollOpen by remember { mutableStateOf(false) }
+    var scheduleOpen by remember { mutableStateOf(false) }
     val recording = state.recording
     val hasText = state.draft.isNotBlank() || state.staged.isNotEmpty()
     var slidCancel by remember { mutableStateOf(false) }
@@ -966,6 +1055,11 @@ private fun InputRow(state: ConversationUiState, callbacks: ConversationCallback
                         text = { Text(stringResource(R.string.attach_document)) },
                         leadingIcon = { Icon(Icons.AutoMirrored.Filled.InsertDriveFile, null) },
                         onClick = { attachMenu = false; callbacks.onPickDocument() },
+                    )
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.attach_poll)) },
+                        leadingIcon = { Icon(Icons.Filled.Poll, null) },
+                        onClick = { attachMenu = false; pollOpen = true },
                     )
                 }
             }
@@ -1000,15 +1094,38 @@ private fun InputRow(state: ConversationUiState, callbacks: ConversationCallback
         }
         Spacer(Modifier.width(4.dp))
         if (hasText && recording == null) {
-            FilledIconButton(onClick = callbacks.onSend, enabled = !state.sending, modifier = Modifier.size(48.dp)) {
+            val editing = state.editingMessageId != null
+            val scheduleLabel = stringResource(R.string.action_schedule)
+            // a tap sends; a long press offers to send later (not while a sent message is edited)
+            Box(
+                Modifier.size(48.dp).clip(CircleShape)
+                    .background(if (state.sending) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f) else MaterialTheme.colorScheme.primary)
+                    .combinedClickable(
+                        enabled = !state.sending, role = Role.Button,
+                        onClick = callbacks.onSend,
+                        onLongClick = if (editing) null else ({ scheduleOpen = true }),
+                        onLongClickLabel = if (editing) null else scheduleLabel,
+                    ),
+                contentAlignment = Alignment.Center,
+            ) {
                 Icon(
-                    if (state.editingMessageId != null) Icons.Filled.Edit else Icons.AutoMirrored.Filled.Send,
-                    contentDescription = stringResource(if (state.editingMessageId != null) R.string.action_save_edit else R.string.action_send),
+                    if (editing) Icons.Filled.Edit else Icons.AutoMirrored.Filled.Send,
+                    contentDescription = stringResource(if (editing) R.string.action_save_edit else R.string.action_send),
+                    tint = MaterialTheme.colorScheme.onPrimary,
                 )
             }
         } else {
             MicButton(recording != null, callbacks, onSlide = { slidCancel = it })
         }
+    }
+    if (pollOpen) {
+        PollCreateDialog(onCreate = { q, o, m -> pollOpen = false; callbacks.onCreatePoll(q, o, m) }, onDismiss = { pollOpen = false })
+    }
+    if (scheduleOpen) {
+        ScheduleDialog(
+            initial = defaultScheduleTime(System.currentTimeMillis()), now = System::currentTimeMillis,
+            onConfirm = { scheduleOpen = false; callbacks.onSendAt(it) }, onDismiss = { scheduleOpen = false },
+        )
     }
 }
 

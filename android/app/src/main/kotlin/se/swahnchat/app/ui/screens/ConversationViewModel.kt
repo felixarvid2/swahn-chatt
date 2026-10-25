@@ -72,7 +72,14 @@ import se.swahnchat.app.ui.model.ConnectionUi
 import se.swahnchat.app.ui.model.SafetyUi
 import se.swahnchat.app.ui.model.toChatRow
 import se.swahnchat.app.ui.model.withSeparators
+import se.swahnchat.app.ui.model.MemberUi
 import se.swahnchat.app.ui.model.ReplyUi
+import se.swahnchat.app.ui.components.MentionName
+import se.swahnchat.app.ui.components.findMentions
+import se.swahnchat.app.ui.components.mentionQuery
+import se.swahnchat.app.ui.components.mentionSuggestions
+import se.swahnchat.app.ui.components.mentionTokenStart
+import se.swahnchat.core.client.MIN_SCHEDULE_MS
 import se.swahnchat.app.ui.model.attachmentKindOf
 import se.swahnchat.core.client.DownloadState
 import se.swahnchat.core.client.call.CallManager
@@ -82,6 +89,7 @@ import se.swahnchat.core.client.LocalStore
 import se.swahnchat.core.client.MessageGoneException
 import se.swahnchat.core.client.OutgoingAttachment
 import se.swahnchat.core.client.StoredMessage
+import se.swahnchat.core.model.Content
 import se.swahnchat.core.model.ConversationType
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
@@ -125,6 +133,10 @@ data class ConversationUiState(
     val canSetTimer: Boolean = true,
     /** Another call (or this one) is in progress: the call buttons are disabled. */
     val callActive: Boolean = false,
+    /** Members matching the `@` being typed (group conversations); the picker above the composer shows them. */
+    val mentionSuggestions: List<MemberUi> = emptyList(),
+    /** Messages of this conversation that wait for their time. */
+    val scheduledCount: Int = 0,
 )
 
 /** One chosen file in the preview strip above the composer. */
@@ -140,6 +152,10 @@ sealed interface ConversationEffect {
 
     /** Scroll to this message; if it is not loaded yet, [ConversationViewModel.loadAround] has been asked for. */
     data class ScrollTo(val messageId: String) : ConversationEffect
+
+    /** A mention was tapped: open the direct chat with that person ([OpenContact]: the own profile, there is no chat with oneself). */
+    data class OpenConversation(val conversationId: String) : ConversationEffect
+    data class OpenContact(val userId: String) : ConversationEffect
 }
 
 /** What was unread when the conversation was opened (captured before it is marked read). */
@@ -187,6 +203,7 @@ class ConversationViewModel @Inject constructor(
     private val pagerStart = MutableStateFlow(PagerStart(null, 0))
     /** Messages above this sequence number count as "new" in the jump-to-bottom button; null while the list is at the bottom. */
     private val newSinceSeq = MutableStateFlow<Long?>(null)
+    private val members = MutableStateFlow<List<MemberUi>>(emptyList())
     private var recordingTicker: Job? = null
     private var typingJob: Job? = null
 
@@ -220,6 +237,7 @@ class ConversationViewModel @Inject constructor(
 
     private val rowContext = combine<Any?, ChatRowContext>(
         repo.userMap(), engine.account, downloads, validated, missing, repo.reactions(conversationId),
+        repo.pollVotes(conversationId), repo.starredIds(conversationId),
     ) { v ->
         @Suppress("UNCHECKED_CAST")
         val users = v[0] as Map<String, se.swahnchat.core.model.User>
@@ -232,8 +250,12 @@ class ConversationViewModel @Inject constructor(
         val gone = v[4] as Set<String>
         @Suppress("UNCHECKED_CAST")
         val reactions = v[5] as Map<String, List<se.swahnchat.core.client.Reaction>>
+        @Suppress("UNCHECKED_CAST")
+        val votes = v[6] as Map<String, List<se.swahnchat.core.client.PollVote>>
+        @Suppress("UNCHECKED_CAST")
+        val starred = v[7] as Set<String>
         val isGroup = store.getConversation(conversationId)?.type == ConversationType.GROUP
-        ChatRowContext(account?.userId.orEmpty(), isGroup, users, emptyMap(), dl, ok, gone, reactions = reactions)
+        ChatRowContext(account?.userId.orEmpty(), isGroup, users, emptyMap(), dl, ok, gone, reactions = reactions, votes = votes, starred = starred)
     }
 
     /**
@@ -279,7 +301,7 @@ class ConversationViewModel @Inject constructor(
     /** Everything around the list that comes from the database or the connection. */
     private class Around(
         val latest: LatestMessageRow?, val newMessages: Int, val connection: ConnectionUi, val safety: SafetyUi, val openUnread: Int,
-        val timer: Long, val callActive: Boolean,
+        val timer: Long, val callActive: Boolean, val members: List<MemberUi>, val scheduledCount: Int,
     )
 
     /** -1 until the unread state at opening is known (the screen keeps the list hidden meanwhile). */
@@ -296,8 +318,14 @@ class ConversationViewModel @Inject constructor(
         openUnread,
         repo.timer(conversationId),
         callActive,
+        repo.members(conversationId),
+        repo.scheduled(conversationId).map { it.size }.distinctUntilChanged(),
     ) { v ->
-        Around(v[0] as LatestMessageRow?, v[1] as Int, v[2] as ConnectionUi, v[3] as SafetyUi, v[4] as Int, v[5] as Long, v[6] as Boolean)
+        @Suppress("UNCHECKED_CAST")
+        Around(
+            v[0] as LatestMessageRow?, v[1] as Int, v[2] as ConnectionUi, v[3] as SafetyUi, v[4] as Int, v[5] as Long, v[6] as Boolean,
+            v[7] as List<MemberUi>, v[8] as Int,
+        )
     }
 
     val state: StateFlow<ConversationUiState> = combine(header, composer, around) { h, c, ar ->
@@ -315,10 +343,17 @@ class ConversationViewModel @Inject constructor(
             latestId = ar.latest?.id, latestOutgoing = ar.latest?.outgoing == true, newMessages = ar.newMessages,
             openUnread = ar.openUnread, connection = ar.connection, safety = ar.safety,
             staged = c.staged, resumed = c.resumed, timerSeconds = ar.timer, canSetTimer = !h.isGroup || h.iAmAdmin, callActive = ar.callActive,
+            mentionSuggestions = if (!h.isGroup || c.editing != null) {
+                emptyList()
+            } else {
+                mentionQuery(c.draft)?.let { mentionSuggestions(ar.members, it) }.orEmpty()
+            },
+            scheduledCount = ar.scheduledCount,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ConversationUiState())
 
     init {
+        viewModelScope.launch { repo.members(conversationId).collect { members.value = it } }
         viewModelScope.launch {
             val a = anchor.await()
             openUnread.value = a.unreadCount
@@ -432,9 +467,14 @@ class ConversationViewModel @Inject constructor(
         }
     }
 
-    fun send() {
+    /**
+     * Sends the draft (the staged files with it as caption). With [sendAt] (epoch ms) the message is scheduled instead: it stays
+     * on this phone until then (see "Schemalagda").
+     */
+    fun send(sendAt: Long? = null) {
+        val at = sendAt?.let(::clampSchedule)
         if (staged.value.isNotEmpty() && editing.value == null) {
-            sendStaged()
+            sendStaged(at)
             return
         }
         val text = draft.value.trim()
@@ -446,14 +486,14 @@ class ConversationViewModel @Inject constructor(
                 if (editId != null) {
                     engine.editMessage(editId, text)
                 } else {
-                    engine.sendText(conversationId, text, replyTo.value)
+                    engine.sendText(conversationId, text, replyTo.value, mentionsIn(text), at)
                 }
                 draft.value = ""
                 replyTo.value = null
                 editing.value = null
                 repo.saveDraft(conversationId, "")
                 engine.sendTyping(conversationId, false)
-                work.enqueueOutbox()
+                afterQueued(at)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -462,6 +502,41 @@ class ConversationViewModel @Inject constructor(
                 sending.value = false
             }
         }
+    }
+
+    /**
+     * The members named with `@Name` in [text] (a group only). Derived from the text that is sent, so it always agrees with what
+     * the receivers show, however the name got there (picked or typed).
+     */
+    private fun mentionsIn(text: String): List<String> {
+        if (!state.value.isGroup || !text.contains('@')) return emptyList()
+        val names = members.value.filter { !it.isMe }.map { MentionName(it.userId, it.name, false) }
+        return findMentions(text, names).map { it.userId }.distinct().take(Content.MAX_MENTIONS)
+    }
+
+    /** A time a hair short of the minute (the clock moved on while the dialog was open) is moved up to it, never further than that. */
+    private fun clampSchedule(sendAt: Long): Long {
+        val earliest = System.currentTimeMillis() + MIN_SCHEDULE_MS
+        return if (sendAt in (earliest - SCHEDULE_SLACK_MS) until earliest) earliest else sendAt
+    }
+
+    /** After a message was queued: the outbox is asked for (sent now), or the wake-up for the scheduled time is arranged. */
+    private suspend fun afterQueued(sendAt: Long?) {
+        if (sendAt == null) {
+            work.enqueueOutbox()
+        } else {
+            work.scheduleSend(engine.nextScheduledAt())
+            _effects.tryEmit(ConversationEffect.Notice(se.swahnchat.app.R.string.schedule_changed_notice))
+        }
+    }
+
+    /** The picked member's name replaces the `@` being typed at the end of the draft. */
+    fun pickMention(userId: String) {
+        val member = members.value.firstOrNull { it.userId == userId } ?: return
+        val text = draft.value
+        val at = mentionTokenStart(text)
+        if (at < 0) return
+        draft.value = text.substring(0, at) + "@" + member.name + " "
     }
 
     fun startReply(messageId: String) {
@@ -552,7 +627,7 @@ class ConversationViewModel @Inject constructor(
     }
 
     /** Prepares (compresses, thumbnails) everything in the preview strip and sends it as one message with the text as caption. */
-    private fun sendStaged() {
+    private fun sendStaged(sendAt: Long? = null) {
         val items = staged.value
         if (items.isEmpty() || sending.value) return
         sending.value = true
@@ -561,13 +636,13 @@ class ConversationViewModel @Inject constructor(
             try {
                 for (item in items) prepared += preparer.prepare(item.uri)
                 val caption = draft.value.trim().ifEmpty { null }
-                engine.sendAttachments(conversationId, prepared, caption, replyTo.value)
+                engine.sendAttachments(conversationId, prepared, caption, replyTo.value, sendAt)
                 draft.value = ""
                 staged.value = emptyList()
                 items.forEach { preparer.deleteStagedCopy(it.uri) }
                 repo.saveDraft(conversationId, "")
                 replyTo.value = null
-                work.enqueueOutbox()
+                afterQueued(sendAt)
             } catch (e: CancellationException) {
                 prepared.forEach { it.file.delete() }
                 throw e
@@ -594,6 +669,66 @@ class ConversationViewModel @Inject constructor(
             try {
                 engine.react(messageId, emoji)
                 work.enqueueOutbox()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _effects.tryEmit(ConversationEffect.Error(e.toUiError(), e.message))
+            }
+        }
+    }
+
+    // --- polls, stars, mentions, scheduled messages --------------------------------------------------------------------------
+
+    fun sendPoll(question: String, options: List<String>, multiple: Boolean) = launchEngine {
+        engine.sendPoll(conversationId, question, options, multiple)
+        work.enqueueOutbox()
+    }
+
+    fun vote(pollId: String, optionIds: List<Int>) = launchEngine {
+        engine.votePoll(pollId, optionIds)
+        work.enqueueOutbox()
+    }
+
+    fun closePoll(pollId: String) = launchEngine {
+        engine.closePoll(pollId)
+        work.enqueueOutbox()
+    }
+
+    /** Stars or un-stars a message on this phone (nothing is sent). */
+    fun star(messageId: String, starred: Boolean) = launchEngine { engine.setStarred(messageId, starred) }
+
+    /** A mention was tapped: the direct chat with that person (it is created if there is none), or the own profile. */
+    fun openMention(userId: String) = launchEngine {
+        if (userId == engine.account.value?.userId) {
+            _effects.tryEmit(ConversationEffect.OpenContact(userId))
+        } else {
+            _effects.tryEmit(ConversationEffect.OpenConversation(engine.createDirect(userId).id))
+        }
+    }
+
+    fun reschedule(messageId: String, sendAt: Long) = launchEngine {
+        engine.rescheduleMessage(messageId, clampSchedule(sendAt))
+        work.scheduleSend(engine.nextScheduledAt())
+    }
+
+    fun sendScheduledNow(messageId: String) = launchEngine {
+        engine.sendScheduledNow(messageId)
+        work.scheduleSend(engine.nextScheduledAt())
+        work.enqueueOutbox()
+    }
+
+    fun cancelScheduled(messageId: String) = launchEngine {
+        val removed = engine.cancelScheduled(messageId)
+        removed?.attachments?.forEach { preparer.deleteOutgoingCopy(it.localPath) }
+        if (replyTo.value == messageId) replyTo.value = null
+        if (editing.value == messageId) cancelEdit()
+        work.scheduleSend(engine.nextScheduledAt())
+    }
+
+    private fun launchEngine(block: suspend () -> Unit) {
+        viewModelScope.launch {
+            try {
+                block()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -793,5 +928,6 @@ class ConversationViewModel @Inject constructor(
         const val DRAFT_SAVE_DELAY_MS = 500L
         const val PROGRESS_STEP = 0.02f
         const val MAX_ATTACHMENTS = 10
+        const val SCHEDULE_SLACK_MS = 15_000L
     }
 }
