@@ -16,7 +16,6 @@ from app.config import Settings, get_settings
 from app.db import make_engine, make_read_session_factory, make_session_factory
 from app.errors import ApiError, error_body, install_error_handlers
 from app.hub import Hub
-from app.legacy import adopt_legacy_database
 from app.logging_setup import configure_logging
 from app.openapi import install_openapi
 from app.ratelimit import RateLimiter, client_ip
@@ -163,7 +162,6 @@ def create_app(settings: Settings | None = None, push_transport=None, alert_tran
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     settings.attachments_dir.mkdir(parents=True, exist_ok=True)
 
-    adopt_legacy_database(settings)
     engine = make_engine(settings.database_url)
     hub = Hub()
     limiter = RateLimiter(enabled=settings.rate_limit_enabled)
