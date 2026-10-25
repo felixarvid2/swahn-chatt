@@ -16,6 +16,7 @@ ens den som sköter servern.
 5. [Skapa ditt konto med inbjudningskoden](#5-skapa-ditt-konto-med-inbjudningskoden)
 6. [Aviseringar med ntfy och batterisparläge](#6-aviseringar-med-ntfy-och-batterisparläge)
 7. [Skriva, skicka bilder och röstmeddelanden](#7-skriva-skicka-bilder-och-röstmeddelanden)
+   - [Samtal: ringa, svara och videosamtal](#samtal-ringa-svara-och-videosamtal)
 8. [Grupper](#8-grupper)
 9. [Skölden och varningarna](#9-skölden-och-varningarna)
 10. [Ny telefon: godkänn den nya telefonen](#10-ny-telefon-godkänn-den-nya-telefonen)
@@ -141,6 +142,36 @@ Kommer aviseringarna ändå inte? Då kommer meddelandena ändå fram, bara sena
   när du har uppkoppling igen.
 
 ![Utan uppkoppling](../android/app/screenshots/2d_conversation_offline_light.png)
+
+## Samtal: ringa, svara och videosamtal
+
+Du kan ringa ett röstsamtal eller videosamtal till en person i ett vanligt samtal mellan två. Det går inte i grupper, och
+bara ett samtal åt gången. Ljud och bild krypteras från telefon till telefon; servern ser bara att någon ringde, inte vad som sades.
+
+![Ett pågående röstsamtal](../android/app/screenshots/40b_call_connected_audio_light.png)
+
+- **Ringa:** öppna samtalet med personen och tryck på telefonen (*Ring*) eller videokameran (*Videosamtal*) uppe till höger. Första
+  gången frågar Android om appen får använda mikrofonen (och kameran vid videosamtal): svara ja. Utan mikrofon går det inte att ringa. Säger du nej
+  till kameran fortsätter ett videosamtal som vanligt röstsamtal, och du ser fortfarande den andra om hen skickar bild.
+  Knapparna är gråa medan ett annat samtal pågår.
+- **Svara:** när någon ringer hörs din ringsignal (och telefonen vibrerar) och en avisering visar vem som ringer. Tryck **Svara** eller
+  **Avvisa**. Är skärmen låst tar samtalsbilden över hela skärmen. Appen respekterar tyst läge och *Stör ej*: då ringer den inte, men
+  aviseringen kommer. Har du flera enheter ringer alla; svarar du på en slutar de andra.
+- **Under samtalet:** mikrofonen (stäng av ljudet), högtalaren (växla mellan öronsnäckan och högtalaren; ett anslutet headset eller
+  Bluetooth-headset används automatiskt), vid videosamtal kameran (av/på) och byt kamera. **Avsluta** lägger på.
+  Vid röstsamtal släcks skärmen när du håller telefonen mot örat.
+- **Lämna samtalsbilden:** pilen uppe till vänster går tillbaka till chatten, och samtalet fortsätter. Överst i appen syns då
+  ett band, *Pågående samtal – tryck för att återgå*. Medan telefonen är låst eller appen är låst finns ingen väg till chattarna härifrån.
+- **Missade samtal:** du får en avisering *Missat samtal från …* och en rad i samtalet. Där står också hur varje samtal gick:
+  *Samtal, 3 min 12 s*, *Videosamtal, 45 s*, *Missat samtal*, *Inget svar*, *Upptaget* eller *Avvisat*. Raderna finns bara på din telefon.
+- **Skydda din IP-adress:** i *Inställningar → Integritet och säkerhet* finns **Koppla samtal via servern**. Då går ljudet och bilden via
+  er server i stället för direkt mellan telefonerna, så den du ringer ser inte din IP-adress. Det belastar serverns uppkoppling och
+  kräver att administratören har ställt in samtalsrelä (TURN); utan det kopplas inget samtal när reglaget är på.
+- **Hela skärmen:** från Android 14 kan det vara avstängt att ett inkommande samtal tar över skärmen. Då visas raden
+  **Visa inkommande samtal på hela skärmen** i *Inställningar*; tryck på den och slå på. Annars kommer samtalet som en vanlig
+  avisering.
+- **Går inte att göra:** att byta från röst- till videosamtal under pågående samtal, och att ringa via telefonens vanliga samtalslogg
+  eller bilens handsfree (utöver ljudet).
 
 ## 8. Grupper
 

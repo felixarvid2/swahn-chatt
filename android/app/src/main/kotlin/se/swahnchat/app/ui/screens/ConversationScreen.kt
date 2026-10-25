@@ -122,6 +122,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -149,6 +150,10 @@ import se.swahnchat.app.ui.model.AttachmentKindUi
 import se.swahnchat.app.ui.model.ChatRow
 import se.swahnchat.app.media.ShareFiles
 import se.swahnchat.app.ui.model.SystemKind
+import se.swahnchat.app.call.callDurationLabel
+import androidx.compose.material.icons.filled.Call
+import androidx.compose.material.icons.filled.CallMissed
+import androidx.compose.material.icons.filled.Videocam
 import se.swahnchat.app.ui.model.TransferUi
 import java.io.File
 
@@ -159,6 +164,8 @@ class ConversationNav(
     val onOpenGroupInfo: (conversationId: String) -> Unit,
     val onOpenContact: (userId: String) -> Unit,
     val onSearch: (conversationId: String) -> Unit = {},
+    /** Places a call in this (direct) conversation: opens the call screen. */
+    val onCall: (conversationId: String, video: Boolean) -> Unit = { _, _ -> },
     val onOpenMessageInfo: (messageId: String) -> Unit = {},
     val onForward: (messageId: String) -> Unit = {},
 )
@@ -284,6 +291,7 @@ fun ConversationScreen(
             },
             onOpenGroupInfo = { nav.onOpenGroupInfo(vm.conversationId) },
             onSearch = { nav.onSearch(vm.conversationId) },
+            onCall = { video -> nav.onCall(vm.conversationId, video) },
             onDraft = vm::onDraft,
             onSend = vm::send,
             onCancelReply = vm::cancelReply,
@@ -464,6 +472,8 @@ class ConversationCallbacks(
     val onOpenSafety: () -> Unit = {},
     val onOpenGroupInfo: () -> Unit = {},
     val onSearch: () -> Unit = {},
+    /** Place a voice (false) or video (true) call; offered in direct conversations only. */
+    val onCall: (video: Boolean) -> Unit = {},
     val onDraft: (String) -> Unit = {},
     val onSend: () -> Unit = {},
     val onCancelReply: () -> Unit = {},
@@ -562,15 +572,27 @@ fun ConversationContent(
                     }
                 },
                 actions = {
+                    // A direct conversation has the two call buttons; so that the person's name keeps its room, search moves into the menu there.
+                    val direct = !state.isGroup && state.otherUserId != null
+                    if (direct) CallButtons(state.callActive, callbacks.onCall)
                     SafetyBadge(state.safety, callbacks.onOpenSafety)
-                    IconButton(onClick = callbacks.onSearch, modifier = Modifier.size(48.dp)) {
-                        Icon(Icons.Filled.Search, contentDescription = stringResource(R.string.search_in_conversation))
+                    if (!direct) {
+                        IconButton(onClick = callbacks.onSearch, modifier = Modifier.size(48.dp)) {
+                            Icon(Icons.Filled.Search, contentDescription = stringResource(R.string.search_in_conversation))
+                        }
                     }
                     Box {
                         IconButton(onClick = { menuOpen = true }, modifier = Modifier.size(48.dp)) {
                             Icon(Icons.Filled.MoreVert, contentDescription = stringResource(R.string.action_more))
                         }
                         DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                            if (direct) {
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.search_in_conversation)) },
+                                    leadingIcon = { Icon(Icons.Filled.Search, null) },
+                                    onClick = { menuOpen = false; callbacks.onSearch() },
+                                )
+                            }
                             DropdownMenuItem(
                                 text = { Text(stringResource(R.string.disappearing_title)) },
                                 leadingIcon = { Icon(Icons.Filled.Timer, null) },
@@ -606,6 +628,29 @@ fun ConversationContent(
             ConnectionBanner(state.connection)
             MessageList(state, items, playback, actions, callbacks, listState, Modifier.weight(1f).fillMaxWidth())
         }
+    }
+}
+
+/**
+ * The two call buttons (voice, video) of a direct conversation. Disabled with an explanation (spoken, and shown as a long-press
+ * hint) while a call is in progress: there is one call at a time.
+ */
+@Composable
+private fun CallButtons(callActive: Boolean, onCall: (video: Boolean) -> Unit) {
+    val busy = stringResource(R.string.call_busy_hint)
+    val voice = stringResource(R.string.call_action_voice)
+    val video = stringResource(R.string.call_action_video)
+    IconButton(
+        onClick = { onCall(false) }, enabled = !callActive,
+        modifier = Modifier.size(48.dp).semantics { if (callActive) stateDescription = busy },
+    ) {
+        Icon(Icons.Filled.Call, contentDescription = voice)
+    }
+    IconButton(
+        onClick = { onCall(true) }, enabled = !callActive,
+        modifier = Modifier.size(48.dp).semantics { if (callActive) stateDescription = busy },
+    ) {
+        Icon(Icons.Filled.Videocam, contentDescription = video)
     }
 }
 
@@ -791,6 +836,10 @@ private fun DateSeparator(row: ChatRow.DateHeader) {
     }
 }
 
+private val CALL_KINDS = setOf(
+    SystemKind.CALL_COMPLETED, SystemKind.CALL_MISSED, SystemKind.CALL_NO_ANSWER, SystemKind.CALL_BUSY, SystemKind.CALL_REJECTED,
+)
+
 @Composable
 private fun SystemNotice(row: ChatRow.System, onReview: () -> Unit) {
     val warning = row.kind == SystemKind.IDENTITY_CHANGED || row.kind == SystemKind.NEW_DEVICE_BLOCKED
@@ -811,6 +860,13 @@ private fun SystemNotice(row: ChatRow.System, onReview: () -> Unit) {
             else -> stringResource(R.string.system_timer_set, row.personName, timerLabel(row.value))
         }
         SystemKind.UPDATE_REQUIRED -> stringResource(R.string.system_update_required)
+        SystemKind.CALL_COMPLETED -> stringResource(
+            if (row.video) R.string.system_call_video_completed else R.string.system_call_completed, callDurationLabel(row.value),
+        )
+        SystemKind.CALL_MISSED -> stringResource(if (row.video) R.string.system_call_video_missed else R.string.system_call_missed)
+        SystemKind.CALL_NO_ANSWER -> stringResource(R.string.system_call_no_answer)
+        SystemKind.CALL_BUSY -> stringResource(R.string.system_call_busy)
+        SystemKind.CALL_REJECTED -> stringResource(R.string.system_call_rejected)
     }
     Column(
         Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 6.dp),
@@ -827,6 +883,9 @@ private fun SystemNotice(row: ChatRow.System, onReview: () -> Unit) {
                     warning -> Icons.Filled.Warning
                     row.kind == SystemKind.TIMER_CHANGED -> Icons.Filled.Timer
                     row.kind == SystemKind.UPDATE_REQUIRED -> Icons.Filled.Info
+                    row.kind == SystemKind.CALL_MISSED -> Icons.Filled.CallMissed
+                    row.video && row.kind in CALL_KINDS -> Icons.Filled.Videocam
+                    row.kind in CALL_KINDS -> Icons.Filled.Call
                     else -> Icons.Filled.Security
                 },
                 contentDescription = null,

@@ -13,6 +13,16 @@
     <!-- Expedited sync on Android 11 and older runs as a short foreground service (WorkManager) -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- Calls: the foreground service of a call in progress (CallService), started from the visible call screen -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
+    <uses-permission android:name="android.permission.MANAGE_OWN_CALLS" />
+    <!-- An incoming call takes over the screen (Android 14+ lets the user switch this off, see the settings) -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <!-- The ringing vibration, and the proximity sensor that turns the screen off at the ear during a voice call -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
@@ -74,6 +84,25 @@
                 <data android:mimeType="*/*" />
             </intent-filter>
         </activity>
+
+        <!--
+            The call screen. Not exported: started by our own PendingIntents and by the app itself. Shows over the lock screen and
+            turns the screen on (set in code, for Android 8.0 too); nothing but the call is ever shown from there (see CallActivity).
+        -->
+        <activity
+            android:name=".call.CallActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTop" />
+
+        <!-- Decline action of the ringing notification; only our own PendingIntent reaches it -->
+        <receiver android:name=".call.CallDeclineReceiver" android:exported="false" />
+
+        <!-- The call in progress; started from CallActivity only -->
+        <service
+            android:name=".call.CallService"
+            android:exported="false"
+            android:foregroundServiceType="phoneCall|microphone|camera" />
 
         <!-- Notification "mark as read" action; only our own PendingIntent reaches it -->
         <receiver android:name=".platform.notify.MarkReadReceiver" android:exported="false" />

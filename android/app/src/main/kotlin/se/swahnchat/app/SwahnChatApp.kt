@@ -21,7 +21,9 @@ import se.swahnchat.app.platform.security.AppLock
 import se.swahnchat.app.platform.work.WorkScheduler
 import se.swahnchat.core.client.SwahnChatEngine
 import se.swahnchat.core.client.LocalStore
+import se.swahnchat.app.call.CallNotifier
 import se.swahnchat.core.client.call.CallManager
+import se.swahnchat.core.client.call.CallState
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -39,6 +41,13 @@ class SwahnChatApp : Application(), Configuration.Provider {
     }
 }
 
+/**
+ * Whether the realtime connection should be up: someone is signed in and the app is visible, or a call is in progress
+ * (ringing, connecting or connected), also in the background. It stops again when the call ends and the app is still hidden.
+ */
+fun realtimeWanted(foreground: Boolean, signedIn: Boolean, call: CallState): Boolean =
+    signedIn && (foreground || call is CallState.InCall)
+
 /** Wires the process-wide pieces together once at start. */
 @Singleton
 class AppStarter @Inject constructor(
@@ -54,6 +63,7 @@ class AppStarter @Inject constructor(
     private val appLock: AppLock,
     private val expiry: se.swahnchat.app.platform.work.ExpiryManager,
     private val calls: CallManager,
+    private val callNotifier: CallNotifier,
     @ApplicationScope private val scope: CoroutineScope,
 ) {
     fun start() {
@@ -61,6 +71,7 @@ class AppStarter @Inject constructor(
         foreground.attach()
         notifier.start()
         calls.start()
+        callNotifier.start()
         session.start()
 
         // No account, no lock (a new sign-in starts without one).
@@ -73,9 +84,12 @@ class AppStarter @Inject constructor(
             }
         }
 
-        // Realtime (WebSocket + sync on hints) only while the app is visible; in the background push and WorkManager take over.
+        // Realtime (WebSocket + sync on hints) while the app is visible or a call is going on (the caller's hang-up must reach a
+        // ringing phone); otherwise push and WorkManager take over.
         scope.launch {
-            combine(foreground.isForeground, session.state) { fg, s -> fg && s is SessionState.SignedIn }
+            combine(foreground.isForeground, session.state, calls.state) { fg, s, call ->
+                realtimeWanted(fg, s is SessionState.SignedIn, call)
+            }
                 .distinctUntilChanged()
                 .collect { live ->
                     if (live) {

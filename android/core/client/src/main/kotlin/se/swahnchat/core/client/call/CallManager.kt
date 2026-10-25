@@ -13,6 +13,8 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import se.swahnchat.core.client.CallSignalEvent
 import se.swahnchat.core.client.SwahnChatEngine
+import se.swahnchat.core.client.CallOutcome
+import se.swahnchat.core.client.SystemEvent
 import se.swahnchat.core.model.CallAction
 import se.swahnchat.core.model.CallSignal
 import se.swahnchat.core.model.IceCandidate
@@ -87,6 +89,9 @@ class CallManager(
         val iceKick = Channel<Unit>(Channel.CONFLATED)
         val mediaEvents = Channel<MediaConnectionState>(Channel.UNLIMITED)
         var iceSignalsSent = 0
+
+        /** Clock time (ms) the media connected; null if the call never did. */
+        var connectedAt: Long? = null
 
         @Volatile var closed = false
         var ringJob: Job? = null
@@ -218,6 +223,8 @@ class CallManager(
         when (e.signal.action) {
             CallAction.ANSWER -> end(a, EndReason.ANSWERED_ELSEWHERE)
             CallAction.REJECT -> end(a, EndReason.REJECTED)
+            // The other device was busy: the caller has ended on that BUSY already, so this phone stops ringing as well.
+            CallAction.BUSY -> end(a, EndReason.MISSED)
         }
     }
 
@@ -368,7 +375,9 @@ class CallManager(
             MediaConnectionState.CONNECTED -> if (a.phase == Phase.CONNECTING) {
                 a.connectJob?.cancel()
                 a.phase = Phase.CONNECTED
-                _state.value = CallState.Connected(a.callId, a.conversationId, a.peerUserId, a.video, a.outgoing, clock())
+                val now = clock()
+                a.connectedAt = now
+                _state.value = CallState.Connected(a.callId, a.conversationId, a.peerUserId, a.video, a.outgoing, now)
             }
             MediaConnectionState.FAILED -> end(a, EndReason.FAILED, CallAction.HANGUP)
             else -> Unit
@@ -445,6 +454,9 @@ class CallManager(
                 sendQuietly(a.conversationId, CallSignal(a.callId, notify, a.video))
             }
         }
+        callNotice(a, reason)?.let { notice ->
+            scope.launch { recordQuietly(a.conversationId, a.callId, notice) }
+        }
         val ended = CallState.Ended(a.callId, reason)
         _state.value = ended
         _muted.value = false
@@ -452,6 +464,38 @@ class CallManager(
         lingerJob = scope.launch {
             delay(timings.endedLingerMs)
             if (_state.value === ended) _state.value = CallState.Idle
+        }
+    }
+
+    /**
+     * The history notice of a call that ends as [reason], or null when it leaves none: a call that connected leaves its
+     * duration whatever ended it; one that did not leaves "missed", "no answer", "busy" or "declined". A call answered on
+     * another own device, and one whose media setup failed before it connected, leave nothing (the former is that device's
+     * call, the latter would be a notice for a call nobody had).
+     */
+    private fun callNotice(a: Active, reason: EndReason): SystemEvent.Call? {
+        val connected = a.connectedAt
+        val outcome = when {
+            connected != null -> CallOutcome.COMPLETED
+            reason == EndReason.MISSED -> CallOutcome.MISSED
+            reason == EndReason.NO_ANSWER -> CallOutcome.NO_ANSWER
+            reason == EndReason.BUSY -> CallOutcome.BUSY
+            reason == EndReason.REJECTED -> CallOutcome.REJECTED
+            reason == EndReason.HANGUP_LOCAL && a.phase == Phase.RINGING_OUT -> CallOutcome.NO_ANSWER // we gave up while it rang
+            else -> return null
+        }
+        val seconds = if (connected != null) ((clock() - connected) / MS_PER_SECOND).coerceAtLeast(0) else 0L
+        return SystemEvent.Call(a.peerUserId, outcome, a.video, seconds)
+    }
+
+    /** Local only: nothing is sent to the server for a history notice. */
+    private suspend fun recordQuietly(conversationId: String, callId: String, notice: SystemEvent.Call) {
+        try {
+            signalling.recordCall(conversationId, callId, notice)
+        } catch (c: CancellationException) {
+            throw c
+        } catch (ex: Exception) {
+            // a missing history line must not matter more than the call
         }
     }
 
@@ -471,5 +515,6 @@ class CallManager(
         const val MAX_ICE_PER_SIGNAL = 50
         const val MAX_ICE_SIGNALS = 20
         const val MAX_PENDING_REMOTE = 200
+        const val MS_PER_SECOND = 1000L
     }
 }

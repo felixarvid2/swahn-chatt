@@ -168,6 +168,13 @@ enum class SystemKind {
 
     /** Content of a newer app version was ignored. */
     UPDATE_REQUIRED,
+
+    /** A call that connected; [ChatRow.System.value] is its length in seconds. */
+    CALL_COMPLETED,
+    CALL_MISSED,
+    CALL_NO_ANSWER,
+    CALL_BUSY,
+    CALL_REJECTED,
 }
 
 sealed interface ChatRow {
@@ -198,6 +205,8 @@ sealed interface ChatRow {
         val own: Boolean = false,
         /** The number a notice is about: the timer in seconds of [SystemKind.TIMER_CHANGED]. */
         val value: Long = 0,
+        /** A call notice is about a video call. */
+        val video: Boolean = false,
     ) : ChatRow {
         override val key get() = id
     }

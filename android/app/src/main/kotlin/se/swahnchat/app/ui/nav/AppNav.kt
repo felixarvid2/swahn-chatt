@@ -41,6 +41,8 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import androidx.navigation.navDeepLink
+import se.swahnchat.app.call.CallActivity
+import se.swahnchat.app.call.OngoingCallBar
 import se.swahnchat.app.data.SessionState
 import se.swahnchat.app.ui.components.InsecureBanner
 import se.swahnchat.app.ui.screens.AutoDownloadScreen
@@ -126,7 +128,14 @@ fun AppRoot(vm: AppViewModel = hiltViewModel()) {
             session == SessionState.StorageUnavailable -> StorageUnavailableScreen(onRetry = vm::retryStorage)
             locked -> LockScreen(onUnlocked = vm::unlock)
             else -> {
-                AppNavHost(nav, signedIn = session is SessionState.SignedIn)
+                val call by vm.activeCall.collectAsStateWithLifecycle()
+                Column(Modifier.fillMaxSize()) {
+                    // under the insecure strip the status bar is already taken care of; without a call the bar is not there at all
+                    call?.let { OngoingCallBar(it, padStatusBar = !insecure) }
+                    Box(Modifier.weight(1f).then(if (call != null) Modifier.consumeWindowInsets(WindowInsets.statusBars) else Modifier)) {
+                        AppNavHost(nav, signedIn = session is SessionState.SignedIn)
+                    }
+                }
                 LaunchedEffect(pendingLink) {
                     pendingLink?.let { nav.handleDeepLink(it); pendingLink = null }
                 }
@@ -137,6 +146,7 @@ fun AppRoot(vm: AppViewModel = hiltViewModel()) {
 
 @Composable
 private fun AppNavHost(nav: androidx.navigation.NavHostController, signedIn: Boolean) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     // fixed at first composition; later sign-ins and sign-outs navigate (below) instead of rebuilding the graph
     val start = remember { if (signedIn) Routes.CONVERSATIONS else Routes.LOGIN }
     // Follow the session: a revoked device or a logout leads to the login screen, a sign-in to the conversations.
@@ -194,6 +204,7 @@ private fun AppNavHost(nav: androidx.navigation.NavHostController, signedIn: Boo
                 onJumpHandled = { handled.value = true; entry.savedStateHandle[JUMP_KEY] = null },
                 nav = ConversationNav(
                     onSearch = { nav.navigate(Routes.search(it)) },
+                    onCall = { conversationId, video -> context.startActivity(CallActivity.startIntent(context, conversationId, video)) },
                     onBack = { nav.popBackStack() },
                     onOpenMedia = { m, a -> nav.navigate(Routes.media(m, a)) },
                     onOpenGroupInfo = { nav.navigate(Routes.groupInfo(it)) },

@@ -16,6 +16,7 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
@@ -237,5 +238,32 @@ class ConversationUiTest {
         val plain = Fixtures.conversationItems.first { it.id == "d2" }.copy(draft = null)
         content { ConversationRow(plain, onClick = {}) }
         compose.onNodeWithText("Du: Perfekt, vi ses då!").assertIsDisplayed()
+    }
+
+    // --- calls ------------------------------------------------------------------------------------------------------------------------
+
+    private val direct = ConversationUiState(title = "Bertil Ek", otherUserId = "bob", loaded = true, latestId = "13")
+
+    @Test fun `a direct conversation offers a voice and a video call and reports which one was pressed`() {
+        val calls = ArrayList<Boolean>()
+        content { Conversation(direct, Fixtures.directRows, ConversationCallbacks(onCall = { calls += it })) }
+        compose.onNodeWithContentDescription("Ring").assertIsDisplayed().performClick()
+        compose.onNodeWithContentDescription("Videosamtal").assertIsDisplayed().performClick()
+        assertEquals(listOf(false, true), calls)
+    }
+
+    @Test fun `a group has no call buttons`() {
+        content { Conversation(base, Fixtures.groupRows) }
+        compose.onAllNodesWithContentDescription("Ring").assertCountEquals(0)
+        compose.onAllNodesWithContentDescription("Videosamtal").assertCountEquals(0)
+    }
+
+    @Test fun `while a call is in progress the buttons are disabled and say why`() {
+        val calls = ArrayList<Boolean>()
+        content { Conversation(direct.copy(callActive = true), Fixtures.directRows, ConversationCallbacks(onCall = { calls += it })) }
+        compose.onNodeWithContentDescription("Ring").assertIsNotEnabled().performClick()
+        compose.onNodeWithContentDescription("Videosamtal").assertIsNotEnabled()
+        assertTrue(calls.isEmpty())
+        compose.onAllNodes(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Du är redan i ett samtal")).assertCountEquals(2)
     }
 }

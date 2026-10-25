@@ -209,8 +209,59 @@ Client data flow:
   plus hangup). Every end path closes the `MediaSession` and cancels the call's jobs.
 - **Media.** `MediaSessionFactory`/`MediaSession` abstract WebRTC; the app implements them (DTLS-SRTP only, the
   fingerprints travel in the encrypted SDP, which `ContentCodec` refuses without `a=fingerprint:`). Credentials are
-  fetched fresh per call from `GET /calls/turn`; if that fails the call tries host candidates. A setting can force relay
-  only (hides the IP address from the other side). SDP and candidates are never logged.
+  fetched fresh per call from `GET /calls/turn`; if that fails the call tries host candidates. The setting "Koppla samtal via servern"
+  forces relay-only candidates (hides the IP address from the other side). SDP and candidates are never logged.
+
+- **History notices.** When a call ends, `CallManager` asks `CallSignalling.recordCall` for a local notice: `SystemEvent.Call`
+  (peer, `CallOutcome` completed / missed / no answer / busy / declined, video flag, duration in seconds), posted through the same
+  `DeviceDirectory.postNotice` path as the new-device notices under the id `sys-call-<callId>` (one per call, no request, no
+  envelope, no outbox, not counted unread). A call answered on another own device and one whose setup failed before it connected
+  leave none. The app stores it in the existing system columns (`systemType` `call_<outcome>[_video]`, `systemValue` = seconds), so
+  there is no schema change and old notices render as before.
+
+#### UI, notifications, service (app)
+
+All of it is in `se.swahnchat.app.call`; the core knows none of it.
+
+- **Video** (`WebRtcMediaSessionFactory`, `WebRtcMediaSession`, `WebRtcCamera`). One shared `EglBase` (the factory's `eglBase`) serves
+  the encoders, decoders and the call screen's `SurfaceViewRenderer`s and is never released. A video call adds one video
+  transceiver, send-receive with the front camera (any camera as fallback, 1280x720 at 30 fps at most, WebRTC adapts) or
+  receive-only when the phone has no camera or no CAMERA permission, so the call goes on as a voice call that can still see the other
+  side. An audio call opens no camera. `factory.current` is the session of the call in progress; its `remoteVideoTrack`,
+  `localVideoTrack`, `setCameraEnabled` (stops the capture, which frees the camera) and `switchCamera` are the app-only API of the
+  call screen. **Not supported: upgrading an audio call to video during the call.**
+- **Audio** (`CallAudio`). `MODE_IN_COMMUNICATION` and transient audio focus (voice communication) from connecting to the end, restored
+  afterwards. A headset (Bluetooth first, then wired) always wins; otherwise the speaker toggle chooses (Android 12+:
+  `setCommunicationDevice`; before: `isSpeakerphoneOn` and the SCO link). Video calls start on the speaker, voice calls on the earpiece,
+  where a proximity wake lock turns the screen off at the ear while connected.
+- **Ringing** (`CallNotifier`, `CallRinger`, `CallDeclineReceiver`, `CallRingWorker`). `CallNotifier` observes `CallManager.state`. On
+  an incoming call it posts a `CallStyle.forIncomingCall` notification on the silent `calls` channel (Answer, Decline, a full-screen
+  intent to `CallActivity`), starts the ringtone and, when the app is in the background, enqueues the expedited `CallRingWorker`.
+  A channel's sound plays only once, so `AndroidCallRinger` loops the default ringtone itself (ringer mode: silent = nothing,
+  vibrate = vibration only; any do-not-disturb filter but "all" = vibration only). A call-style notification needs a full-screen intent
+  or a foreground service on Android 12+, so the full-screen intent is always set; `canUseFullScreenIntent()` (Android 14+) only
+  decides whether the settings show the row that opens `ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT`. The caller's name follows the
+  notification privacy setting (hidden: "Inkommande samtal"); a missed call becomes a normal notification on the `messages` channel.
+  Decline is a non-exported receiver that rejects through `goAsync()` on the application scope. **No foreground service runs while a
+  call rings:** Android 14 and 15 do not let a microphone or camera service start from the background and a push is no exemption.
+  Answer is therefore a `PendingIntent` to `CallActivity`, which asks for the permissions, accepts, and starts `CallService` while it is
+  visible. While a call is incoming, outgoing or running with the app in the background, `AppStarter` keeps `engine.startRealtime()` up
+  (`realtimeWanted`), so the caller's hang-up reaches a ringing phone; it stops again when the call ends and the app is still hidden.
+- **Ongoing call** (`CallService`, foreground service type phoneCall | microphone, plus camera for a video call with the permission).
+  Started only from `CallActivity`, after the call exists. Its call-style notification has Hang up, opens the call screen and counts
+  from the moment the call connected. It runs `CallAudio` and stops itself when the call ends.
+- **Screen** (`CallActivity`, `CallScreen`, `CallViewModel`, `OngoingCallBar`). Single top, excluded from recents, shown over the lock
+  screen. From the lock screen it shows only the call: the way back to the chat is not offered while the keyguard or the app lock is
+  locked (the activity then just closes; with the notification privacy "hidden" the caller's name is not shown there either).
+  `decideLaunch` closes the activity when it is started with nothing to show (for example Answer after the process died while ringing).
+  Direct conversations have the two call buttons in their top bar; while a call is up, `MainActivity` shows a slim bar that returns to it.
+  Settings: "Koppla samtal via servern" (`AppPrefs.callsRelayOnly`, read by `CallManager` for every new media session).
+- **Honest limits.** The ring worker is expedited with `RUN_AS_NON_EXPEDITED_WORK_REQUEST`, so when the expedited quota is spent it runs as
+  ordinary work and the process can be killed in the middle of the ring. There is no Telecom/`ConnectionService` integration yet: no
+  system call log, no car or Bluetooth call controls beyond audio routing. No audio-to-video upgrade during a call.
+- **Tested here.** Robolectric: notifier, ring worker, decline, launch decision, service types and notification, audio, call screen,
+  settings, call buttons. The loopback test with real WebRTC (voice and video) and the foreground service, permissions and
+  full-screen behaviour need a device or emulator (instrumented tests are only compiled in the sandbox).
 
 ## Notifications: FCM vs self-hosted
 

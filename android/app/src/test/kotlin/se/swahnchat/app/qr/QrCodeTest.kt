@@ -63,7 +63,15 @@ class QrCodeTest {
         // Payloads depend on random keys; a weak layout (too small a quiet zone) failed for some of them.
         repeat(STRESS_PAIRS) {
             val payload = SafetyQr.payload(number(Phone("a"), Phone("b")))
-            assertEquals(payload, QrCode.decode(QrCode.bitmap(payload)))
+            for (size in listOf(4, 8)) assertEquals(payload, QrCode.decode(QrCode.bitmap(payload, size)), "at $size px per module")
+        }
+    }
+
+    @Test fun `a code whose default mask read at 4 px but not at 8 px reads at every size`() {
+        // Seen on CI: zxing's mask for this payload decoded at 4 pixels per module and failed at 8, the size the app shows.
+        val payload = "fcsn1:CAISIgogNOLYQl8PAmAPgAc_XAuFYpVm0p5NQnWFUg_Iz8tfJXQaIgog0PgveNbhxBF4C-RuIdsaLRv0AgeK-poeo95wNrOgj7M"
+        for (size in listOf(2, 3, 4, 6, 8, 10, 12)) {
+            assertEquals(payload, QrCode.decode(QrCode.bitmap(payload, size)), "at $size px per module")
         }
     }
 

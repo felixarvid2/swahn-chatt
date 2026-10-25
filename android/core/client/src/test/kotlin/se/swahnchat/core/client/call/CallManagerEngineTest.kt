@@ -57,7 +57,17 @@ class CallManagerEngineTest {
         assertEquals(1, a.media.last.closed)
         assertEquals(1, b.media.last.closed)
         assertTrue(server.callMessages().isNotEmpty())
-        assertTrue(alice.store.getOutbox().isEmpty() && bob.messages(conv).isEmpty())
+        assertTrue(alice.store.getOutbox().isEmpty())
+        // the signals are stored nowhere; what each phone keeps is one local history line of the call, and nothing was sent for it
+        for ((client, peer) in listOf(alice to bob, bob to alice)) {
+            eventually(2_000, "the call notice of ${client.name}") { client.messages(conv).any { it.isSystem } }
+            val notices = client.messages(conv)
+            assertTrue(notices.none { !it.isSystem })
+            val call = notices.single().systemEvent as se.swahnchat.core.client.SystemEvent.Call
+            assertEquals(se.swahnchat.core.client.CallOutcome.COMPLETED, call.outcome)
+            assertEquals(peer.userId(), call.peerUserId)
+            assertEquals(false, call.video)
+        }
         assertFailsWith<IllegalArgumentException> { a.manager.startCall("nope", video = false) }
     }
 }

@@ -382,6 +382,36 @@ many, and that a push marked urgent was sent.
   can still be probed and, with a leaked credential, used for free bandwidth until it expires. Prefer reaching it
   over Tailscale; for a public setup forward only 3478 (and 5349 with TLS) plus the relay range.
 
+## Calls (the app)
+
+What the Android app does around a call, and what it does not protect.
+
+- **Who can ring.** An incoming call rings only when the offer comes from the other member of that direct conversation, from a
+  device the app lists and pinned, decrypts, is under 60 seconds old and has not been seen before. A device that is still waiting
+  for your approval (a new device next to verified ones) cannot ring you: its signal fails to decrypt and is dropped, covered by a
+  test. Approving a new device stays mandatory and is not changed by calls.
+- **Lock screen.** An incoming call can take over a locked screen (a full-screen notification, Android's own permission on 14+) and shows
+  only the call: answer, decline, mute, speaker, camera, hang up. From there the app opens no chat and no other screen: the way "back to the
+  chat" is not offered while the phone or the app lock is locked, the call screen just closes and the call goes on. The
+  notification privacy setting applies: with "hidden" the notification, a missed-call notification and the call screen on a locked phone
+  or locked app say "Inkommande samtal" / "Missat samtal" without a name. Pictures are not put into the notification. Answering from a
+  locked phone needs no unlock: whoever holds the phone can answer a call, as with any phone call.
+- **Microphone and camera.** Asked when a call is placed or answered, never earlier. A foreground service (phone call, microphone, plus
+  camera for video) runs only while a call does; Android's microphone and camera indicators show it. It is started from the visible
+  call screen, never from the background. Without the camera permission a video call is a voice call.
+- **Relay switch.** "Koppla samtal via servern" (off by default) lets the media flow only through the server's TURN relay. **What it
+  hides:** your IP address from the person you call (in a direct connection they learn your current address, which is the risk when
+  calling someone you do not trust). **What it does not hide:** the server operator's relay still sees both phones' addresses and the
+  amount and timing of the traffic; who called whom and when remains visible to the server as for messages; the other party
+  learns that you called. It does not change the encryption: the media stays DTLS-SRTP between the phones, the relay only forwards
+  encrypted packets. It costs the server's bandwidth and adds delay, and it needs TURN on the server: without TURN credentials
+  the call does not connect while the switch is on (it does not fall back to a direct connection).
+- **History lines** ("Samtal, 3 min 12 s", "Missat samtal", ...) are written on the phone when a call ends and are never sent or
+  synced; they are in the encrypted database like other notices and go with the phone. They are not part of the history export.
+- **Not covered.** Call quality or reachability on a phone that restricts background work (the ring worker may run as ordinary work when
+  the expedited quota is spent). No Telecom integration yet, so calls are not in the system call log and the phone's own
+  call-blocking and car/Bluetooth call controls do not see them. Upgrading a voice call to video in a call is not supported.
+
 ## Presence (online / last seen)
 
 Presence is **opt-in and off by default** (`PATCH /users/me/settings {"share_presence": true}`), and the server
@@ -420,5 +450,5 @@ metadata and password hashes.
 - Display names, avatars and device names shown in notices are server data.
 - No message history transfer between devices.
 - Rate limiting (including the per-username login counters) is per-process memory and resets on restart.
-- Calls leak IP addresses to the TURN server and, without relay-only, to the other party (see "Calls").
+- Calls leak IP addresses to the TURN server and, without the relay switch ("Koppla samtal via servern"), to the other party (see "Calls").
 - The security review in `HANDOVER.md` lists what was tested and what still needs an external review.

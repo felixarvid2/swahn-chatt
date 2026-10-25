@@ -3,6 +3,7 @@ package se.swahnchat.core.client.call
 import kotlinx.coroutines.flow.Flow
 import se.swahnchat.core.client.CallSignalEvent
 import se.swahnchat.core.client.SwahnChatEngine
+import se.swahnchat.core.client.SystemEvent
 import se.swahnchat.core.model.CallSignal
 import se.swahnchat.core.model.TurnCredentials
 
@@ -20,6 +21,9 @@ interface CallSignalling {
     /** Fresh TURN/STUN credentials for one call; throws when they cannot be fetched. */
     suspend fun turnCredentials(): TurnCredentials
 
+    /** Adds the history [notice] of the call [callId] to the conversation, on this phone only (nothing is sent). */
+    suspend fun recordCall(conversationId: String, callId: String, notice: SystemEvent.Call)
+
     /** The current time on the server's clock, to judge how old a signal is. */
     fun serverNow(): Long
 }
@@ -30,5 +34,8 @@ class EngineCallSignalling(private val engine: SwahnChatEngine) : CallSignalling
     override suspend fun send(conversationId: String, signal: CallSignal) = engine.sendCallSignal(conversationId, signal)
     override suspend fun peerOf(conversationId: String): String? = engine.directPeer(conversationId)
     override suspend fun turnCredentials(): TurnCredentials = engine.fetchTurnCredentials()
+    override suspend fun recordCall(conversationId: String, callId: String, notice: SystemEvent.Call) =
+        engine.recordCallNotice(conversationId, callId, notice)
+
     override fun serverNow(): Long = engine.serverNow()
 }

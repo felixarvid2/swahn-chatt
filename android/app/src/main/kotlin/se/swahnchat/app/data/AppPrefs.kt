@@ -119,6 +119,16 @@ class AppPrefs @Inject constructor(@ApplicationContext context: Context) {
         prefs.edit().putString(KEY_LOCK_TIMEOUT, value.name).apply()
     }
 
+    private val _callsRelayOnly = MutableStateFlow(prefs.getBoolean(KEY_CALLS_RELAY_ONLY, false))
+
+    /** Calls only through the server's TURN relay: the other party does not see this phone's IP address. Off by default (direct is faster and free for the server). */
+    val callsRelayOnly: StateFlow<Boolean> = _callsRelayOnly.asStateFlow()
+
+    fun setCallsRelayOnly(value: Boolean) {
+        _callsRelayOnly.value = value
+        prefs.edit().putBoolean(KEY_CALLS_RELAY_ONLY, value).apply()
+    }
+
     private val _autoDownload = MutableStateFlow(
         AutoDownloadSettings(
             images = enumPref(KEY_AUTO_IMAGES, AutoDownloadMode.ALWAYS), voice = enumPref(KEY_AUTO_VOICE, AutoDownloadMode.ALWAYS),
@@ -176,6 +186,7 @@ class AppPrefs @Inject constructor(@ApplicationContext context: Context) {
         const val KEY_BLOCK_SCREENSHOTS = "block_screenshots"
         const val KEY_LOCK_ENABLED = "app_lock_enabled"
         const val KEY_LOCK_TIMEOUT = "app_lock_timeout"
+        const val KEY_CALLS_RELAY_ONLY = "calls_relay_only"
         const val KEY_NOTIF_ASKED = "notif_permission_asked"
         const val KEY_AUTO_IMAGES = "auto_download_images"
         const val KEY_AUTO_VOICE = "auto_download_voice"

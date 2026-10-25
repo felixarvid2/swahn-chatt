@@ -48,6 +48,17 @@ class WorkScheduler @Inject constructor(@ApplicationContext private val context:
         wm.enqueueUniqueWork(SYNC, ExistingWorkPolicy.APPEND_OR_REPLACE, request)
     }
 
+    /**
+     * Expedited work that keeps the process alive while a call rings in the background ([CallRingWorker]). A new ring replaces
+     * one that is still running. Needs no network (the call signal has arrived already).
+     */
+    fun enqueueCallRing() {
+        val request = OneTimeWorkRequestBuilder<CallRingWorker>()
+            .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+            .build()
+        wm.enqueueUniqueWork(CALL_RING, ExistingWorkPolicy.REPLACE, request)
+    }
+
     /** Safety net: a sync every 15 minutes (WorkManager's minimum) even if push never arrives. */
     fun schedulePeriodicSync() {
         val request = PeriodicWorkRequestBuilder<PeriodicSyncWorker>(15, TimeUnit.MINUTES)
@@ -77,6 +88,7 @@ class WorkScheduler @Inject constructor(@ApplicationContext private val context:
         wm.cancelUniqueWork(OUTBOX)
         wm.cancelUniqueWork(SYNC)
         wm.cancelUniqueWork(PERIODIC)
+        wm.cancelUniqueWork(CALL_RING)
     }
 
     companion object {
@@ -84,6 +96,7 @@ class WorkScheduler @Inject constructor(@ApplicationContext private val context:
         const val SYNC = "sync"
         const val PERIODIC = "periodic-sync"
         const val EXPIRY = "expiry"
+        const val CALL_RING = "call-ring"
         const val BACKOFF_SECONDS = 30L
     }
 }

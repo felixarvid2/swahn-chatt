@@ -302,4 +302,45 @@ class CallSignalSyncTest {
         assertFailsWith<IOException> { t.alice.engine.fetchTurnCredentials() }
         assertEquals(2, server.turnFetches.get())
     }
+
+    @Test
+    fun `a call from a new device that waits for approval is dropped until the user accepts it`() = runBlocking<Unit> {
+        val t = trio()
+        val id = t.alice.engine.sendText(t.ab, "hello"); t.alice.engine.processOutbox()
+        t.bob.engine.sync()
+        t.alice.engine.setVerified(t.bob.deviceIdOnServer(), true) // next to a verified device a new one must be approved
+        val bob2 = client("bob")
+        bob2.engine.login("https://fake.example", "bob", "password-bob")
+        bob2.engine.refreshDirectory()
+        t.alice.engine.refreshDirectory(); t.alice.engine.sync() // alice hears of bob2: pinned, approved = false
+        val pending = t.alice.engine.pendingIdentityChanges().single { it.deviceId == bob2.deviceIdOnServer() }
+        val w = Watch(t.alice, scope)
+        bob2.engine.sendCallSignal(t.ab, offer())
+        t.alice.engine.sync()
+        assertTrue(w.signals.isEmpty(), "a signal from an unapproved device must not ring: ${w.signals}")
+        assertNoMessageEvents(w)
+        assertEquals(listOf(id), t.alice.messages(t.ab).filter { !it.isSystem }.map { it.id })
+        // once the user accepted the device, its calls come through
+        assertTrue(t.alice.engine.acceptIdentity(t.bob.userId(), pending.deviceId, pending.newIdentityKey!!))
+        val later = offer()
+        bob2.engine.sendCallSignal(t.ab, later)
+        t.alice.engine.sync()
+        assertEquals(listOf(later.callId), w.signals.map { it.signal.callId })
+        assertEquals(bob2.deviceIdOnServer(), w.signals.single().fromDeviceId)
+    }
+
+    @Test
+    fun `a call history notice is local - one line per call and nothing to the server`() = runBlocking<Unit> {
+        val t = trio()
+        val requestsBefore = server.log.size
+        val notice = se.swahnchat.core.client.SystemEvent.Call(t.bob.userId(), CallOutcome.COMPLETED, video = true, durationSeconds = 192)
+        t.alice.engine.recordCallNotice(t.ab, "call-1", notice)
+        t.alice.engine.recordCallNotice(t.ab, "call-1", notice) // the same call again adds nothing
+        t.alice.engine.recordCallNotice("unknown", "call-2", notice) // a conversation that is gone is ignored
+        assertEquals(listOf(notice), t.alice.messages(t.ab).mapNotNull { it.systemEvent }.filterIsInstance<se.swahnchat.core.client.SystemEvent.Call>())
+        assertEquals(requestsBefore, server.log.size, "the notice must not touch the server")
+        assertTrue(server.callMessages().isEmpty())
+        assertTrue(t.alice.store.getOutbox().isEmpty())
+        assertEquals(0, t.alice.store.unreadCount(t.ab))
+    }
 }

@@ -14,6 +14,7 @@ import se.swahnchat.core.client.OutboxAttachment
 import se.swahnchat.core.client.OutboxEntry
 import se.swahnchat.core.client.ReceiptTimes
 import se.swahnchat.core.client.StoredMessage
+import se.swahnchat.core.client.CallOutcome
 import se.swahnchat.core.client.SystemEvent
 import se.swahnchat.core.model.Conversation
 import se.swahnchat.core.model.ConversationMember
@@ -213,6 +214,13 @@ abstract class LocalStoreContract {
             SystemEvent.NewDevice("u2", "dev-5", "Tablet", needsApproval = true),
             SystemEvent.MemberAdded("u3"),
             SystemEvent.MemberRemoved("u4"),
+            // call notices keep outcome, video flag and duration
+            SystemEvent.Call("u2", CallOutcome.COMPLETED, video = false, durationSeconds = 192),
+            SystemEvent.Call("u2", CallOutcome.COMPLETED, video = true, durationSeconds = 5),
+            SystemEvent.Call("u2", CallOutcome.MISSED, video = false),
+            SystemEvent.Call("u2", CallOutcome.NO_ANSWER, video = true),
+            SystemEvent.Call("u2", CallOutcome.BUSY, video = false),
+            SystemEvent.Call("u2", CallOutcome.REJECTED, video = false),
         ).withIndex()) {
             val n = sys.copy(id = "sys-n$i", systemEvent = event)
             store.upsertMessage(n)

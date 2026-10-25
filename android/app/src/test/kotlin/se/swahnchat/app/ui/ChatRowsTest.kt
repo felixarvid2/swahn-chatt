@@ -12,6 +12,7 @@ import se.swahnchat.core.client.DownloadState
 import se.swahnchat.core.client.LocalAttachment
 import se.swahnchat.core.client.MessageStatus
 import se.swahnchat.core.client.StoredMessage
+import se.swahnchat.core.client.CallOutcome
 import se.swahnchat.core.client.SystemEvent
 import se.swahnchat.core.model.User
 import java.time.ZoneId
@@ -244,6 +245,16 @@ class ChatRowsTest {
         val mine = notice(SystemEvent.TimerChanged("me", 0))
         assertEquals(0L, mine.value); assertTrue(mine.own)
         assertEquals(SystemKind.UPDATE_REQUIRED, notice(SystemEvent.UpdateRequired).kind)
+    }
+
+    @Test fun `call notices become notices with their outcome, video flag and duration`() {
+        val done = notice(SystemEvent.Call("bob", CallOutcome.COMPLETED, video = true, durationSeconds = 192))
+        assertEquals(SystemKind.CALL_COMPLETED, done.kind); assertEquals(192L, done.value); assertTrue(done.video); assertEquals("Bob", done.personName)
+        val missed = notice(SystemEvent.Call("bob", CallOutcome.MISSED, video = false))
+        assertEquals(SystemKind.CALL_MISSED, missed.kind); assertFalse(missed.video)
+        assertEquals(SystemKind.CALL_NO_ANSWER, notice(SystemEvent.Call("bob", CallOutcome.NO_ANSWER, video = false)).kind)
+        assertEquals(SystemKind.CALL_BUSY, notice(SystemEvent.Call("bob", CallOutcome.BUSY, video = false)).kind)
+        assertEquals(SystemKind.CALL_REJECTED, notice(SystemEvent.Call("bob", CallOutcome.REJECTED, video = false)).kind)
     }
 
     @Test fun `an attachment that was imported without its file is unavailable, not downloadable`() {
