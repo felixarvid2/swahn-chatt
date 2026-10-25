@@ -34,3 +34,13 @@
 -keep,allowobfuscation class kotlinx.serialization.* { *; }
 -keep,allowobfuscation class okhttp3.** { *; }
 -keep,allowobfuscation class okio.** { *; }
+
+# The androidx.test runner itself and room-testing (MigrationTestHelper) also use libraries the app ships: without these
+# R8 drops androidx.tracing.Trace, the runner dies with NoClassDefFoundError before the first test and the run hangs.
+-keep class androidx.tracing.** { *; }
+-keep class androidx.concurrent.futures.** { *; }
+-keep class androidx.lifecycle.** { *; }
+-keep class androidx.core.os.** { *; }
+-keep class androidx.room.** { *; }
+-keep class androidx.sqlite.** { *; }
+-keep,allowobfuscation class kotlinx.serialization.** { *; }
