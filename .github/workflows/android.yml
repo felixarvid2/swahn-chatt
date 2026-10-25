@@ -104,7 +104,7 @@ jobs:
       # Boots once to save the snapshot that later runs start from
       - name: Create AVD and snapshot
         if: steps.avd-cache.outputs.cache-hit != 'true'
-        uses: reactivecircus/android-emulator-runner@v2.33.0
+        uses: reactivecircus/android-emulator-runner@v2.38.0
         with:
           api-level: ${{ matrix.api-level }}
           target: google_apis
@@ -119,7 +119,7 @@ jobs:
         run: ./gradlew assembleDebugAndroidTest --stacktrace && ./gradlew assembleQaAndroidTest -PtestBuildType=qa --stacktrace
 
       - name: Instrumented tests (debug build, then R8-minified qa build)
-        uses: reactivecircus/android-emulator-runner@v2.33.0
+        uses: reactivecircus/android-emulator-runner@v2.38.0
         with:
           api-level: ${{ matrix.api-level }}
           target: google_apis
