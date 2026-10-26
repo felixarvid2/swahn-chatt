@@ -25,6 +25,7 @@ Om inget annat står körs kommandona på Pi:n, i mappen `~/deployment` (där `d
 15. [Larm till din telefon (ntfy)](#15-larm-till-din-telefon-ntfy)
 16. [Databasunderhåll och HTTPS-skydd](#16-databasunderhåll-och-https-skydd)
 17. [Röst- och videosamtal (TURN)](#17-röst--och-videosamtal-turn)
+18. [Administrationsvyn i appen](#18-administrationsvyn-i-appen)
 
 ## 1. Rutiner: dagligen, veckovis, månadsvis
 
@@ -165,6 +166,9 @@ tillsammans med ett nytt lösenord (minst 10 tecken). Samma sak kan göras med A
 **Räkna med följderna:** när koden används loggas personen ut **överallt**, alla gamla enheter tas bort (nycklar och
 köade meddelanden raderas) och telefonen som använde koden blir en ny enhet. Gamla meddelanden går inte att läsa på
 den, och kontakterna ser "ny enhet". Det är samma sak som vid tappad telefon, och det är avsiktligt.
+
+I appen: **Inställningar**, **Administration**, fliken **Användare**, menyn vid personen, **Skapa återställningskod** (se
+avsnitt 18). Personen skriver koden under **Glömt lösenordet?** på appens startskärm.
 
 I loggen syns `password_reset_issued` (med `via=cli` eller `admin`) och `password_reset_used`. Koden syns aldrig där.
 
@@ -367,8 +371,17 @@ Utan push kommer meddelandena ändå fram, men först när appen är öppen elle
 6. **Testa en enda telefon.** Personen kan trigga `POST /devices/me/push/test` (en testpush, högst 3 per 10 minuter);
    resultatet står i `last_push_at` och `last_push_status` på `GET /devices/me` en stund senare. `409 push_not_configured`
    betyder att telefonen inte har registrerat någon push-adress eller att `SWAHNCHAT_PUSH_ALLOWED_HOSTS` är tom.
-7. Om bara *en* person saknar aviseringar ligger felet nästan alltid i den telefonen (punkt 4). Om *ingen* får dem
+7. **Be personen öppna Inställningar, Felsökning** i appen. Där ser hen på en sida om servern svarar, om en push-app är
+   installerad, om servern har en push-adress för telefonen, hur serverns senaste push gick, om batterioptimeringen är
+   av och hur många meddelanden som väntar i utkorgen. **Kopiera** ger en sammanfattning att skicka till dig, och
+   **Exportera logg** en textfil med appens egna händelser (synkningar, push, anslutning, felkoder utan innehåll). Den
+   innehåller aldrig meddelanden, namn, nycklar, tokens, push-adressen, IP-adresser eller webbadresser med sökväg, så den
+   är säker att skicka till dig. Be personen även trycka **Skicka testnotis** och berätta vad som står.
+8. Om bara *en* person saknar aviseringar ligger felet nästan alltid i den telefonen (punkt 4). Om *ingen* får dem
    ligger det på servern (punkt 1 till 3 och 5).
+
+Som administratör ser du samma sak per enhet i appen: **Administration**, **Användare**, öppna enheterna under en person
+(avsnitt 18).
 
 ## 13. Granska säkerhetsloggen
 
@@ -505,3 +518,26 @@ docker compose logs turn | tail
   pågående samtal klarar sig tills deras uppgifter går ut (en timme).
 - **Uppgradering:** bilden är fastlåst (`coturn/coturn:4.18.0`); byt version medvetet i `docker-compose.yml`, läs
   releaseanteckningarna och kör `docker compose --profile turn pull`.
+
+## 18. Administrationsvyn i appen
+
+Administratörer ser **Inställningar**, **Administration** (för alla andra finns raden inte). Vyn är bara ett fönster mot
+API:t i avsnitt 2: **servern avgör alltid** vad en administratör får göra, och appen ger inga rättigheter som servern inte
+redan ger. Varje åtgärd som ändrar något frågar först.
+
+| Flik | Vad du ser och kan göra |
+|---|---|
+| **Användare** | Alla konton (även borttagna): namn, märken för administratör, avstängd och borttagen, senast sedd, antal enheter och hur mycket de har laddat upp. Öppna enheterna för att se pushens hälsa per enhet: om en adress finns, om serverns senaste försök gick igenom (svar `0` betyder inget svar) och hur många i rad som misslyckats. Menyn vid personen: **stäng av** och **återaktivera**, **gör till administratör** och **ta bort administratörsrollen** (servern svarar `409 last_admin` om det skulle lämna servern utan administratör, och appen säger då att du ska utse en annan först), **skapa återställningskod**, **ta bort användaren** (kräver att du skriver användarnamnet). Per enhet: **återkalla** (borttappad telefon). Du har inga åtgärder på dig själv. |
+| **Inbjudningar** | Alla inbjudningar med anteckning, om de är giltiga, använda, återkallade eller utgångna, hur många gånger de använts och när de går ut. Skapa en ny (visas en gång, med QR-kod) och återkalla en som inte använts upp. |
+| **Status** | Serverversion, databasschema (och om det är uppdaterat), antal användare, enheter, chattar och meddelanden, ej levererade krypterade meddelanden, antal filer och storlek, databasens storlek, ledigt diskutrymme (rött under 500 MB), drifttid och senaste databasunderhåll. Det här är den enda platsen i appen som visar serverns version. |
+| **Logg** | `GET /admin/audit`, senaste först, 50 åt gången med **Visa äldre**: händelse, tid och vem som gjorde vad mot vem. IP-adresser och detaljer visas inte i appen (de finns kvar i serverns logg, avsnitt 13). |
+
+**Återställningskod.** **Skapa återställningskod** frågar först och visar sedan koden **en enda gång**, med en knapp
+för att kopiera den (urklippet markeras som känsligt) och tiden den slutar gälla (24 timmar, en gång). Appen sparar den
+aldrig: inte i en inställning, inte i databasen, inte i loggen eller felsökningsloggen, och den försvinner när du
+stänger rutan. Stängde du den för tidigt skapar du en ny (en ny kod upphäver den gamla). Ge koden till personen på ett
+sätt du litar på. **Räkna med följderna** (se avsnitt 5): alla personens enheter loggas ut, och den som kan koden kan
+ta över kontot från och med då. Kontakterna ser "ny enhet" och måste, där de har verifierat enheter, godkänna den nya.
+
+**Felsökningslogg till dig.** När någon har problem: be hen öppna **Inställningar**, **Felsökning** och skicka
+sammanfattningen eller den exporterade filen (se avsnitt 12, punkt 7).

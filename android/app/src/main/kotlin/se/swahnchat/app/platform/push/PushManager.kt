@@ -14,6 +14,8 @@ import org.unifiedpush.android.connector.FailedReason
 import org.unifiedpush.android.connector.UnifiedPush
 import se.swahnchat.app.data.AppPrefs
 import se.swahnchat.app.di.ApplicationScope
+import se.swahnchat.app.diagnostics.ErrorClass
+import se.swahnchat.app.diagnostics.EventLog
 import se.swahnchat.core.client.SwahnChatEngine
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -47,6 +49,7 @@ class PushManager @Inject constructor(
     private val engine: SwahnChatEngine,
     private val prefs: AppPrefs,
     @ApplicationScope private val scope: CoroutineScope,
+    private val log: EventLog,
 ) {
     private val _status = MutableStateFlow(computeStatus())
     val status: StateFlow<PushStatus> = _status.asStateFlow()
@@ -98,10 +101,12 @@ class PushManager @Inject constructor(
         try {
             engine.registerPush(endpoint)
             prefs.pushEndpointUploaded = endpoint
+            log.record(se.swahnchat.app.diagnostics.PushRegistration(uploaded = true))
             refreshStatus()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
+            log.record(se.swahnchat.app.diagnostics.PushRegistration(uploaded = false, error = ErrorClass.of(e)))
             Log.w(TAG, "Could not send the push endpoint to the server yet: ${e.javaClass.simpleName}")
         }
     }

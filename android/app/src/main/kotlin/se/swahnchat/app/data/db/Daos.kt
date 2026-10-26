@@ -277,6 +277,20 @@ data class ConversationOverviewRow(
     val mentioned: Int = 0,
 )
 
+/** A message of ours that has not been accepted by the server (waiting or failed), with what the outbox knows about it. */
+data class UnsentRow(
+    val messageId: String,
+    val conversationId: String,
+    val text: String?,
+    /** JSON list of attachments ([decodeAttachments]). */
+    val attachments: String,
+    val clientTs: Long,
+    val status: String,
+    val failureReason: String?,
+    val attempts: Int,
+    val lastError: String?,
+)
+
 /** A message found by the search (the text is the decrypted one; highlighting is done by the caller). */
 data class SearchHitRow(
     val messageId: String,
@@ -484,6 +498,22 @@ interface UiDao {
     suspend fun unreadMessages(conversationId: String, limit: Int): List<MessageEntity>
 
     @Query("SELECT COUNT(*) FROM outbox") fun observeOutboxCount(): Flow<Int>
+
+    /** The outbox screen: messages of ours waiting to be sent or failed for good, in the order they were written (not the scheduled ones). */
+    @Query(
+        "SELECT m.id AS messageId, m.conversationId AS conversationId, m.text AS text, m.attachments AS attachments, m.clientTs AS clientTs, " +
+            "m.status AS status, m.failureReason AS failureReason, COALESCE(o.attempts, 0) AS attempts, o.lastError AS lastError " +
+            "FROM messages m LEFT JOIN outbox o ON o.messageId = m.id " +
+            "WHERE m.outgoing = 1 AND m.status IN ('PENDING', 'FAILED') AND m.scheduledAt IS NULL AND m.systemType IS NULL AND m.deleted = 0 " +
+            "ORDER BY m.clientTs, m.id",
+    )
+    fun observeUnsent(): Flow<List<UnsentRow>>
+
+    /** How many of them failed for good (the badge on the settings row). */
+    @Query(
+        "SELECT COUNT(*) FROM messages WHERE outgoing = 1 AND status = 'FAILED' AND scheduledAt IS NULL AND systemType IS NULL AND deleted = 0",
+    )
+    fun observeFailedCount(): Flow<Int>
 
     /** The attachment lists of all messages that have attachments (to find files nobody refers to). */
     @Query("SELECT attachments FROM messages WHERE attachments != '[]'")

@@ -549,6 +549,11 @@ fun errorTexts(): (UiError) -> String {
                     UiError.SERVER -> R.string.error_server
                     UiError.INSECURE_URL -> R.string.error_insecure_url
                     UiError.UNKNOWN -> R.string.error_unknown
+                    UiError.INVALID_RESET_CODE -> R.string.error_invalid_reset_code
+                    UiError.LAST_ADMIN -> R.string.error_last_admin
+                    UiError.PUSH_NOT_CONFIGURED -> R.string.error_push_not_configured
+                    UiError.WRONG_PASSWORD -> R.string.error_wrong_password
+                    UiError.ACCOUNT_SUSPENDED -> R.string.error_account_suspended
                 },
             )
         }

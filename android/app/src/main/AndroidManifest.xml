@@ -30,6 +30,9 @@
     <!-- The ringing vibration, and the proximity sensor that turns the screen off at the ear during a voice call -->
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Only used when the person taps "Tillåt i bakgrunden" (onboarding, diagnostics, settings): the system dialog that exempts the app from
+         battery optimisation, so push and calls are not held back. Not asked at start. The app is not distributed through Google Play. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" tools:ignore="BatteryLife" />
 
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />

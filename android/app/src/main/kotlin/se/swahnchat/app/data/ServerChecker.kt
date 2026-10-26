@@ -16,7 +16,7 @@ import javax.net.ssl.SSLException
 
 sealed interface ServerCheck {
     /** `/healthz` answered. [encrypted] is false for a plain-http development server. */
-    data class Reachable(val normalizedUrl: String, val encrypted: Boolean) : ServerCheck
+    data class Reachable(val normalizedUrl: String, val encrypted: Boolean, val latencyMs: Long = 0) : ServerCheck
 
     /** Empty or malformed address. */
     data object InvalidUrl : ServerCheck
@@ -45,8 +45,9 @@ class ServerChecker @Inject constructor() {
             val client = ApiClient.create(input, InMemoryTokenProvider(), BuildConfig.ALLOW_INSECURE_LAN) {
                 it.connectTimeout(8, TimeUnit.SECONDS).readTimeout(8, TimeUnit.SECONDS)
             }
+            val started = System.nanoTime()
             client.api.healthz()
-            ServerCheck.Reachable(url.toString(), encrypted = url.isHttps)
+            ServerCheck.Reachable(url.toString(), encrypted = url.isHttps, latencyMs = (System.nanoTime() - started) / 1_000_000)
         } catch (e: ApiException) {
             ServerCheck.UnexpectedAnswer(e.httpStatus)
         } catch (e: SSLException) {

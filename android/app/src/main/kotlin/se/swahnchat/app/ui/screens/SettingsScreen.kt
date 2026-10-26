@@ -25,7 +25,16 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Logout
+import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.Apps
+import androidx.compose.material.icons.filled.BatteryChargingFull
+import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.DeleteForever
+import androidx.compose.material.icons.filled.Outbox
+import androidx.compose.material.icons.filled.RocketLaunch
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.material.icons.filled.Call
 import se.swahnchat.app.call.canShowFullScreenCalls
 import se.swahnchat.app.call.openFullScreenIntentSettings
@@ -121,7 +130,6 @@ class SettingsCallbacks(
     val onPickAvatar: () -> Unit = {},
     val onClearAvatar: () -> Unit = {},
     val onChangePassword: (String, String) -> Unit = { _, _ -> },
-    val onRevokeDevice: (String) -> Unit = {},
     val onSelectDistributor: (String) -> Unit = {},
     val onTheme: (ThemeMode) -> Unit = {},
     val onNotificationPrivacy: (NotificationPrivacy) -> Unit = {},
@@ -156,6 +164,14 @@ class SettingsCallbacks(
     val onOpenHistory: () -> Unit = {},
     val onCopy: (String) -> Unit = {},
     val onShare: (String) -> Unit = {},
+    val onOpenDevices: () -> Unit = {},
+    val onOpenAdmin: () -> Unit = {},
+    val onOpenDeleteAccount: () -> Unit = {},
+    val onOpenOnboarding: () -> Unit = {},
+    val onOpenDiagnostics: () -> Unit = {},
+    val onOpenOutbox: () -> Unit = {},
+    /** Opens the system's battery-optimisation dialog for the app. */
+    val onBattery: () -> Unit = {},
 )
 
 @Composable
@@ -165,6 +181,12 @@ fun SettingsScreen(
     onOpenStorage: () -> Unit = {},
     onOpenAutoDownload: () -> Unit = {},
     onOpenHistory: () -> Unit = {},
+    onOpenDevices: () -> Unit = {},
+    onOpenAdmin: () -> Unit = {},
+    onOpenDeleteAccount: () -> Unit = {},
+    onOpenOnboarding: () -> Unit = {},
+    onOpenDiagnostics: () -> Unit = {},
+    onOpenOutbox: () -> Unit = {},
     vm: SettingsViewModel = hiltViewModel(),
 ) {
     val state by vm.state.collectAsStateWithLifecycle()
@@ -182,13 +204,14 @@ fun SettingsScreen(
         SettingsCallbacks(
             onBack = onBack, onSetName = vm::setDisplayName,
             onPickAvatar = { pick.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
-            onClearAvatar = vm::clearAvatar, onChangePassword = vm::changePassword, onRevokeDevice = vm::revokeDevice,
+            onClearAvatar = vm::clearAvatar, onChangePassword = vm::changePassword,
             onSelectDistributor = vm::selectDistributor, onTheme = vm::setTheme,
             onNotificationPrivacy = vm::setNotificationPrivacy, onBlockScreenshots = vm::setBlockScreenshots, onCallsRelayOnly = vm::setCallsRelayOnly,
             fullScreenIntentAllowed = fullScreenAllowed,
             onOpenFullScreenIntentSettings = { openFullScreenIntentSettings(context) },
             onLockTimeout = vm::setLockTimeout, onAppLock = vm::setAppLock, lockAvailable = Authenticator.isAvailable(context),
-            onAuthenticate = { done -> if (activity != null) Authenticator.prompt(activity, promptTitle, null) { ok -> if (ok) done() } }, onCreateInvitation = vm::createInvitation,
+            onAuthenticate = { done -> if (activity != null) Authenticator.prompt(activity, promptTitle,
+                null) { ok -> if (ok) done() } }, onCreateInvitation = vm::createInvitation,
             onDismissInvitation = vm::dismissInvitation, onDismissPasswordChanged = vm::dismissPasswordChanged, onLogout = vm::logout,
             onOpenSystemNotificationSettings = {
                 context.startActivity(
@@ -204,6 +227,9 @@ fun SettingsScreen(
             },
             onOpenOwnSafety = { onOpenSafety(state.userId) },
             onOpenStorage = onOpenStorage, onOpenAutoDownload = onOpenAutoDownload, onOpenHistory = onOpenHistory,
+            onOpenDevices = onOpenDevices, onOpenAdmin = onOpenAdmin, onOpenDeleteAccount = onOpenDeleteAccount,
+            onOpenOnboarding = onOpenOnboarding, onOpenDiagnostics = onOpenDiagnostics, onOpenOutbox = onOpenOutbox,
+            onBattery = { se.swahnchat.app.diagnostics.BatteryOptimization.open(context) },
             onCopy = { copyInvitation(context, it) },
             onShare = { code ->
                 val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, context.getString(R.string.invitation_share_text, code))
@@ -237,7 +263,6 @@ fun SettingsContent(state: SettingsUiState, cb: SettingsCallbacks, modifier: Mod
     var lockUnavailable by remember { mutableStateOf(false) }
     var createInvite by remember { mutableStateOf(false) }
     var confirmLogout by remember { mutableStateOf(false) }
-    var revoke by remember { mutableStateOf<DeviceUi?>(null) }
     val errorText = errorTexts()
     val context = LocalContext.current
     val notificationsOn = remember(state) { NotificationManagerCompat.from(context).areNotificationsEnabled() }
@@ -271,16 +296,23 @@ fun SettingsContent(state: SettingsUiState, cb: SettingsCallbacks, modifier: Mod
             // --- account ---
             Section(R.string.settings_account)
             SettingRow(Icons.Filled.Key, stringResource(R.string.change_password), null, onClick = { changePassword = true })
-            if (state.isAdmin) SettingRow(Icons.Filled.PersonAdd, stringResource(R.string.create_invitation), stringResource(R.string.create_invitation_hint), onClick = { createInvite = true })
+            if (state.isAdmin) SettingRow(Icons.Filled.PersonAdd, stringResource(R.string.create_invitation),
+                stringResource(R.string.create_invitation_hint), onClick = { createInvite = true })
+            if (state.isAdmin) SettingRow(Icons.Filled.AdminPanelSettings, stringResource(R.string.admin_title), stringResource(R.string.admin_row_hint),
+                onClick = cb.onOpenAdmin)
+            SettingRow(Icons.Filled.DeleteForever, stringResource(R.string.delete_account_title), stringResource(R.string.delete_account_row_hint),
+                danger = true, onClick = cb.onOpenDeleteAccount)
 
             // --- devices ---
             Section(R.string.settings_devices)
-            when (val d = state.devices) {
-                DevicesUi.Loading -> CircularProgressIndicator(Modifier.padding(16.dp).size(24.dp), strokeWidth = 2.dp)
-                DevicesUi.Failed -> Text(stringResource(R.string.devices_load_failed), modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp), color = MaterialTheme.colorScheme.error)
-                is DevicesUi.Loaded -> d.devices.forEach { device -> DeviceRow(device, onRevoke = { revoke = device }) }
-            }
-            SettingRow(Icons.Filled.Security, stringResource(R.string.my_devices_safety), stringResource(R.string.my_devices_safety_hint), onClick = cb.onOpenOwnSafety)
+            SettingRow(
+                Icons.Filled.Smartphone, stringResource(R.string.devices_title),
+                (state.devices as? DevicesUi.Loaded)?.devices?.size?.let { pluralStringResource(R.plurals.devices_count, it,
+                    it) } ?: stringResource(R.string.devices_row_hint),
+                onClick = cb.onOpenDevices,
+            )
+            SettingRow(Icons.Filled.Security, stringResource(R.string.my_devices_safety), stringResource(R.string.my_devices_safety_hint),
+                onClick = cb.onOpenOwnSafety)
 
             // --- notifications and push ---
             Section(R.string.settings_notifications)
@@ -298,6 +330,11 @@ fun SettingsContent(state: SettingsUiState, cb: SettingsCallbacks, modifier: Mod
                 onClick = { quietDialog = true },
             )
             SettingRow(Icons.Filled.Apps, stringResource(R.string.push_title), pushSummary(state), onClick = { pickDistributor = true })
+            SettingRow(
+                Icons.Filled.BatteryChargingFull, stringResource(R.string.battery_title),
+                stringResource(if (state.batteryUnrestricted) R.string.battery_status_ok else R.string.battery_status_restricted_short),
+                onClick = cb.onBattery,
+            )
             if (!cb.fullScreenIntentAllowed) {
                 SettingRow(
                     Icons.Filled.Call, stringResource(R.string.calls_full_screen), stringResource(R.string.calls_full_screen_hint),
@@ -350,6 +387,12 @@ fun SettingsContent(state: SettingsUiState, cb: SettingsCallbacks, modifier: Mod
             )
             SettingRow(Icons.Filled.Storage, stringResource(R.string.storage), stringResource(R.string.storage_hint), onClick = cb.onOpenStorage)
             SettingRow(Icons.Filled.Backup, stringResource(R.string.history_title), stringResource(R.string.history_hint), onClick = cb.onOpenHistory)
+            SettingRow(
+                Icons.Filled.Outbox, stringResource(R.string.outbox_title),
+                if (state.failedCount > 0) pluralStringResource(R.plurals.outbox_failed, state.failedCount,
+                    state.failedCount) else stringResource(R.string.outbox_row_hint),
+                danger = state.failedCount > 0, badge = state.failedCount, onClick = cb.onOpenOutbox,
+            )
 
             // --- appearance ---
             Section(R.string.settings_appearance)
@@ -376,6 +419,10 @@ fun SettingsContent(state: SettingsUiState, cb: SettingsCallbacks, modifier: Mod
             Section(R.string.settings_about)
             SettingRow(Icons.Filled.Wifi, stringResource(R.string.server), state.serverUrl, onClick = null)
             SettingRow(Icons.Filled.Smartphone, stringResource(R.string.this_device), state.deviceName, onClick = null)
+            SettingRow(Icons.Filled.RocketLaunch, stringResource(R.string.onboarding_title), stringResource(R.string.onboarding_row_hint),
+                onClick = cb.onOpenOnboarding)
+            SettingRow(Icons.Filled.BugReport, stringResource(R.string.diagnostics_title), stringResource(R.string.diagnostics_row_hint),
+                onClick = cb.onOpenDiagnostics)
             SettingRow(Icons.Filled.Info, stringResource(R.string.app_name), stringResource(R.string.version_format, state.versionName), onClick = null)
             Text(
                 stringResource(R.string.security_info), style = MaterialTheme.typography.bodySmall,
@@ -397,7 +444,8 @@ fun SettingsContent(state: SettingsUiState, cb: SettingsCallbacks, modifier: Mod
                     keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
                 )
             },
-            confirmButton = { TextButton(enabled = text.isNotBlank(), onClick = { cb.onSetName(text); editName = false }) { Text(stringResource(R.string.action_save)) } },
+            confirmButton = { TextButton(enabled = text.isNotBlank(),
+                onClick = { cb.onSetName(text); editName = false }) { Text(stringResource(R.string.action_save)) } },
             dismissButton = { TextButton(onClick = { editName = false }) { Text(stringResource(R.string.action_cancel)) } },
         )
     }
@@ -410,7 +458,10 @@ fun SettingsContent(state: SettingsUiState, cb: SettingsCallbacks, modifier: Mod
             confirmButton = { TextButton(onClick = cb.onDismissPasswordChanged) { Text(stringResource(R.string.action_ok)) } },
         )
     }
-    if (pickDistributor) DistributorDialog(state, onDismiss = { pickDistributor = false }, onSelect = { cb.onSelectDistributor(it); pickDistributor = false })
+    if (pickDistributor) {
+        DistributorDialog(state.distributors, state.selectedDistributor, onDismiss = { pickDistributor = false },
+            onSelect = { cb.onSelectDistributor(it); pickDistributor = false })
+    }
     if (pickTheme) {
         AlertDialog(
             onDismissRequest = { pickTheme = false },
@@ -419,7 +470,8 @@ fun SettingsContent(state: SettingsUiState, cb: SettingsCallbacks, modifier: Mod
                 Column {
                     ThemeMode.entries.forEach { mode ->
                         Row(
-                            Modifier.fillMaxWidth().heightIn(min = 48.dp).selectable(selected = state.theme == mode, role = Role.RadioButton) { cb.onTheme(mode); pickTheme = false },
+                            Modifier.fillMaxWidth().heightIn(min = 48.dp).selectable(selected = state.theme == mode,
+                                role = Role.RadioButton) { cb.onTheme(mode); pickTheme = false },
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             RadioButton(selected = state.theme == mode, onClick = null)
@@ -486,15 +538,6 @@ fun SettingsContent(state: SettingsUiState, cb: SettingsCallbacks, modifier: Mod
             dismissButton = { TextButton(onClick = { confirmLogout = false }) { Text(stringResource(R.string.action_cancel)) } },
         )
     }
-    revoke?.let { device ->
-        AlertDialog(
-            onDismissRequest = { revoke = null },
-            title = { Text(stringResource(R.string.revoke_device_title, device.name)) },
-            text = { Text(stringResource(R.string.revoke_device_text)) },
-            confirmButton = { TextButton(onClick = { cb.onRevokeDevice(device.id); revoke = null }) { Text(stringResource(R.string.action_revoke)) } },
-            dismissButton = { TextButton(onClick = { revoke = null }) { Text(stringResource(R.string.action_cancel)) } },
-        )
-    }
 }
 
 /** The created invitation: the code (shown once), the same invitation as a QR code to scan, and copy / share. */
@@ -559,7 +602,8 @@ private fun <T> ChoiceDialog(
         title = { Text(stringResource(title)) },
         text = {
             Column {
-                if (explanation != null) Text(stringResource(explanation), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(bottom = 8.dp))
+                if (explanation != null) Text(stringResource(explanation), style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(bottom = 8.dp))
                 options.forEach { option ->
                     Row(
                         Modifier.fillMaxWidth().heightIn(min = 48.dp).selectable(selected = selected == option, role = Role.RadioButton) { onPick(option) },
@@ -576,7 +620,7 @@ private fun <T> ChoiceDialog(
 }
 
 @Composable
-private fun SwitchRow(
+internal fun SwitchRow(
     icon: androidx.compose.ui.graphics.vector.ImageVector, title: String, subtitle: String, checked: Boolean,
     onChange: (Boolean) -> Unit, enabled: Boolean = true,
 ) {
@@ -619,7 +663,7 @@ private fun distributorLabel(state: SettingsUiState): String =
     state.distributors.firstOrNull { it.packageName == state.selectedDistributor }?.label ?: state.selectedDistributor.orEmpty()
 
 @Composable
-private fun Section(title: Int) {
+internal fun Section(title: Int) {
     Text(
         stringResource(title), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary,
         modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 4.dp).semantics { heading() },
@@ -627,40 +671,23 @@ private fun Section(title: Int) {
 }
 
 @Composable
-private fun SettingRow(icon: androidx.compose.ui.graphics.vector.ImageVector, title: String, subtitle: String?, danger: Boolean = false, onClick: (() -> Unit)? = null) {
+internal fun SettingRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector, title: String, subtitle: String?, danger: Boolean = false, onClick: (() -> Unit)? = null,
+    /** A number on the icon (failed messages); 0: none. */
+    badge: Int = 0,
+) {
     val color = if (danger) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
     Row(
         Modifier.fillMaxWidth().heightIn(min = 56.dp).then(if (onClick != null) Modifier.clickable(role = Role.Button, onClick = onClick) else Modifier)
             .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(icon, contentDescription = null, tint = if (danger) color else MaterialTheme.colorScheme.onSurfaceVariant)
+        BadgedBox(badge = { if (badge > 0) Badge { Text(badge.toString()) } }) {
+            Icon(icon, contentDescription = null, tint = if (danger) color else MaterialTheme.colorScheme.onSurfaceVariant)
+        }
         Column(Modifier.padding(start = 16.dp)) {
             Text(title, style = MaterialTheme.typography.bodyLarge, color = color)
             if (subtitle != null) Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-    }
-}
-
-@Composable
-private fun DeviceRow(device: DeviceUi, onRevoke: () -> Unit) {
-    val date = remember(device.lastSeen) {
-        if (device.lastSeen <= 0) null else DateTimeFormatter.ofLocalizedDateTime(FormatStyle.SHORT).format(Instant.ofEpochMilli(device.lastSeen).atZone(ZoneId.systemDefault()))
-    }
-    Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(start = 16.dp, end = 4.dp, top = 4.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-        Icon(Icons.Filled.Smartphone, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-        Column(Modifier.weight(1f).padding(start = 16.dp)) {
-            Text(device.name, style = MaterialTheme.typography.bodyLarge)
-            Text(
-                if (device.isCurrent) stringResource(R.string.this_device)
-                else if (date != null) stringResource(R.string.last_seen, date) else stringResource(R.string.never_seen),
-                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        if (!device.isCurrent) {
-            IconButton(onClick = onRevoke, modifier = Modifier.size(48.dp)) {
-                Icon(Icons.Filled.Delete, contentDescription = stringResource(R.string.revoke_device_description, device.name), tint = MaterialTheme.colorScheme.error)
-            }
         }
     }
 }
@@ -678,13 +705,16 @@ private fun PasswordDialog(onDismiss: () -> Unit, onConfirm: (String, String) ->
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(stringResource(R.string.change_password_text), style = MaterialTheme.typography.bodySmall)
                 OutlinedTextField(current, { current = it }, label = { Text(stringResource(R.string.current_password)) }, singleLine = true,
-                    visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Next))
+                    visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password,
+                        imeAction = ImeAction.Next))
                 OutlinedTextField(new, { new = it }, label = { Text(stringResource(R.string.new_password)) }, singleLine = true,
                     isError = new.isNotEmpty() && new.length < 10, supportingText = { Text(stringResource(R.string.password_hint)) },
-                    visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Next))
+                    visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password,
+                        imeAction = ImeAction.Next))
                 OutlinedTextField(confirm, { confirm = it }, label = { Text(stringResource(R.string.confirm_password)) }, singleLine = true,
                     isError = confirm.isNotEmpty() && confirm != new,
-                    visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done))
+                    visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password,
+                        imeAction = ImeAction.Done))
             }
         },
         confirmButton = { TextButton(enabled = valid, onClick = { onConfirm(current, new) }) { Text(stringResource(R.string.action_save)) } },
@@ -693,22 +723,28 @@ private fun PasswordDialog(onDismiss: () -> Unit, onConfirm: (String, String) ->
 }
 
 @Composable
-private fun DistributorDialog(state: SettingsUiState, onDismiss: () -> Unit, onSelect: (String) -> Unit) {
+internal fun DistributorDialog(
+    distributors: List<se.swahnchat.app.platform.push.Distributor>,
+    selected: String?,
+    onDismiss: () -> Unit,
+    onSelect: (String) -> Unit,
+) {
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.push_title)) },
         text = {
             Column {
                 Text(stringResource(R.string.push_explainer), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(bottom = 12.dp))
-                if (state.distributors.isEmpty()) {
+                if (distributors.isEmpty()) {
                     Text(stringResource(R.string.push_install_hint), style = MaterialTheme.typography.bodyMedium)
                 }
-                state.distributors.forEach { d ->
+                distributors.forEach { d ->
                     Row(
-                        Modifier.fillMaxWidth().heightIn(min = 48.dp).selectable(selected = d.packageName == state.selectedDistributor, role = Role.RadioButton) { onSelect(d.packageName) },
+                        Modifier.fillMaxWidth().heightIn(min = 48.dp).selectable(selected = d.packageName == selected,
+                            role = Role.RadioButton) { onSelect(d.packageName) },
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        RadioButton(selected = d.packageName == state.selectedDistributor, onClick = null)
+                        RadioButton(selected = d.packageName == selected, onClick = null)
                         Column(Modifier.padding(start = 12.dp)) {
                             Text(d.label, style = MaterialTheme.typography.bodyLarge)
                             Text(d.packageName, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -722,7 +758,7 @@ private fun DistributorDialog(state: SettingsUiState, onDismiss: () -> Unit, onS
 }
 
 @Composable
-private fun InvitationDialog(onDismiss: () -> Unit, onCreate: (String, Int, Boolean) -> Unit) {
+internal fun InvitationDialog(onDismiss: () -> Unit, onCreate: (String, Int, Boolean) -> Unit) {
     var note by remember { mutableStateOf("") }
     var hours by remember { mutableIntStateOf(72) }
     var admin by remember { mutableStateOf(false) }

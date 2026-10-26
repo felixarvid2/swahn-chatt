@@ -74,6 +74,10 @@ data class SettingsUiState(
     val chatBackground: ChatBackground = ChatBackground.PLAIN,
     val language: AppLanguage = AppLanguage.SYSTEM,
     val versionName: String = "",
+    /** Messages that failed for good (the badge on the outbox row). */
+    val failedCount: Int = 0,
+    /** The app may run in the background without battery optimisation holding it back. */
+    val batteryUnrestricted: Boolean = false,
     val busy: Boolean = false,
     val error: UiError? = null,
     val passwordChanged: Boolean = false,
@@ -91,6 +95,7 @@ class SettingsViewModel @Inject constructor(
     private val prefs: AppPrefs,
     private val preparer: AttachmentPreparer,
     private val lock: AppLock,
+    private val device: se.swahnchat.app.diagnostics.DeviceStatus,
 ) : ViewModel() {
     private val devices = MutableStateFlow<DevicesUi>(DevicesUi.Loading)
     private val busy = MutableStateFlow(false)
@@ -102,17 +107,20 @@ class SettingsViewModel @Inject constructor(
     private val account = combine(engine.account, repo.userMap()) { a, users -> a to a?.let { users[it.userId] } }
     private val sharePresence = MutableStateFlow<Boolean?>(null)
 
+    private val battery = MutableStateFlow(device.batteryUnrestricted())
+
     private class Extras(
         val quiet: QuietHoursSettings, val receipts: Boolean, val typing: Boolean, val presence: Boolean?,
-        val highContrast: Boolean, val accent: Accent, val background: ChatBackground,
+        val highContrast: Boolean, val accent: Accent, val background: ChatBackground, val failed: Int, val battery: Boolean,
     )
 
     private val extras = combine(
         combine(prefs.quietHours, prefs.sendReadReceipts, prefs.showTyping, ::Triple),
         sharePresence,
         combine(prefs.highContrast, prefs.accent, prefs.chatBackground, ::Triple),
-    ) { (quiet, receipts, typing), presence, (contrast, accent, background) ->
-        Extras(quiet, receipts, typing, presence, contrast, accent, background)
+        combine(repo.failedCount(), battery, ::Pair),
+    ) { (quiet, receipts, typing), presence, (contrast, accent, background), (failed, battery) ->
+        Extras(quiet, receipts, typing, presence, contrast, accent, background, failed, battery)
     }
 
     private val transient = combine(busy, error, passwordChanged, invitation, extras) { b, e, p, i, x -> arrayOf<Any?>(b, e, p, i, x) }
@@ -145,7 +153,7 @@ class SettingsViewModel @Inject constructor(
             appLockEnabled = c.lockEnabled, lockTimeout = c.lockTimeout, versionName = BuildConfig.VERSION_NAME,
             quietHours = (t[4] as Extras).quiet, sendReadReceipts = (t[4] as Extras).receipts, showTyping = (t[4] as Extras).typing,
             sharePresence = (t[4] as Extras).presence, highContrast = (t[4] as Extras).highContrast, accent = (t[4] as Extras).accent,
-            chatBackground = (t[4] as Extras).background,
+            chatBackground = (t[4] as Extras).background, failedCount = (t[4] as Extras).failed, batteryUnrestricted = (t[4] as Extras).battery,
             busy = t[0] as Boolean, error = t[1] as UiError?, passwordChanged = t[2] as Boolean, invitation = t[3] as CreatedInvitation?,
             invitationQr = (t[3] as CreatedInvitation?)?.let { inv -> a?.serverUrl?.let { server -> InviteQr.payload(server, inv.code) } },
         )
@@ -154,6 +162,7 @@ class SettingsViewModel @Inject constructor(
     /** Called each time the screen is shown. */
     fun onShown() {
         distributorsTick.update { it + 1 }
+        battery.value = device.batteryUnrestricted()
         push.refreshStatus()
         loadDevices()
         loadSharePresence()
@@ -205,11 +214,6 @@ class SettingsViewModel @Inject constructor(
         engine.changePassword(current, new)
         passwordChanged.value = true
         loadDevices() // the server revoked every other device
-    }
-
-    fun revokeDevice(id: String) = run {
-        engine.revokeDevice(id)
-        loadDevices()
     }
 
     fun selectDistributor(packageName: String) {

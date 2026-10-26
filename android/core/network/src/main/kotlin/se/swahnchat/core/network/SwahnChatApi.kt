@@ -24,11 +24,30 @@ interface SwahnChatApi {
     /** Revokes the session and device on the server. */
     suspend fun logout()
 
+    /** Redeems a password-reset code from an administrator: sets the password, revokes every old device, signs in on a new one. */
+    suspend fun resetPassword(request: PasswordResetRequest): AuthResponse
+
     // --- administration ------------------------------------------------------------------------------------------
     suspend fun createInvitation(request: CreateInvitationRequest = CreateInvitationRequest()): CreatedInvitation
     suspend fun listInvitations(): List<Invitation>
     suspend fun deleteInvitation(id: String)
     suspend fun deleteUser(userId: String)
+
+    /** `GET /admin/users`: all accounts (removed ones too) with usage and push health. */
+    suspend fun adminUsers(): List<AdminUser>
+    suspend fun suspendUser(userId: String)
+    suspend fun unsuspendUser(userId: String)
+
+    /** `409 last_admin` when it would leave no active administrator. */
+    suspend fun setUserAdmin(userId: String, admin: Boolean): AdminUser
+
+    /** The returned code is shown only here; the server keeps just a hash. */
+    suspend fun issuePasswordReset(userId: String): PasswordResetCreated
+    suspend fun revokeUserDevice(userId: String, deviceId: String)
+    suspend fun adminStats(): AdminStats
+
+    /** Newest first; pass the smallest `id` of a page as [beforeId] for the next, older page. */
+    suspend fun adminAudit(beforeId: Long? = null, limit: Int = 50): List<AuditEvent>
 
     // --- users and devices ---------------------------------------------------------------------------------------
     suspend fun listUsers(): List<User>
@@ -44,7 +63,16 @@ interface SwahnChatApi {
     /** Only non-null arguments are sent. */
     suspend fun updateMySettings(sharePresence: Boolean? = null): UserSettings
     suspend fun listDevices(userId: String): List<Device>
+
+    /** `DELETE /users/me`: deletes the caller's own account (`403` wrong password, `409 last_admin`, `429`). */
+    suspend fun deleteAccount(request: DeleteAccountRequest)
     suspend fun myDevice(): Device
+
+    /** Queues one push to this device's registered endpoint (`409 push_not_configured` without one); read the result from [myDevice]. */
+    suspend fun testPush()
+
+    /** Renames one of the caller's own devices (1..64 characters). */
+    suspend fun renameDevice(deviceId: String, name: String): Device
     suspend fun setPush(request: PushRegistration)
     suspend fun clearPush()
     suspend fun deleteDevice(deviceId: String)

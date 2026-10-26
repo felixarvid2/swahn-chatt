@@ -78,7 +78,7 @@ internal class TokenRefresher(
     }
 }
 
-private val ANONYMOUS_SUFFIXES = listOf("/auth/login", "/auth/invite/redeem", "/auth/refresh", "/healthz", "/readyz")
+private val ANONYMOUS_SUFFIXES = listOf("/auth/login", "/auth/invite/redeem", "/auth/password/reset", "/auth/refresh", "/healthz", "/readyz")
 
 internal fun Request.isAnonymousEndpoint(): Boolean {
     val path = url.encodedPath

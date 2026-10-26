@@ -19,6 +19,13 @@ import se.swahnchat.core.crypto.ProtocolStorage
 import se.swahnchat.core.crypto.SafetyNumber
 import se.swahnchat.core.crypto.SafetyNumbers
 import se.swahnchat.core.model.AddMembersRequest
+import se.swahnchat.core.model.AdminStats
+import se.swahnchat.core.model.AdminUser
+import se.swahnchat.core.model.AuditEvent
+import se.swahnchat.core.model.DeleteAccountRequest
+import se.swahnchat.core.model.Invitation
+import se.swahnchat.core.model.PasswordResetCreated
+import se.swahnchat.core.model.PasswordResetRequest
 import se.swahnchat.core.model.AttachmentPurpose
 import se.swahnchat.core.model.AuthResponse
 import se.swahnchat.core.model.CallSignal
@@ -194,6 +201,25 @@ class SwahnChatEngine(
         completeSignIn(url, connection, auth)
     }
 
+    /**
+     * Sets a new password with a reset code an administrator issued and signs in on this device. The server revokes every
+     * device and session of the account first, so this is a new device with new keys, exactly like [login]; the other people see
+     * the usual "new device" notice. Nothing is approved or bypassed here: the code is the administrator's decision.
+     */
+    suspend fun resetPassword(
+        serverUrl: String,
+        code: String,
+        newPassword: String,
+        deviceName: String = config.deviceName,
+    ): Account = sessionMutex.withLock {
+        val url = BaseUrl.normalize(serverUrl, config.allowInsecureLan).toString()
+        val connection = connectionFactory(url)
+        val auth = connection.api.resetPassword(
+            PasswordResetRequest(code.trim(), newPassword, deviceName.trim().ifEmpty { config.deviceName }),
+        )
+        completeSignIn(url, connection, auth)
+    }
+
     private suspend fun completeSignIn(url: String, connection: ServerConnection, auth: AuthResponse): Account {
         wipeLocal() // a previous account must not leak into this one
         tokens.saveTokens(Tokens(auth.accessToken, auth.refreshToken, auth.accessExpiresAt, auth.refreshExpiresAt))
@@ -245,6 +271,17 @@ class SwahnChatEngine(
                 // offline or already revoked: wipe locally anyway
             }
         }
+        wipeLocal()
+        tokens.onLoggedOut(LogoutReason.USER)
+    }
+
+    /**
+     * Deletes this account on the server (`DELETE /users/me`; throws [ApiException.Forbidden] for a wrong password and
+     * [ApiException.Conflict] `last_admin` for the only administrator) and, only when the server accepted, wipes this phone like
+     * [logout] does. Nothing is wiped if the server said no.
+     */
+    suspend fun deleteAccount(password: String) = sessionMutex.withLock {
+        ctx.api.deleteAccount(DeleteAccountRequest(password))
         wipeLocal()
         tokens.onLoggedOut(LogoutReason.USER)
     }
@@ -408,6 +445,19 @@ class SwahnChatEngine(
         ctx.api.deleteDevice(deviceId)
     }
 
+    /** This device as the server sees it, with the outcome of the last push attempt (`last_push_at`, `last_push_status`). */
+    suspend fun currentDevice(): Device = ctx.api.myDevice()
+
+    /** Renames one of this account's devices (this one included). The name is trimmed and must be 1 to 64 characters. */
+    suspend fun renameDevice(deviceId: String, name: String): Device {
+        val trimmed = name.trim()
+        require(trimmed.length in 1..64) { "A device name has 1 to 64 characters" }
+        return ctx.api.renameDevice(deviceId, trimmed)
+    }
+
+    /** Asks the server to push once to this device's registered endpoint; read the result from [currentDevice] a moment later. */
+    suspend fun sendTestPush() = ctx.api.testPush()
+
     /** Tells the server where to send content-free wake-ups (UnifiedPush endpoint of this device). */
     suspend fun registerPush(endpoint: String) {
         ctx.api.setPush(PushRegistration(endpoint = endpoint))
@@ -443,6 +493,24 @@ class SwahnChatEngine(
     /** Admin only: creates an invitation code (shown once). */
     suspend fun createInvitation(note: String? = null, expiresInHours: Int? = null, admin: Boolean = false): CreatedInvitation =
         ctx.api.createInvitation(CreateInvitationRequest(note, expiresInHours, if (admin) true else null))
+
+    // --- administration (the server enforces that the caller is an administrator) -----------------------------------------
+
+    suspend fun adminUsers(): List<AdminUser> = ctx.api.adminUsers()
+    suspend fun suspendUser(userId: String) = ctx.api.suspendUser(userId)
+    suspend fun unsuspendUser(userId: String) = ctx.api.unsuspendUser(userId)
+
+    /** `409 last_admin` ([ApiException.Conflict]) when it would leave no active administrator. */
+    suspend fun setUserAdmin(userId: String, admin: Boolean): AdminUser = ctx.api.setUserAdmin(userId, admin)
+
+    /** The code is returned once and never stored by the engine. */
+    suspend fun issuePasswordReset(userId: String): PasswordResetCreated = ctx.api.issuePasswordReset(userId)
+    suspend fun revokeUserDevice(userId: String, deviceId: String) = ctx.api.revokeUserDevice(userId, deviceId)
+    suspend fun removeUser(userId: String) = ctx.api.deleteUser(userId)
+    suspend fun invitations(): List<Invitation> = ctx.api.listInvitations()
+    suspend fun revokeInvitation(id: String) = ctx.api.deleteInvitation(id)
+    suspend fun adminStats(): AdminStats = ctx.api.adminStats()
+    suspend fun adminAudit(beforeId: Long? = null, limit: Int = 50): List<AuditEvent> = ctx.api.adminAudit(beforeId, limit)
 
     // =========================================================================================================
     // Calls
@@ -758,6 +826,12 @@ class SwahnChatEngine(
         }
         return ids
     }
+
+    /**
+     * Throws away a message that was never accepted by the server (waiting or FAILED): it is removed from the outbox and from this
+     * phone, nothing is sent. Returns the removed message so the app can delete its copies of files. Fails for anything else.
+     */
+    suspend fun discardUnsent(messageId: String): StoredMessage? = sender.discardUnsent(messageId).also { requestOutbox() }
 
     /** Re-queues a message that ended in FAILED. */
     suspend fun retryMessage(messageId: String) {

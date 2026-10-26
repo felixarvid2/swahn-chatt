@@ -16,10 +16,14 @@ import javax.inject.Inject
 class SwahnChatPushService : PushService() {
     @Inject lateinit var push: PushManager
     @Inject lateinit var work: WorkScheduler
+    @Inject lateinit var log: se.swahnchat.app.diagnostics.EventLog
 
     override fun onNewEndpoint(endpoint: PushEndpoint, instance: String) = push.onNewEndpoint(endpoint.url)
 
-    override fun onMessage(message: PushMessage, instance: String) = work.enqueueSync()
+    override fun onMessage(message: PushMessage, instance: String) {
+        log.record(se.swahnchat.app.diagnostics.PushReceived()) // the payload is ignored and never recorded
+        work.enqueueSync()
+    }
 
     override fun onRegistrationFailed(reason: FailedReason, instance: String) = push.onRegistrationFailed(reason)
 

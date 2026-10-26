@@ -564,6 +564,136 @@ class TwoUserEndToEndTest {
         assertNull(alice.store.getMessage(later))
     }
 
+    /** A new account made through an admin invitation, for the tests that end or change an account. */
+    private suspend fun newPhone(label: String, password: String): Phone {
+        val p = phone(label)
+        p.engine.redeemInvite(url, admin.engine.createInvitation(note = "e2e $label").code, "${label}_$run", password,
+            label.replaceFirstChar { it.uppercase() })
+        return p
+    }
+
+    @Test
+    fun anAdministratorsResetCodeSignsTheUserInOnANewDeviceAndEndsTheOldOnes() = runBlocking<Unit> {
+        val dave = newPhone("dave", "dave-password-1")
+        val oldDevice = dave.deviceId
+        val created = admin.engine.issuePasswordReset(dave.userId)
+        assertTrue(created.code.isNotBlank() && created.expiresAt > System.currentTimeMillis())
+
+        val daveNew = phone("dave2")
+        val account = daveNew.engine.resetPassword(url, created.code, "dave-new-password-1", "Dave nya telefon")
+        assertEquals(dave.userId, account.userId)
+        assertTrue(account.deviceId != oldDevice, "a reset signs in on a NEW device")
+        assertEquals("Dave nya telefon", account.deviceName)
+        assertEquals(listOf(account.deviceId), daveNew.engine.myDevices().map { it.id }, "every older device of the account is gone")
+
+        // the old phone is signed out at once, the old password is dead and the code cannot be used twice
+        assertFailsWith<ApiException> { dave.engine.myDevices() }
+        assertFailsWith<ApiException.InvalidCredentials> { phone("late1").engine.login(url, "dave_$run", "dave-password-1") }
+        assertEquals("invalid_reset_code",
+            assertFailsWith<ApiException.NotFound> { phone("late2").engine.resetPassword(url, created.code, "another-new-password-1") }.code)
+        phone("fresh").engine.login(url, "dave_$run", "dave-new-password-1")
+
+        // the new device works like any other: it gets keys and messages come through
+        val chat = directChat(admin, daveNew)
+        val id = admin.engine.sendText(chat, "välkommen tillbaka $run")
+        eventually(timeout, "send") { admin.store.getMessage(id)!!.status != MessageStatus.PENDING || admin.engine.processOutbox().sent > 0 }
+        daveNew.engine.sync()
+        daveNew.receives(chat, id)
+        assertEquals("välkommen tillbaka $run", daveNew.store.getMessage(id)!!.text)
+    }
+
+    @Test
+    fun aWeakPasswordOrAnUnknownCodeSignsNobodyIn() = runBlocking<Unit> {
+        val erik = newPhone("erik", "erik-password-1")
+        val code = admin.engine.issuePasswordReset(erik.userId).code
+        val other = phone("erik2")
+        assertFailsWith<ApiException.Invalid> { other.engine.resetPassword(url, code, "short", "Phone") }
+        assertNull(other.engine.account.value)
+        assertEquals("invalid_reset_code",
+            assertFailsWith<ApiException.NotFound> { other.engine.resetPassword(url, "NOT-A-CODE-$run", "a-good-long-password", "Phone") }.code)
+        assertNull(other.engine.account.value)
+        // a refused try spent nothing: the old phone still works and the code is still good
+        assertNotNull(erik.engine.myDevices())
+        assertNotNull(other.engine.resetPassword(url, code, "a-good-long-password", "Phone"))
+    }
+
+    @Test
+    fun renamingAnOwnDeviceChangesTheNameEverywhere() = runBlocking<Unit> {
+        val before = alice.engine.myDevices().first { it.id == alice.deviceId }.name
+        try {
+            val renamed = alice.engine.renameDevice(alice.deviceId, "  Alice kök $run ")
+            assertEquals("Alice kök $run", renamed.name)
+            assertEquals("Alice kök $run", alice.engine.myDevices().first { it.id == alice.deviceId }.name)
+            // the administrator's view and another account's list of Alice's devices show the new name
+            assertTrue(admin.engine.adminUsers().first { it.id == alice.userId }.devices.any { it.name == "Alice kök $run" })
+            bob.engine.refreshDevices(alice.userId)
+            assertTrue(bob.store.getDevices(alice.userId).any { it.name == "Alice kök $run" })
+            // somebody else's device, and a bad name
+            assertFailsWith<ApiException.NotFound> { alice.engine.renameDevice(bob.deviceId, "mine now") }
+            assertFailsWith<IllegalArgumentException> { alice.engine.renameDevice(alice.deviceId, "   ") }
+            assertFailsWith<IllegalArgumentException> { alice.engine.renameDevice(alice.deviceId, "x".repeat(65)) }
+        } finally {
+            alice.engine.renameDevice(alice.deviceId, before)
+        }
+        assertEquals(before, alice.engine.myDevices().first { it.id == alice.deviceId }.name)
+    }
+
+    @Test
+    fun theAdminViewAnswersForAdministratorsOnlyAndShowsTheAuditTrail() = runBlocking<Unit> {
+        assertFailsWith<ApiException.Forbidden> { alice.engine.adminUsers() }
+        assertFailsWith<ApiException.Forbidden> { alice.engine.adminStats() }
+        val users = admin.engine.adminUsers()
+        assertTrue(users.any { it.id == alice.userId } && users.first { it.id == admin.userId }.isAdmin)
+        assertTrue(users.first { it.id == alice.userId }.devices.all { it.id.isNotBlank() })
+        val stats = admin.engine.adminStats()
+        assertTrue(stats.users >= 4 && stats.version.isNotBlank() && stats.diskFreeBytes > 0)
+
+        val frida = newPhone("frida", "frida-password-1")
+        admin.engine.suspendUser(frida.userId)
+        assertTrue(admin.engine.adminUsers().first { it.id == frida.userId }.suspendedAt != null)
+        assertFailsWith<ApiException.Forbidden> { phone("frida2").engine.login(url, "frida_$run", "frida-password-1") }
+        admin.engine.unsuspendUser(frida.userId)
+        phone("frida3").engine.login(url, "frida_$run", "frida-password-1")
+        admin.engine.issuePasswordReset(frida.userId)
+        admin.engine.revokeUserDevice(frida.userId, frida.deviceId)
+        assertFailsWith<ApiException> { frida.engine.myDevices() }
+
+        val page = admin.engine.adminAudit(limit = 5)
+        assertEquals(5, page.size)
+        val actions = admin.engine.adminAudit(limit = 50).map { it.action }
+        assertTrue("password_reset_issued" in actions && "user_suspended" in actions && "user_unsuspended" in actions && "device_revoked" in actions)
+        val older = admin.engine.adminAudit(beforeId = page.minOf { it.id }, limit = 5)
+        assertTrue(older.all { o -> page.none { it.id == o.id } } && older.all { it.id < page.minOf { p -> p.id } })
+    }
+
+    @Test
+    fun theTestPushNeedsARegisteredAddress() = runBlocking<Unit> {
+        val before = bob.engine.currentDevice()
+        assertNull(before.lastPushStatus)
+        // no UnifiedPush endpoint is registered by these phones, so the server refuses to queue a push
+        assertEquals("push_not_configured", assertFailsWith<ApiException.Conflict> { bob.engine.sendTestPush() }.code)
+    }
+
+    @Test
+    fun deletingTheOwnAccountNeedsThePasswordAndWipesThePhone() = runBlocking<Unit> {
+        val gustav = newPhone("gustav", "gustav-password-1")
+        val chat = directChat(admin, gustav)
+        val kept = admin.engine.sendText(chat, "hej Gustav $run")
+        admin.engine.processOutbox()
+        assertEquals("invalid_credentials", assertFailsWith<ApiException.Forbidden> { gustav.engine.deleteAccount("not-his-password") }.code)
+        assertNotNull(gustav.engine.account.value, "a refused deletion wipes nothing")
+
+        val gustavId = gustav.userId
+        gustav.engine.deleteAccount("gustav-password-1")
+        assertNull(gustav.engine.account.value)
+        assertNull(gustav.store.getAccount())
+        assertNull(gustav.tokens.getTokens())
+        assertTrue(admin.engine.adminUsers().first { it.id == gustavId }.disabledAt != null)
+        assertFailsWith<ApiException.InvalidCredentials> { phone("gustav2").engine.login(url, "gustav_$run", "gustav-password-1") }
+        // what the others sent stays where it is
+        assertNotNull(admin.store.getMessage(kept))
+    }
+
     private fun indexOf(haystack: ByteArray, needle: ByteArray): Int {
         outer@ for (i in 0..haystack.size - needle.size) {
             for (j in needle.indices) if (haystack[i + j] != needle[j]) continue@outer

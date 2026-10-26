@@ -57,7 +57,7 @@ import se.swahnchat.app.qr.InviteRejection
 import se.swahnchat.app.ui.components.QrScannerDialog
 
 @Composable
-fun LoginScreen(onServerSettings: () -> Unit, vm: LoginViewModel = hiltViewModel()) {
+fun LoginScreen(onServerSettings: () -> Unit, onForgotPassword: () -> Unit = {}, vm: LoginViewModel = hiltViewModel()) {
     val state by vm.state.collectAsStateWithLifecycle()
     LoginContent(
         state = state,
@@ -65,7 +65,7 @@ fun LoginScreen(onServerSettings: () -> Unit, vm: LoginViewModel = hiltViewModel
             onMode = vm::setMode, onServer = vm::setServerUrl, onUsername = vm::setUsername, onPassword = vm::setPassword,
             onConfirm = vm::setConfirm, onDisplayName = vm::setDisplayName, onCode = vm::setCode, onDeviceName = vm::setDeviceName,
             onTogglePassword = vm::togglePasswordVisible, onSubmit = vm::submit, onServerSettings = onServerSettings,
-            onInviteScanned = vm::onInviteScanned, onDismissScanRejection = vm::dismissScanRejection,
+            onInviteScanned = vm::onInviteScanned, onDismissScanRejection = vm::dismissScanRejection, onForgotPassword = onForgotPassword,
         ),
     )
 }
@@ -85,6 +85,8 @@ class LoginCallbacks(
     /** The text of a scanned QR code (untrusted; the view model checks it and only pre-fills the invitation form). */
     val onInviteScanned: (String) -> Unit = {},
     val onDismissScanRejection: () -> Unit = {},
+    /** Opens the screen that redeems a reset code from an administrator. */
+    val onForgotPassword: () -> Unit = {},
 )
 
 @Composable
@@ -179,6 +181,12 @@ fun LoginContent(state: LoginUiState, callbacks: LoginCallbacks, modifier: Modif
 
             state.error?.let {
                 Text(errorText(it), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
+            }
+
+            if (state.mode == AuthMode.LOGIN) {
+                TextButton(onClick = callbacks.onForgotPassword, modifier = Modifier.heightIn(min = 48.dp)) {
+                    Text(stringResource(R.string.forgot_password))
+                }
             }
 
             Button(

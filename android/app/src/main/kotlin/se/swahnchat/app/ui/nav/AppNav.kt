@@ -49,7 +49,14 @@ import se.swahnchat.app.call.CallActivity
 import se.swahnchat.app.call.OngoingCallBar
 import se.swahnchat.app.data.SessionState
 import se.swahnchat.app.ui.components.InsecureBanner
+import se.swahnchat.app.ui.screens.AdminScreen
 import se.swahnchat.app.ui.screens.AutoDownloadScreen
+import se.swahnchat.app.ui.screens.DeleteAccountScreen
+import se.swahnchat.app.ui.screens.DevicesScreen
+import se.swahnchat.app.ui.screens.DiagnosticsScreen
+import se.swahnchat.app.ui.screens.OnboardingScreen
+import se.swahnchat.app.ui.screens.OutboxScreen
+import se.swahnchat.app.ui.screens.ResetPasswordScreen
 import se.swahnchat.app.ui.screens.ContactScreen
 import se.swahnchat.app.ui.screens.MessageInfoScreen
 import se.swahnchat.app.ui.screens.StorageScreen
@@ -92,6 +99,13 @@ object Routes {
     const val STARRED = "starred?conversation={conversation}"
     const val SCHEDULED = "scheduled/{conversationId}"
     const val HISTORY = "history"
+    const val RESET = "reset-password"
+    const val ONBOARDING = "onboarding"
+    const val DEVICES = "devices"
+    const val DIAGNOSTICS = "diagnostics"
+    const val OUTBOX = "outbox"
+    const val ADMIN = "admin"
+    const val DELETE_ACCOUNT = "delete-account"
 
     /** [jump]: a message to scroll to on opening (from the search). */
     fun conversation(id: String, jump: String? = null) = if (jump == null) "conversation/$id" else "conversation/$id?jump=$jump"
@@ -171,7 +185,8 @@ fun AppRoot(vm: AppViewModel = hiltViewModel()) {
                 val entry by nav.currentBackStackEntryAsState()
                 val route = entry?.destination?.route
                 // the list stays on the left on every screen of the signed-in app; sign-in and server settings use the whole width
-                val twoPane = wide && signedIn && route != null && route != Routes.LOGIN && route != Routes.SERVER
+                val twoPane = wide && signedIn && route != null && route != Routes.LOGIN && route != Routes.SERVER && route != Routes.RESET &&
+                    route != Routes.ONBOARDING
                 val selected = if (route == Routes.CONVERSATION) entry?.arguments?.getString("id") else null
                 Column(Modifier.fillMaxSize()) {
                     // under the insecure strip the status bar is already taken care of; without a call the bar is not there at all
@@ -181,7 +196,8 @@ fun AppRoot(vm: AppViewModel = hiltViewModel()) {
                         list = { ConversationsHost(nav, selected = selected, twoPane = true) },
                         modifier = Modifier.weight(1f).then(if (call != null) Modifier.consumeWindowInsets(WindowInsets.statusBars) else Modifier),
                     ) {
-                        androidx.compose.runtime.CompositionLocalProvider(LocalTwoPane provides twoPane) { AppNavHost(nav, signedIn = signedIn) }
+                        androidx.compose.runtime.CompositionLocalProvider(LocalTwoPane provides twoPane) { AppNavHost(nav, signedIn = signedIn,
+                            showOnboarding = vm::needsOnboarding) }
                     }
                 }
                 LaunchedEffect(pendingLink) {
@@ -244,7 +260,7 @@ private fun SelectConversationPlaceholder() {
 }
 
 @Composable
-private fun AppNavHost(nav: androidx.navigation.NavHostController, signedIn: Boolean) {
+private fun AppNavHost(nav: androidx.navigation.NavHostController, signedIn: Boolean, showOnboarding: () -> Boolean) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val twoPane = LocalTwoPane.current
     // fixed at first composition; later sign-ins and sign-outs navigate (below) instead of rebuilding the graph
@@ -252,15 +268,39 @@ private fun AppNavHost(nav: androidx.navigation.NavHostController, signedIn: Boo
     // Follow the session: a revoked device or a logout leads to the login screen, a sign-in to the conversations.
     LaunchedEffect(signedIn) {
         val route = nav.currentDestination?.route
-        if (!signedIn && route != Routes.LOGIN && route != Routes.SERVER) {
+        if (!signedIn && route != Routes.LOGIN && route != Routes.SERVER && route != Routes.RESET) {
             nav.navigate(Routes.LOGIN) { popUpTo(0) { inclusive = true } }
-        } else if (signedIn && (route == Routes.LOGIN || route == Routes.SERVER)) {
-            nav.navigate(Routes.CONVERSATIONS) { popUpTo(0) { inclusive = true } }
+        } else if (signedIn && (route == Routes.LOGIN || route == Routes.SERVER || route == Routes.RESET)) {
+            // the first sign-in on this install starts with the guide (it can be skipped and is in the settings afterwards)
+            val next = if (showOnboarding()) Routes.ONBOARDING else Routes.CONVERSATIONS
+            nav.navigate(next) { popUpTo(0) { inclusive = true } }
         }
     }
     NavHost(nav, startDestination = start) {
         composable(Routes.SERVER) { ServerSettingsScreen(onBack = { nav.popBackStack() }) }
-        composable(Routes.LOGIN) { LoginScreen(onServerSettings = { nav.navigate(Routes.SERVER) }) }
+        composable(Routes.LOGIN) {
+            LoginScreen(onServerSettings = { nav.navigate(Routes.SERVER) }, onForgotPassword = { nav.navigate(Routes.RESET) })
+        }
+        composable(Routes.RESET) { ResetPasswordScreen(onBack = { nav.popBackStack() }) }
+        composable(Routes.ONBOARDING) {
+            OnboardingScreen(
+                // the guide opened right after signing in is the only screen then; from the settings it returns to them
+                onDone = {
+                    if (nav.previousBackStackEntry == null) nav.navigate(Routes.CONVERSATIONS) { popUpTo(0) { inclusive = true } } else nav.popBackStack()
+                },
+                onOpenSafety = { nav.navigate(Routes.contact(it)) },
+            )
+        }
+        composable(Routes.DEVICES) { DevicesScreen(onBack = { nav.popBackStack() }, onOpenOwnSafety = { nav.navigate(Routes.contact(it)) }) }
+        composable(Routes.DIAGNOSTICS) { DiagnosticsScreen(onBack = { nav.popBackStack() }, onOpenOutbox = { nav.navigate(Routes.OUTBOX) }) }
+        composable(Routes.OUTBOX) {
+            OutboxScreen(
+                onBack = { nav.popBackStack() }, onOpenScheduled = { nav.navigate(Routes.scheduled(it)) },
+                onOpenChat = { nav.navigate(Routes.conversation(it)) },
+            )
+        }
+        composable(Routes.ADMIN) { AdminScreen(onBack = { nav.popBackStack() }) }
+        composable(Routes.DELETE_ACCOUNT) { DeleteAccountScreen(onBack = { nav.popBackStack() }) }
         composable(Routes.CONVERSATIONS) {
             if (LocalTwoPane.current) SelectConversationPlaceholder() else ConversationsHost(nav, selected = null, twoPane = false)
         }
@@ -361,6 +401,12 @@ private fun AppNavHost(nav: androidx.navigation.NavHostController, signedIn: Boo
                 onOpenStorage = { nav.navigate(Routes.STORAGE) },
                 onOpenAutoDownload = { nav.navigate(Routes.AUTO_DOWNLOAD) },
                 onOpenHistory = { nav.navigate(Routes.HISTORY) },
+                onOpenDevices = { nav.navigate(Routes.DEVICES) },
+                onOpenAdmin = { nav.navigate(Routes.ADMIN) },
+                onOpenDeleteAccount = { nav.navigate(Routes.DELETE_ACCOUNT) },
+                onOpenOnboarding = { nav.navigate(Routes.ONBOARDING) },
+                onOpenDiagnostics = { nav.navigate(Routes.DIAGNOSTICS) },
+                onOpenOutbox = { nav.navigate(Routes.OUTBOX) },
             )
         }
         composable(Routes.STORAGE) { StorageScreen(onBack = { nav.popBackStack() }) }

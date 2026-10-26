@@ -225,6 +225,19 @@ internal class SendPipeline(private val ctx: EngineContext, private val director
         return removed
     }
 
+    suspend fun discardUnsent(messageId: String): StoredMessage? {
+        val m = ctx.store.getMessage(messageId) ?: return null
+        require(m.outgoing && (m.status == MessageStatus.PENDING || m.status == MessageStatus.FAILED) && !m.isSystem) { "Not an unsent message" }
+        val removed = mutex.withLock {
+            ctx.store.transaction {
+                ctx.store.removeOutbox(messageId)
+                ctx.store.deleteMessageLocally(messageId, m.conversationId, ctx.now())
+            }
+        }
+        ctx.emit(EngineEvent.MessageChanged(m.conversationId, messageId))
+        return removed
+    }
+
     /** The earliest time any scheduled message is due (epoch ms), or null when none is waiting. */
     suspend fun nextScheduledAt(): Long? = ctx.store.getOutbox().mapNotNull { it.sendAt }.minOrNull()
 

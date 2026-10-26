@@ -23,7 +23,9 @@ ens den som sköter servern.
 10. [Ny telefon: godkänn den nya telefonen](#10-ny-telefon-godkänn-den-nya-telefonen)
 11. [Tappad eller stulen telefon](#11-tappad-eller-stulen-telefon)
 12. [Glömt lösenordet](#12-glömt-lösenordet)
-13. [Vanliga frågor](#13-vanliga-frågor)
+13. [Felsökning och loggfil till supporten](#13-felsökning-och-loggfil-till-supporten)
+14. [Radera mitt konto](#14-radera-mitt-konto)
+15. [Vanliga frågor](#15-vanliga-frågor)
 
 ## 1. Det här behöver du
 
@@ -108,8 +110,15 @@ först när du öppnar appen, eller med upp till 15 minuters fördröjning.
    **Aktiv via ntfy**.
 4. Svara **Tillåt** om Android frågar om appen får visa aviseringar.
 
+**Kom igång-guiden gör det här åt dig.** Första gången du loggar in öppnas en guide i fyra korta steg: tillåt
+notiser, ställ in push (appen visar om en push-app som ntfy är installerad, låter dig välja den och har en knapp
+**Skicka testnotis** som visar om det gick igenom), tillåt appen i bakgrunden och jämför säkerhetsnummer. Du kan hoppa
+över den och öppna den igen när som helst under **Inställningar**, **Kom igång**.
+
 **Batterisparläget är den vanligaste orsaken till att aviseringar uteblir.** Android stänger gärna ner appar som
-ligger i bakgrunden. Gör så här för *både* ntfy och Swahn Chat:
+ligger i bakgrunden. Det enklaste är att trycka på **Tillåt i bakgrunden** (i guiden, under **Inställningar**,
+**Batterioptimering**, eller i **Felsökning**): då visar Android en ruta där du svarar **Tillåt**. Går det inte kan du
+göra så här för *både* ntfy och Swahn Chat:
 
 - Håll fingret på appens ikon, tryck på *Appinfo* (ett i), välj *Batteri* och sedan **Obegränsad** (eller
   "Ingen optimering"). Namnen skiljer lite mellan märken.
@@ -233,6 +242,13 @@ meddelandet där den står (länken öppnas därifrån, med den vanliga frågan 
 servern. Meddelanden som tas bort eller försvinner av sig själva försvinner också härifrån.
 
 ![Media och filer](../android/app/screenshots/61_gallery_media_light.png)
+
+### Utkorg: meddelanden som inte har gått iväg
+
+Ett meddelande som inte kommer iväg (du är utan uppkoppling, eller servern avvisar det) ligger kvar i **Utkorgen**
+under **Inställningar**, **Utkorg**. Där ser du varje meddelande med chatt, tid och varför det väntar, och kan trycka
+**Försök igen nu** eller **Ta bort** (du får en fråga först; det borttagna skickas aldrig). Schemalagda meddelanden
+har en egen avdelning. Finns det meddelanden som misslyckats för gott syns en siffra på raden i inställningarna.
 
 ## Samtal: ringa, svara och videosamtal
 
@@ -373,7 +389,7 @@ raderar meddelanden och nycklar från den telefonen.
 
 1. **Ta det lugnt.** Meddelandena på telefonen skyddas av skärmlåset och av kryptering. Har telefonen en PIN-kod
    eller ett mönster är risken liten.
-2. Har du en annan telefon eller surfplatta med Swahn Chat: öppna **Inställningar**, **Enheter**, tryck på papperskorgen
+2. Har du en annan telefon eller surfplatta med Swahn Chat: öppna **Inställningar**, **Mina enheter**, tryck på papperskorgen
    vid den borttappade telefonen (*Återkalla*). Den loggas ut direkt och får inga fler meddelanden.
 3. Byt sedan lösenordet: **Inställningar**, **Byt lösenord**. Alla andra enheter loggas ut.
 4. Har du ingen annan enhet: **kontakta administratören** så snart du kan. Hen kan stänga av telefonen från servern.
@@ -382,16 +398,50 @@ raderar meddelanden och nycklar från den telefonen.
 
 Äldre meddelanden går inte att läsa på den nya telefonen (se avsnitt 10).
 
+**Mina enheter** visar alla enheter som är inloggade på ditt konto: namn, om det är den du håller i, när den senast var
+aktiv och hur pushen fungerar (det senare ser du bara på själva enheten). Med pennan **byter du namn** på en enhet
+(1 till 64 tecken) så att du och de du pratar med kan skilja på dem, till exempel "Mammas surfplatta". Har någon ny
+enhet loggat in på ditt konto och väntar på ditt godkännande står det överst på sidan, med en knapp som leder till
+säkerhetsnumren. Du måste alltid godkänna en ny enhet på ditt eget konto själv.
+
 ## 12. Glömt lösenordet
 
 Det går att få ett nytt. Be administratören om en **engångskod** för återställning av lösenord. Den gäller i ett dygn.
 Du anger koden och väljer ett nytt lösenord. Administratören ska ge dig koden på ett säkert sätt, helst muntligt
 eller i ett privat samtal.
 
+I appen: på startskärmen, tryck **Glömt lösenordet?**. Kontrollera serveradressen, skriv koden, välj ett nytt lösenord
+(minst 10 tecken, två gånger) och ett namn på telefonen, och tryck **Byt lösenord och logga in**. Du behöver inte skriva
+användarnamnet: koden hör till ditt konto. Står det att koden är ogiltig har den redan använts, ersatts av en nyare
+eller gått ut. Be då administratören om en ny. Efteråt är du inloggad, och guiden **Kom igång** visas om du inte sett
+den förut.
+
 Efter en återställning loggas du ut överallt. Telefonen du återställer på blir en ny enhet, och äldre meddelanden går
 inte att läsa. Det är precis som vid en ny telefon (avsnitt 10), och dina kontakter får meddelandet "ny enhet".
 
-## 13. Vanliga frågor
+## 13. Felsökning och loggfil till supporten
+
+Under **Inställningar**, **Felsökning** ser du varför något inte fungerar: om servern svarar och hur snabbt, hur
+mycket telefonens klocka skiljer sig från serverns, om anslutningen i realtid är uppe, när appen senast synkade, om en
+push-app är installerad och om servern har din push-adress (ja eller nej, adressen visas aldrig), hur serverns senaste
+push till dig gick, om notiser och batterioptimering är rätt, hur många meddelanden som väntar i utkorgen och hur stor
+databasen på telefonen är. Knappen **Skicka testnotis** testar hela kedjan.
+
+- **Kopiera** ger en sammanfattning att klistra in i ett meddelande till den som hjälper dig.
+- **Exportera logg** sparar en textfil med sammanfattningen och en lista över appens egna händelser (synkningar,
+  push, anslutning, misslyckade skick med bara typ av fel, samtalens faser, bakgrundsjobb). Innan filen sparas får du
+  se vad den innehåller. Den innehåller aldrig meddelanden, namn, lösenord, nycklar, push-adressen, IP-adresser eller
+  webbadresser med sökväg. Du väljer själv var den sparas och vem du skickar den till; appen skickar ingenting.
+
+## 14. Radera mitt konto
+
+**Inställningar**, **Radera mitt konto**. Du får först se exakt vad som händer: alla dina enheter och nycklar tas bort
+på servern, du lämnar alla chattar och grupper, meddelanden du har skickat finns kvar för de andra, filer som inget
+meddelande längre hänvisar till raderas från servern, och allt på den här telefonen raderas. Det går inte att ångra.
+I steg två skriver du ditt lösenord. Är du den enda administratören måste du först be en annan bli administratör
+(du får ett meddelande om det). Fel lösenord ger ett felmeddelande och ingenting raderas.
+
+## 15. Vanliga frågor
 
 **Kan administratören läsa mina meddelanden?**
 Nej. Meddelandena krypteras på din telefon och kan bara läsas på mottagarens telefon. Administratören ser att

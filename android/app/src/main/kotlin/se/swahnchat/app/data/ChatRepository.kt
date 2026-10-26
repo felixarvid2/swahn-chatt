@@ -195,6 +195,23 @@ class ChatRepository @Inject constructor(
 
     fun outboxCount(): Flow<Int> = ui.observeOutboxCount()
 
+    /** Messages of ours not accepted by the server yet (waiting, or failed for good), oldest first. */
+    fun unsent(): Flow<List<se.swahnchat.app.data.db.UnsentRow>> = ui.observeUnsent()
+
+    /** How many messages failed for good; drives the badge on the settings row. */
+    fun failedCount(): Flow<Int> = ui.observeFailedCount()
+
+    /** The title of every conversation (the other person's name in a direct chat), by id. */
+    fun chatTitles(unknownName: String): Flow<Map<String, String>> =
+        combine(ui.observeOverview(), ui.observeMembers(), ui.observeUsers(), engine.account) { overview, members, users, account ->
+            val userById = users.associateBy { it.id }
+            val membersBy = members.groupBy { it.conversationId }
+            overview.associate { row ->
+                row.id to if (row.type == ConversationType.GROUP) row.name.orEmpty()
+                else membersBy[row.id].orEmpty().firstOrNull { it.userId != account?.userId }?.let { userById[it.userId]?.displayName } ?: unknownName
+            }
+        }.distinctUntilChanged()
+
     fun devicesOf(userId: String): Flow<List<se.swahnchat.core.model.Device>> =
         ui.observeDevices().map { list -> list.filter { it.userId == userId }.map { it.toModel() } }
 
