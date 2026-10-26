@@ -115,6 +115,9 @@ class FakeServer {
     @Volatile var loseSendResponses = 0 // next N sends are stored, then the response is "lost"
     @Volatile var failAcks = 0
     @Volatile var onAck: ((deviceId: String, cursor: Long) -> Unit)? = null
+
+    /** Runs after a message is stored and before the sender gets the response (to let receipts overtake the response). */
+    @Volatile var beforeSendResponse: (suspend () -> Unit)? = null
     @Volatile var corruptAttachments = false
     @Volatile var alwaysMismatch = false
     @Volatile var patchFails = 0
@@ -592,6 +595,7 @@ class FakeServer {
         override suspend fun sendMessage(request: SendMessageRequest): SendMessageResponse {
             if (failSends > 0) { failSends--; throw IOException("simulated network failure") }
             val response = synchronized(lock) { doSend(request) }
+            beforeSendResponse?.invoke()
             if (loseSendResponses > 0) { loseSendResponses--; throw IOException("simulated lost response") }
             return response
         }

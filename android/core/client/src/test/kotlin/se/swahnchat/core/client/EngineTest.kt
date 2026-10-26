@@ -5,6 +5,7 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import se.swahnchat.core.crypto.AttachmentCryptoException
 import se.swahnchat.core.model.EnvelopeType
 import se.swahnchat.core.model.MessageKind
@@ -566,6 +567,19 @@ class EngineTest {
         eventually(what = "typing shown") { bob.engine.typing.value[convId]?.contains(alice.userId()) == true }
         eventually(what = "typing expired") { bob.engine.typing.value.isEmpty() }
         alice.engine.stopRealtime(); bob.engine.stopRealtime()
+    }
+
+    @Test
+    fun `a delivery receipt that overtakes the send response still counts`() = runBlocking<Unit> {
+        val (alice, bob, convId) = pair()
+        server.beforeSendResponse = {
+            server.beforeSendResponse = null
+            bob.engine.sync() // bob gets it and acknowledges: the delivery receipt is queued for alice
+            alice.engine.sync() // alice applies the receipt while her message is still pending
+        }
+        val id = alice.engine.sendText(convId, "fast")
+        withTimeout(10_000) { alice.engine.processOutbox() }
+        assertEquals(MessageStatus.DELIVERED, alice.store.getMessage(id)?.status)
     }
 
     @Test

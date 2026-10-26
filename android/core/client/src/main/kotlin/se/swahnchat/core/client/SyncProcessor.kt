@@ -547,11 +547,7 @@ internal class SyncProcessor(private val ctx: EngineContext, private val directo
 
     private fun refreshStatus(m: StoredMessage, others: List<String>): StoredMessage {
         if (m.status == MessageStatus.PENDING || m.status == MessageStatus.FAILED || m.status == MessageStatus.RECEIVED) return m
-        val status = when {
-            others.isNotEmpty() && others.all { it in m.readBy } -> MessageStatus.READ
-            others.isNotEmpty() && others.all { it in m.deliveredTo || it in m.readBy } -> MessageStatus.DELIVERED
-            else -> MessageStatus.SENT
-        }
+        val status = receiptStatus(m, others)
         // Never go backwards (a member who joined later must not demote an already-READ message).
         return if (status.ordinal > m.status.ordinal) m.copy(status = status) else m
     }
@@ -626,4 +622,11 @@ internal class SyncProcessor(private val ctx: EngineContext, private val directo
         /** A call signal older than this (server clock) is dropped instead of ringing; the server keeps them for much longer. */
         const val CALL_SIGNAL_MAX_AGE_MS = 60_000L
     }
+}
+
+/** The status the receipts recorded on [m] add up to, given the other members [others] (SENT when they do not cover everyone). */
+internal fun receiptStatus(m: StoredMessage, others: List<String>): MessageStatus = when {
+    others.isNotEmpty() && others.all { it in m.readBy } -> MessageStatus.READ
+    others.isNotEmpty() && others.all { it in m.deliveredTo || it in m.readBy } -> MessageStatus.DELIVERED
+    else -> MessageStatus.SENT
 }
