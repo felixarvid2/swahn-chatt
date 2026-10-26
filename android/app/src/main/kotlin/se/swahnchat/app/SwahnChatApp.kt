@@ -70,6 +70,7 @@ class AppStarter @Inject constructor(
     private val callNotifier: CallNotifier,
     private val shortcutSync: se.swahnchat.app.platform.notify.ShortcutSync,
     private val prefs: se.swahnchat.app.data.AppPrefs,
+    private val recorder: se.swahnchat.app.diagnostics.DiagnosticsRecorder,
     @ApplicationScope private val scope: CoroutineScope,
 ) {
     fun start() {
@@ -80,6 +81,7 @@ class AppStarter @Inject constructor(
         calls.start()
         callNotifier.start()
         session.start()
+        recorder.start()
 
         // No account, no lock (a new sign-in starts without one).
         scope.launch {

@@ -214,6 +214,31 @@ sent. `ScheduledSendWorker` (WorkManager, with an initial delay) and an in-proce
 - **Language.** `AppLocale`: `LocaleManager` on Android 13+, below that the saved choice is wrapped around the base context of the application and the three activities (`attachBaseContext`) and the visible activity is recreated. Chosen over AppCompat (dependency, AppCompat theme, three base classes) as the smaller correct change.
 - **Layout.** `isTwoPane` (width 840 dp, or 600 dp in landscape, and only when the smallest width is 600 dp so phones turned sideways stay single-pane). `AppRoot` puts `ConversationsHost` permanently on the left (`PaneLayout`) and keeps the one `NavHost` on the right, where the "conversations" route shows a placeholder; opening a chat pops to that route first so chats do not stack. Back, deep links, the share target and process death are therefore the navigation graph's own.
 
+### Onboarding, diagnostics, outbox, devices, account and admin (batch 8)
+
+- **Network and engine.** `SwahnChatApi` gained `resetPassword` (`POST /auth/password/reset`, anonymous like login), `deleteAccount`
+  (`DELETE /users/me` with a body, so `@HTTP(hasBody = true)`), `renameDevice`, `testPush` and the admin calls (`adminUsers`, `suspendUser`,
+  `unsuspendUser`, `setUserAdmin`, `issuePasswordReset`, `revokeUserDevice`, `adminStats`, `adminAudit`). `Device` carries `last_push_at` and
+  `last_push_status` (only in the answer of `GET /devices/me`, never stored). `SwahnChatEngine` adds `resetPassword` (same path as login:
+  `completeSignIn`, so a new device with new keys), `deleteAccount` (wipes only after the server accepted), `renameDevice`, `currentDevice`,
+  `sendTestPush`, `discardUnsent` and thin admin pass-throughs. The fake server in the tests implements all of it.
+- **Event log (`app/diagnostics`).** `LogEvent` (sealed; numbers, flags, enums and `Ref` only), `EventLog` (ring buffer plus a file that
+  rotates, `LogVocabulary` for reading it back), `DiagnosticsRecorder` (turns `engine.realtimeState`, `engine.events` and `CallManager.state`
+  into events), `SessionManager`/`PushManager`/the push service record the rest. `DiagnosticsCollector` builds the `DiagnosticsReport` (one
+  place for the summary text and the export); `PushTester` runs `POST /devices/me/push/test` and polls `GET /devices/me` for the outcome.
+  `DeviceStatus` is the seam for notification permission and battery optimisation (`BatteryOptimization` opens the system dialog and falls back
+  to the settings list).
+- **Screens.** `OnboardingScreen` (4 steps; shown once after the first sign-in via `AppViewModel.needsOnboarding`, reachable from the
+  settings), `DiagnosticsScreen`, `OutboxScreen` (a Room query over `messages` left-joined to `outbox`; scheduled messages from the existing
+  query), `DevicesScreen`, `DeleteAccountScreen` (two steps), `ResetPasswordScreen` (from the start screen), `AdminScreen` (four tabs,
+  `AdminViewModel` holds the reset code in memory only). Each is a route in `AppNav` with a pure `*Content(state, callbacks)` composable that
+  the Robolectric tests and the screenshots use.
+- **Baseline profile.** `app/src/main/baseline-prof.txt` is hand-written wildcard rules (no Macrobenchmark module exists yet, because
+  generating a measured profile needs a device or emulator). The Android Gradle plugin compiles it into `assets/dexopt/baseline.prof` of the
+  release and qa builds, and `androidx.profileinstaller` installs it. To replace it with a measured one: add a `:baselineprofile` module with
+  `androidx.baselineprofile` and a `BaselineProfileRule` that starts the app, scrolls the conversation list, opens a chat and sends a
+  message, run `./gradlew :app:generateBaselineProfile` on an API 33+ emulator or device, and commit the generated file over this one.
+
 ### App internals (`:app`)
 
 - **Storage.** One Room database, encrypted with SQLCipher, holds `LocalStore` (messages, conversations, outbox, cursor),

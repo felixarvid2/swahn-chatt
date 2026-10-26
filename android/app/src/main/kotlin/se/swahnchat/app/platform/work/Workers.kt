@@ -124,7 +124,7 @@ class PeriodicSyncWorker @AssistedInject constructor(
     private val session: SessionManager,
 ) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result {
-        session.runSync()
+        session.runSync(se.swahnchat.app.diagnostics.SyncTrigger.PERIODIC)
         return Result.success() // the next period tries again
     }
 }

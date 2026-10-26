@@ -25,7 +25,7 @@ import javax.inject.Inject
 @HiltViewModel
 class AppViewModel @Inject constructor(
     private val sessionManager: SessionManager,
-    prefs: AppPrefs,
+    private val prefs: AppPrefs,
     private val engine: SwahnChatEngine,
     private val lock: AppLock,
     calls: CallManager,
@@ -44,6 +44,9 @@ class AppViewModel @Inject constructor(
     /** The call in progress (ringing or running), for the bar at the top of the app; null between calls. */
     val activeCall: StateFlow<CallState.InCall?> = calls.state.map { it as? CallState.InCall }
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    /** True until the first-start guide was shown or skipped once on this install. */
+    fun needsOnboarding(): Boolean = !prefs.onboardingDone
 
     fun unlock() = lock.unlock()
 

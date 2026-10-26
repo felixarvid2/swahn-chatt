@@ -1,0 +1,98 @@
+# Swahn Chat baseline profile -- HAND-WRITTEN, not measured.
+#
+# What it is: rules in the ART profile text format (flags H = hot, S = startup, P = post startup, L = the class itself; a rule with a
+# wildcard matches every method/class of that name pattern). The Android Gradle plugin compiles this file into assets/dexopt/baseline.prof
+# of the release and qa APKs (debug builds do not carry it), and androidx.profileinstaller hands it to ART when the app is installed, so that
+# the code below is compiled ahead of time instead of being interpreted and JIT-compiled on first use.
+#
+# Why wildcards: a measured profile needs a Macrobenchmark run on a device or emulator, which this repository does not have yet (see
+# docs/ARCHITECTURE.md and HANDOVER.md, "Baseline profile", for how to generate one and replace this file). Until then the rules cover the
+# paths that every start walks: application start and the Hilt graph, the Room database and its DAOs, the conversation list, opening a chat
+# and sending a message, and the Compose / lifecycle / navigation / paging code those screens run on.
+
+# --- application start and dependency injection ---------------------------------------------------------------------------------------
+HSPLse/swahnchat/app/SwahnChatApp;->**(**)**
+HSPLse/swahnchat/app/AppStarter;->**(**)**
+HSPLse/swahnchat/app/MainActivity;->**(**)**
+HSPLse/swahnchat/app/Hilt_*;->**(**)**
+HSPLse/swahnchat/app/Dagger*;->**(**)**
+HSPLse/swahnchat/app/di/**;->**(**)**
+HSPLse/swahnchat/app/data/SessionManager**;->**(**)**
+HSPLse/swahnchat/app/data/AppPrefs**;->**(**)**
+HSPLse/swahnchat/app/platform/**;->**(**)**
+HSPLdagger/hilt/**;->**(**)**
+HSPLdagger/internal/**;->**(**)**
+HSPLdagger/Lazy;->**(**)**
+HSPLjavax/inject/**;->**(**)**
+Lse/swahnchat/app/SwahnChatApp;
+Lse/swahnchat/app/AppStarter;
+Lse/swahnchat/app/MainActivity;
+Lse/swahnchat/app/**_Factory;
+Lse/swahnchat/app/**_HiltModules**;
+Lse/swahnchat/app/**_MembersInjector;
+Lse/swahnchat/app/Hilt_*;
+Lse/swahnchat/app/Dagger*;
+Ldagger/hilt/**;
+Ldagger/internal/**;
+
+# --- the engine and the models it moves ------------------------------------------------------------------------------------------------
+HSPLse/swahnchat/core/client/**;->**(**)**
+HSPLse/swahnchat/core/network/**;->**(**)**
+HSPLse/swahnchat/core/model/**;->**(**)**
+HSPLse/swahnchat/core/crypto/**;->**(**)**
+Lse/swahnchat/core/**;
+
+# --- the database: SQLCipher, Room, the DAOs and mappers -------------------------------------------------------------------------------
+HSPLse/swahnchat/app/data/db/**;->**(**)**
+HSPLse/swahnchat/app/data/security/**;->**(**)**
+HSPLse/swahnchat/app/data/ChatRepository;->**(**)**
+Lse/swahnchat/app/data/db/**;
+HSPLandroidx/room/**;->**(**)**
+HSPLandroidx/sqlite/**;->**(**)**
+HSPLnet/zetetic/**;->**(**)**
+Landroidx/room/**;
+Landroidx/sqlite/**;
+Lnet/zetetic/**;
+
+# --- the screens of the start path: conversation list, a chat, the composer and the bubbles ---------------------------------------------
+HSPLse/swahnchat/app/ui/nav/**;->**(**)**
+HSPLse/swahnchat/app/ui/theme/**;->**(**)**
+HSPLse/swahnchat/app/ui/model/**;->**(**)**
+HSPLse/swahnchat/app/ui/components/**;->**(**)**
+HSPLse/swahnchat/app/ui/screens/Conversation**;->**(**)**
+HSPLse/swahnchat/app/ui/screens/Login**;->**(**)**
+HSPLse/swahnchat/app/ui/screens/ComposableSingletons$Conversation**;->**(**)**
+HSPLse/swahnchat/app/ui/screens/ComposableSingletons$Login**;->**(**)**
+HSPLse/swahnchat/app/media/AttachmentPreparer**;->**(**)**
+HSPLse/swahnchat/app/diagnostics/**;->**(**)**
+Lse/swahnchat/app/ui/**;
+Lse/swahnchat/app/diagnostics/**;
+
+# --- Compose, lifecycle, navigation, paging, image loading: the frameworks those screens run on -----------------------------------------
+HSPLandroidx/compose/runtime/**;->**(**)**
+HSPLandroidx/compose/ui/**;->**(**)**
+HSPLandroidx/compose/foundation/**;->**(**)**
+HSPLandroidx/compose/material3/**;->**(**)**
+HSPLandroidx/compose/animation/**;->**(**)**
+HSPLandroidx/activity/**;->**(**)**
+HSPLandroidx/lifecycle/**;->**(**)**
+HSPLandroidx/navigation/**;->**(**)**
+HSPLandroidx/paging/**;->**(**)**
+HSPLandroidx/work/**;->**(**)**
+HSPLandroidx/hilt/**;->**(**)**
+HSPLcoil/**;->**(**)**
+HSPLkotlinx/coroutines/flow/**;->**(**)**
+HSPLkotlinx/coroutines/CoroutineScopeKt;->**(**)**
+HSPLkotlinx/serialization/json/**;->**(**)**
+HSPLretrofit2/**;->**(**)**
+HSPLokhttp3/internal/connection/**;->**(**)**
+Landroidx/compose/runtime/**;
+Landroidx/compose/ui/**;
+Landroidx/compose/foundation/**;
+Landroidx/compose/material3/**;
+Landroidx/activity/**;
+Landroidx/lifecycle/**;
+Landroidx/navigation/**;
+Landroidx/paging/**;
+Landroidx/work/**;
+Lcoil/**;

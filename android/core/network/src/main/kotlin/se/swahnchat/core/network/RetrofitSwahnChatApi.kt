@@ -42,11 +42,20 @@ internal class RetrofitSwahnChatApi(
     override suspend fun login(request: LoginRequest) = call { raw.login(request) }
     override suspend fun refresh(request: RefreshRequest) = call { raw.refresh(request) }
     override suspend fun logout() = call { raw.logout() }
+    override suspend fun resetPassword(request: PasswordResetRequest) = call { raw.resetPassword(request) }
 
     override suspend fun createInvitation(request: CreateInvitationRequest) = call { raw.createInvitation(request) }
     override suspend fun listInvitations() = call { raw.listInvitations() }
     override suspend fun deleteInvitation(id: String) = call { raw.deleteInvitation(id) }
     override suspend fun deleteUser(userId: String) = call { raw.deleteUser(userId) }
+    override suspend fun adminUsers() = call { raw.adminUsers() }
+    override suspend fun suspendUser(userId: String) = call { raw.suspendUser(userId) }
+    override suspend fun unsuspendUser(userId: String) = call { raw.unsuspendUser(userId) }
+    override suspend fun setUserAdmin(userId: String, admin: Boolean) = call { raw.setAdmin(userId, SetAdminRequest(admin)) }
+    override suspend fun issuePasswordReset(userId: String) = call { raw.issuePasswordReset(userId) }
+    override suspend fun revokeUserDevice(userId: String, deviceId: String) = call { raw.revokeUserDevice(userId, deviceId) }
+    override suspend fun adminStats() = call { raw.adminStats() }
+    override suspend fun adminAudit(beforeId: Long?, limit: Int) = call { raw.adminAudit(beforeId, limit) }
 
     override suspend fun listUsers() = call { raw.listUsers() }
     override suspend fun me() = call { raw.me() }
@@ -69,7 +78,10 @@ internal class RetrofitSwahnChatApi(
 
     override suspend fun changePassword(request: ChangePasswordRequest) = call { raw.changePassword(request) }
     override suspend fun listDevices(userId: String) = call { raw.listDevices(userId) }
+    override suspend fun deleteAccount(request: DeleteAccountRequest) = call { raw.deleteAccount(request) }
     override suspend fun myDevice() = call { raw.myDevice() }
+    override suspend fun testPush() { call { raw.testPush() } }
+    override suspend fun renameDevice(deviceId: String, name: String) = call { raw.renameDevice(deviceId, DeviceRenameRequest(name)) }
     override suspend fun setPush(request: PushRegistration) = call { raw.setPush(request) }
     override suspend fun clearPush() = call { raw.clearPush() }
     override suspend fun deleteDevice(deviceId: String) = call { raw.deleteDevice(deviceId) }

@@ -29,13 +29,15 @@ class FakeServer {
     private val messageSeq = AtomicLong(0)
 
     class DeviceRec(
-        val id: String, val userId: String, val number: Int, val name: String,
+        val id: String, val userId: String, val number: Int, var name: String,
         var keys: UploadKeysRequest? = null,
         val ec: ArrayDeque<OneTimePreKeyDto> = ArrayDeque(), val pq: ArrayDeque<PqPreKeyDto> = ArrayDeque(),
         var revoked: Boolean = false, var acked: Long = 0, var createdAt: Long = 0,
     )
 
-    class UserRec(val id: String, val username: String, var displayName: String, val password: String, val isAdmin: Boolean) {
+    class UserRec(val id: String, val username: String, var displayName: String, var password: String, var isAdmin: Boolean) {
+        var suspended = false
+        var removed = false
         /** Presence as the backend keeps it: opt-in, off by default; the last-seen time is dropped when sharing is switched off. */
         var sharePresence = false
         var online = false
@@ -209,6 +211,42 @@ class FakeServer {
     }
     private fun deviceDto(d: DeviceRec) = Device(d.id, d.userId, d.number, d.name, d.createdAt, 0, d.keys?.identityKey)
 
+    // --- administration, password reset, account deletion (state the tests read and steer) ---------------------------------
+
+    /** Reset codes issued and not yet redeemed: code -> user id. */
+    val resetCodes = LinkedHashMap<String, String>()
+
+    /** The audit rows the fake keeps (newest last): action and acting user. */
+    val audit = ArrayList<AuditEvent>()
+
+    /** Devices whose "send a test push" was queued, and what the push server answers for them. */
+    val testPushes = ArrayList<String>()
+    @Volatile var pushAnswer: Int = 201
+    val lastPush = HashMap<String, Pair<Long, Int>>()
+    @Volatile var pushEndpointRegistered = true
+
+    /** The wrong-password attempts the fake saw on `DELETE /users/me`. */
+    @Volatile var deleteAttempts = 0
+
+    private fun addAudit(action: String, actor: String?, target: String?) {
+        audit += AuditEvent((audit.size + 1).toLong(), System.currentTimeMillis(), actor, action, target, null)
+    }
+
+    private fun activeAdmins() = users.values.filter { it.isAdmin && !it.suspended && !it.removed }
+
+    private fun removeAccount(u: UserRec) {
+        u.removed = true
+        for (d in activeDevices(u.id)) { d.revoked = true; d.keys = null }
+        for (c in conversations.values) if (c.members.remove(u.id) != null) pushConversation(c)
+        notifyDevicesChanged(u.id)
+    }
+
+    private fun adminUserDto(u: UserRec) = AdminUser(
+        u.id, u.username, u.displayName, u.isAdmin, 0, if (u.removed) 1L else null, if (u.suspended) 1L else null, null,
+        activeDevices(u.id).size, 0,
+        activeDevices(u.id).map { AdminDevice(it.id, it.number, it.name, 0, pushEndpointRegistered, lastPush[it.id]?.first, lastPush[it.id]?.second, 0) },
+    )
+
     // --- internals ----------------------------------------------------------------------------------------------------
 
     private fun enqueue(deviceId: String, type: String, conversationId: String?, data: JsonElement): Event = synchronized(lock) {
@@ -261,10 +299,25 @@ class FakeServer {
         }
 
         override suspend fun login(request: LoginRequest): AuthResponse = synchronized(lock) {
-            val u = users.values.firstOrNull { it.username == request.username && it.password == request.password }
+            val u = users.values.firstOrNull { it.username == request.username && it.password == request.password && !it.removed }
                 ?: throw ApiException.InvalidCredentials("bad credentials")
+            if (u.suspended) throw ApiException.Forbidden("account_suspended", "suspended")
             val d = newDevice(u.id, request.deviceName)
             deviceId = d.id
+            auth(u, d)
+        }
+
+        override suspend fun resetPassword(request: PasswordResetRequest): AuthResponse = synchronized(lock) {
+            val userId = resetCodes.remove(request.code) ?: throw ApiException.NotFound("invalid_reset_code", "invalid reset code")
+            val u = users.getValue(userId)
+            if (u.removed) throw ApiException.NotFound("invalid_reset_code", "invalid reset code")
+            if (request.newPassword.length < 10) throw ApiException.Invalid("invalid_request", "weak password")
+            u.password = request.newPassword
+            for (d in activeDevices(userId)) { d.revoked = true; d.keys = null }
+            notifyDevicesChanged(userId)
+            val d = newDevice(userId, request.deviceName)
+            deviceId = d.id
+            addAudit("password_reset_redeemed", userId, userId)
             auth(u, d)
         }
 
@@ -273,7 +326,75 @@ class FakeServer {
         override suspend fun createInvitation(request: CreateInvitationRequest) = CreatedInvitation(UUID.randomUUID().toString(), "CODE", null)
         override suspend fun listInvitations() = emptyList<Invitation>()
         override suspend fun deleteInvitation(id: String) = Unit
-        override suspend fun deleteUser(userId: String) = Unit
+        override suspend fun deleteUser(userId: String) = synchronized(lock) {
+            val u = users[userId] ?: throw ApiException.NotFound("not_found", "no such user")
+            if (userId == me.userId) throw ApiException.Conflict("cannot_remove_self", "yourself")
+            removeAccount(u)
+            addAudit("user_removed", me.userId, userId)
+        }
+
+        private fun requireAdmin() {
+            if (users.getValue(me.userId).isAdmin.not()) throw ApiException.Forbidden("forbidden", "admins only")
+        }
+
+        override suspend fun adminUsers(): List<AdminUser> = synchronized(lock) { requireAdmin(); users.values.map { adminUserDto(it) } }
+
+        override suspend fun suspendUser(userId: String) = synchronized(lock) {
+            requireAdmin()
+            val u = users[userId]?.takeIf { !it.removed } ?: throw ApiException.NotFound("not_found", "no such user")
+            if (userId == me.userId) throw ApiException.Conflict("cannot_suspend_self", "yourself")
+            if (u.isAdmin && activeAdmins().size <= 1) throw ApiException.Conflict("last_admin", "last admin")
+            u.suspended = true
+            addAudit("user_suspended", me.userId, userId)
+        }
+
+        override suspend fun unsuspendUser(userId: String) = synchronized(lock) {
+            requireAdmin()
+            val u = users[userId]?.takeIf { !it.removed } ?: throw ApiException.NotFound("not_found", "no such user")
+            u.suspended = false
+            addAudit("user_unsuspended", me.userId, userId)
+        }
+
+        override suspend fun setUserAdmin(userId: String, admin: Boolean): AdminUser = synchronized(lock) {
+            requireAdmin()
+            val u = users[userId]?.takeIf { !it.removed } ?: throw ApiException.NotFound("not_found", "no such user")
+            if (!admin && u.isAdmin && activeAdmins().size <= 1) throw ApiException.Conflict("last_admin", "last admin")
+            if (u.isAdmin != admin) addAudit(if (admin) "admin_granted" else "admin_revoked", me.userId, userId)
+            u.isAdmin = admin
+            adminUserDto(u)
+        }
+
+        override suspend fun issuePasswordReset(userId: String): PasswordResetCreated = synchronized(lock) {
+            requireAdmin()
+            val u = users[userId]?.takeIf { !it.removed } ?: throw ApiException.NotFound("not_found", "no such user")
+            resetCodes.entries.removeAll { it.value == userId } // a new code cancels the older ones
+            val code = "RESET-" + UUID.randomUUID().toString().take(8).uppercase()
+            resetCodes[code] = u.id
+            addAudit("password_reset_issued", me.userId, userId)
+            PasswordResetCreated(code, System.currentTimeMillis() + 24 * 3600_000L)
+        }
+
+        override suspend fun revokeUserDevice(userId: String, deviceId: String) = synchronized(lock) {
+            requireAdmin()
+            val d = devices[deviceId]?.takeIf { it.userId == userId && !it.revoked } ?: throw ApiException.NotFound("not_found", "no such device")
+            if (d.id == me.id) throw ApiException.Conflict("current_device", "use logout")
+            revokeDevice(d.id)
+            addAudit("device_revoked", me.userId, userId)
+        }
+
+        override suspend fun adminStats(): AdminStats = synchronized(lock) {
+            requireAdmin()
+            AdminStats(
+                users = users.values.count { !it.removed }, activeDevices = devices.values.count { !it.revoked },
+                conversations = conversations.size, messages = messages.size.toLong(), dbBytes = 4096, diskFreeBytes = 1L shl 30,
+                version = "0.5.0-fake", migration = MigrationInfo("head1", "head1"),
+            )
+        }
+
+        override suspend fun adminAudit(beforeId: Long?, limit: Int): List<AuditEvent> = synchronized(lock) {
+            requireAdmin()
+            audit.reversed().filter { beforeId == null || it.id < beforeId }.take(limit)
+        }
 
         override suspend fun listUsers(): List<User> = synchronized(lock) { users.values.map { userDto(it) } }
         override suspend fun me(): User = synchronized(lock) { userDto(users.getValue(me.userId)) }
@@ -295,10 +416,37 @@ class FakeServer {
             listDevicesHook?.invoke(userId, honest) ?: honest
         }
 
-        override suspend fun myDevice(): Device = synchronized(lock) { deviceDto(me) }
+        override suspend fun myDevice(): Device = synchronized(lock) {
+            deviceDto(me).copy(lastPushAt = lastPush[deviceId]?.first, lastPushStatus = lastPush[deviceId]?.second)
+        }
         override suspend fun setPush(request: PushRegistration) = Unit
         override suspend fun clearPush() = Unit
         override suspend fun deleteDevice(deviceId: String) { revokeDevice(deviceId) }
+
+        override suspend fun deleteAccount(request: DeleteAccountRequest) = synchronized(lock) {
+            val u = users.getValue(me.userId)
+            deleteAttempts++
+            if (u.password != request.password) throw ApiException.Forbidden("invalid_credentials", "wrong password")
+            if (u.isAdmin && activeAdmins().size <= 1) throw ApiException.Conflict("last_admin", "last admin")
+            removeAccount(u)
+            addAudit("user_removed", u.id, u.id)
+        }
+
+        override suspend fun testPush() = synchronized(lock) {
+            if (!pushEndpointRegistered) throw ApiException.Conflict("push_not_configured", "no endpoint")
+            testPushes += deviceId
+            lastPush[deviceId] = System.currentTimeMillis() to pushAnswer
+        }
+
+        override suspend fun renameDevice(deviceId: String, name: String): Device = synchronized(lock) {
+            val d = devices[deviceId]?.takeIf { it.userId == me.userId && !it.revoked } ?: throw ApiException.NotFound("not_found", "no such device")
+            if (name.trim().length !in 1..64) throw ApiException.Invalid("invalid_request", "name")
+            if (d.name != name.trim()) {
+                d.name = name.trim()
+                notifyDevicesChanged(d.userId)
+            }
+            deviceDto(d)
+        }
 
         override suspend fun turnCredentials(): TurnCredentials {
             turnFetches.incrementAndGet()

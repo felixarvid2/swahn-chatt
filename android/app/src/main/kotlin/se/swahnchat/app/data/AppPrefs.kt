@@ -251,7 +251,27 @@ class AppPrefs @Inject constructor(@ApplicationContext context: Context) {
         get() = prefs.getBoolean(KEY_NOTIF_ASKED, false)
         set(v) { prefs.edit().putBoolean(KEY_NOTIF_ASKED, v).apply() }
 
+    /** The first-start guide ("Kom igång") has been shown or skipped once on this install; it stays reachable from the settings. */
+    var onboardingDone: Boolean
+        get() = prefs.getBoolean(KEY_ONBOARDING_DONE, false)
+        set(v) { prefs.edit().putBoolean(KEY_ONBOARDING_DONE, v).apply() }
+
+    /** When a sync last finished (epoch ms), 0 if never; shown on the diagnostics screen. */
+    var lastSyncAt: Long
+        get() = prefs.getLong(KEY_LAST_SYNC, 0L)
+        set(v) { prefs.edit().putLong(KEY_LAST_SYNC, v).apply() }
+
+    /**
+     * Forgets what belongs to the account that is gone (push endpoint, key and sync bookkeeping, the "session ended" notice).
+     * The look of the app, the language and the server address stay: they are about the phone, not the account.
+     */
+    fun clearAccountData() {
+        prefs.edit().remove(KEY_PUSH_ENDPOINT).remove(KEY_PUSH_UPLOADED).remove(KEY_KEY_CHECK).remove(KEY_LAST_SYNC).remove(KEY_SESSION_ENDED).apply()
+    }
+
     private companion object {
+        const val KEY_ONBOARDING_DONE = "onboarding_done"
+        const val KEY_LAST_SYNC = "last_sync_at"
         const val KEY_QUIET_ENABLED = "quiet_enabled"
         const val KEY_QUIET_START = "quiet_start"
         const val KEY_QUIET_END = "quiet_end"

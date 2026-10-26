@@ -41,6 +41,12 @@ data class Device(
     @SerialName("created_at") val createdAt: Long = 0,
     @SerialName("last_seen_at") val lastSeenAt: Long = 0,
     @SerialName("identity_key") val identityKey: String? = null,
+    /**
+     * Only in the answer of `GET /devices/me`: when the server last tried to push to this device and the HTTP status the push
+     * server answered (0: no answer). Never stored; other users' devices never carry them.
+     */
+    @SerialName("last_push_at") val lastPushAt: Long? = null,
+    @SerialName("last_push_status") val lastPushStatus: Int? = null,
 )
 
 object ConversationType {
@@ -216,6 +222,10 @@ data class Invitation(
     @SerialName("used_at") val usedAt: Long? = null,
     @SerialName("used_by") val usedBy: String? = null,
     @SerialName("revoked_at") val revokedAt: Long? = null,
+    @SerialName("max_uses") val maxUses: Int = 1,
+    val uses: Int = 0,
+    /** What can still be redeemed; 0 once used up, revoked or expired. */
+    val remaining: Int = 1,
 )
 
 // ---------------------------------------------------------------------------------------------------------
@@ -227,6 +237,26 @@ data class ChangePasswordRequest(
     @SerialName("current_password") val currentPassword: String,
     @SerialName("new_password") val newPassword: String,
 )
+
+/** `POST /auth/password/reset`: redeems a reset code from an administrator; signs in on a new device like a login. */
+@Serializable
+data class PasswordResetRequest(
+    val code: String,
+    @SerialName("new_password") val newPassword: String,
+    @SerialName("device_name") val deviceName: String,
+)
+
+/** `PATCH /devices/{id}`. */
+@Serializable
+data class DeviceRenameRequest(val name: String)
+
+/** `DELETE /users/me`. */
+@Serializable
+data class DeleteAccountRequest(val password: String)
+
+/** `POST /devices/me/push/test` answers `202 {"status":"queued"}`. */
+@Serializable
+data class PushTestQueued(val status: String = "queued")
 
 @Serializable
 data class PushRegistration(val kind: String = "unifiedpush", val endpoint: String)
@@ -437,3 +467,89 @@ object EventType {
     const val USER_UPDATED = "user_updated"
     const val USER_REMOVED = "user_removed"
 }
+
+// ---------------------------------------------------------------------------------------------------------
+// Administration views (admins only)
+// ---------------------------------------------------------------------------------------------------------
+
+/** A device of an account as the administrator sees it: with its push health, never the push endpoint. */
+@Serializable
+data class AdminDevice(
+    val id: String,
+    val number: Int = 0,
+    val name: String,
+    @SerialName("last_seen_at") val lastSeenAt: Long = 0,
+    @SerialName("push_registered") val pushRegistered: Boolean = false,
+    @SerialName("last_push_at") val lastPushAt: Long? = null,
+    /** HTTP status of the last push attempt; 0 = no answer. */
+    @SerialName("last_push_status") val lastPushStatus: Int? = null,
+    @SerialName("push_failures") val pushFailures: Int = 0,
+)
+
+/** One row of `GET /admin/users` (removed accounts included: [disabledAt] set). */
+@Serializable
+data class AdminUser(
+    val id: String,
+    val username: String,
+    @SerialName("display_name") val displayName: String,
+    @SerialName("is_admin") val isAdmin: Boolean = false,
+    @SerialName("created_at") val createdAt: Long = 0,
+    @SerialName("disabled_at") val disabledAt: Long? = null,
+    @SerialName("suspended_at") val suspendedAt: Long? = null,
+    @SerialName("last_seen_at") val lastSeenAt: Long? = null,
+    @SerialName("active_devices") val activeDevices: Int = 0,
+    @SerialName("attachment_bytes") val attachmentBytes: Long = 0,
+    val devices: List<AdminDevice> = emptyList(),
+)
+
+/** `PATCH /admin/users/{id}`. */
+@Serializable
+data class SetAdminRequest(@SerialName("is_admin") val isAdmin: Boolean)
+
+/** `POST /admin/users/{id}/password-reset`: the [code] is shown only in this answer. */
+@Serializable
+data class PasswordResetCreated(val code: String, @SerialName("expires_at") val expiresAt: Long)
+
+@Serializable
+data class MigrationInfo(val head: String = "", val current: String? = null)
+
+@Serializable
+data class DbMaintenanceInfo(
+    val at: Long = 0,
+    val dialect: String = "",
+    val ok: Boolean = true,
+    val steps: List<String> = emptyList(),
+    val vacuum: String = "",
+    @SerialName("duration_ms") val durationMs: Long = 0,
+    @SerialName("freelist_ratio") val freelistRatio: Double? = null,
+    val error: String? = null,
+)
+
+/** `GET /admin/stats`. */
+@Serializable
+data class AdminStats(
+    val users: Int = 0,
+    @SerialName("active_devices") val activeDevices: Int = 0,
+    val conversations: Int = 0,
+    val messages: Long = 0,
+    @SerialName("undelivered_envelopes") val undeliveredEnvelopes: Long = 0,
+    val attachments: Long = 0,
+    @SerialName("db_bytes") val dbBytes: Long? = null,
+    @SerialName("attachments_bytes") val attachmentsBytes: Long = 0,
+    @SerialName("disk_free_bytes") val diskFreeBytes: Long = 0,
+    val version: String = "",
+    val migration: MigrationInfo = MigrationInfo(),
+    @SerialName("uptime_seconds") val uptimeSeconds: Long = 0,
+    @SerialName("db_maintenance") val dbMaintenance: DbMaintenanceInfo? = null,
+)
+
+/** One row of `GET /admin/audit` (newest first). The IP address and [details] are the server's; the app shows only the event. */
+@Serializable
+data class AuditEvent(
+    val id: Long,
+    val at: Long = 0,
+    @SerialName("actor_user_id") val actorUserId: String? = null,
+    val action: String,
+    @SerialName("target_user_id") val targetUserId: String? = null,
+    @SerialName("target_id") val targetId: String? = null,
+)

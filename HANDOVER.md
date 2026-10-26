@@ -22,6 +22,7 @@ E2EE is on from the first build, and the server rejects nothing but also underst
 | Docker image (amd64) | builds, runs as non-root, migrates on start, healthy; compose restart and down/up keep data; `backup.sh`/`restore.sh` round-trip; Caddy (TLS + WebSocket) and ntfy profiles start |
 | Android `./gradlew build` | passes, including lint and R8 `assembleRelease`. Unit tests: `:core:model` 12, `:core:network` 32, `:core:crypto` 42 (real libsignal on the JVM: sessions, multi-device, out-of-order, corrupted/truncated/garbage ciphertext, replay, identity change, padding, attachment tamper/wrong key, safety numbers), `:core:client` 59 (incl. 24 malicious-server attack tests), `:app` 166 (Room store contracts, transactions, token storage, Keystore vault logic, notifications, ViewModels, Robolectric screenshots) |
 | `android/scripts/run-e2e.sh` | `TwoUserEndToEndTest` 8/8 (incl. encrypted delete) and `RoomEngineE2ETest` 1/1 against a real backend. These cover real-time delivery both ways, receipts, edit/delete, 30-message offline catch-up without duplicates, an idempotent duplicate send, an encrypted attachment round-trip, group member removal, a second device, and a raw scan of the server's SQLite file + WAL that finds no plaintext |
+| Batch 8 (2026-10-26) | `./gradlew check` passes (unit tests, lint, detekt); `run-e2e.sh`: `TwoUserEndToEndTest` 20/20 (new: reset with an admin code, rename own device, admin calls, push test, delete account); `assembleDebugAndroidTest` and `assembleQaAndroidTest -PtestBuildType=qa` compile; release and qa APKs contain `assets/dexopt/baseline.prof` |
 | APKs | debug `android/app/build/outputs/apk/debug/app-debug.apk` (51 MB), release `.../release/app-release.apk` (29 MB, R8, signed with the debug key) |
 
 ## Not verified
@@ -76,6 +77,18 @@ Behaviour change to know: after logging in on a second phone, approve it on the 
 This is the owner's decision (2026-10-24): keep the protection unconditional for the own account, even when
 none of the own devices is verified. It stops a server from silently adding a listening device to the account.
 Do not relax it without asking.
+
+## Batch 8 (items 92-100 and reset with a code)
+
+Onboarding guide, battery-optimisation exemption, diagnostics screen, troubleshooting log export, outbox, "Mina enheter" with rename,
+delete account, admin view and "Glömt lösenordet?". See `docs/ARCHITECTURE.md` (batch 8), `docs/SECURITY.md` (troubleshooting log and admin
+view) and the user and operator guides.
+
+**Baseline profile (item 96) is hand-written, not measured.** `android/app/src/main/baseline-prof.txt` holds wildcard rules for the app's
+packages and the androidx paths the start path uses; `androidx.profileinstaller` installs it from the release and qa APKs
+(`assets/dexopt/baseline.prof`). Nothing was measured, because that needs a Macrobenchmark run on a device or emulator. To generate a
+measured one later, add a `:baselineprofile` module (`androidx.baselineprofile` plugin, `BaselineProfileRule` that starts the app, scrolls
+the list, opens a chat and sends a message), run `generateBaselineProfile` on an API 33+ device, and replace the file.
 
 ## Known limitations and outstanding issues
 

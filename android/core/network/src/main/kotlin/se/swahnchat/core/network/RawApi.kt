@@ -15,11 +15,20 @@ internal interface RawApi {
     @POST("auth/login") suspend fun login(@Body r: LoginRequest): AuthResponse
     @POST("auth/refresh") suspend fun refresh(@Body r: RefreshRequest): AuthResponse
     @POST("auth/logout") suspend fun logout()
+    @POST("auth/password/reset") suspend fun resetPassword(@Body r: PasswordResetRequest): AuthResponse
 
     @POST("admin/invitations") suspend fun createInvitation(@Body r: CreateInvitationRequest): CreatedInvitation
     @GET("admin/invitations") suspend fun listInvitations(): List<Invitation>
     @DELETE("admin/invitations/{id}") suspend fun deleteInvitation(@Path("id") id: String)
     @DELETE("admin/users/{id}") suspend fun deleteUser(@Path("id") id: String)
+    @GET("admin/users") suspend fun adminUsers(): List<AdminUser>
+    @POST("admin/users/{id}/suspend") suspend fun suspendUser(@Path("id") id: String)
+    @POST("admin/users/{id}/unsuspend") suspend fun unsuspendUser(@Path("id") id: String)
+    @PATCH("admin/users/{id}") suspend fun setAdmin(@Path("id") id: String, @Body r: SetAdminRequest): AdminUser
+    @POST("admin/users/{id}/password-reset") suspend fun issuePasswordReset(@Path("id") id: String): PasswordResetCreated
+    @DELETE("admin/users/{id}/devices/{deviceId}") suspend fun revokeUserDevice(@Path("id") id: String, @Path("deviceId") deviceId: String)
+    @GET("admin/stats") suspend fun adminStats(): AdminStats
+    @GET("admin/audit") suspend fun adminAudit(@Query("before_id") beforeId: Long?, @Query("limit") limit: Int): List<AuditEvent>
 
     @GET("users") suspend fun listUsers(): List<User>
     @GET("users/me") suspend fun me(): User
@@ -28,7 +37,10 @@ internal interface RawApi {
     @PATCH("users/me/settings") suspend fun updateMySettings(@Body body: JsonObject): UserSettings
     @PUT("users/me/password") suspend fun changePassword(@Body r: ChangePasswordRequest)
     @GET("users/{id}/devices") suspend fun listDevices(@Path("id") userId: String): List<Device>
+    @HTTP(method = "DELETE", path = "users/me", hasBody = true) suspend fun deleteAccount(@Body r: DeleteAccountRequest)
     @GET("devices/me") suspend fun myDevice(): Device
+    @POST("devices/me/push/test") suspend fun testPush(): PushTestQueued
+    @PATCH("devices/{id}") suspend fun renameDevice(@Path("id") id: String, @Body r: DeviceRenameRequest): Device
     @PUT("devices/me/push") suspend fun setPush(@Body r: PushRegistration)
     @DELETE("devices/me/push") suspend fun clearPush()
     @DELETE("devices/{id}") suspend fun deleteDevice(@Path("id") id: String)

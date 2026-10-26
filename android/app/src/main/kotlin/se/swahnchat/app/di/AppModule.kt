@@ -46,6 +46,10 @@ object AppModule {
     fun videoCompressor(preparer: AttachmentPreparer, transcoder: VideoTranscoder): VideoCompressor =
         VideoCompressor(transcoder, tempDir = { preparer.compressDir }, outputDir = { preparer.outgoingDir })
 
+    /** What the phone says about notification permission and battery optimisation (a seam for the screens' tests). */
+    @Provides @Singleton
+    fun deviceStatus(impl: se.swahnchat.app.diagnostics.AndroidDeviceStatus): se.swahnchat.app.diagnostics.DeviceStatus = impl
+
     @Provides @Singleton @ApplicationScope
     fun applicationScope(): CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 

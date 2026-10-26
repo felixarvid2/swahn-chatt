@@ -499,6 +499,41 @@ per contact. If that is too much for your family, simply leave it off: the defau
 - **Quiet hours** only change how a notification is posted (silent channel); nothing leaves the phone.
 - **Language, accent, background, contrast** are non-secret preferences in `AppPrefs` (the language is read before the app starts, so it is not in the encrypted database).
 
+## Troubleshooting log, diagnostics and the admin view (batch 8)
+
+- **The log contains only events of the app itself, as typed fields.** `EventLog` accepts nothing but `LogEvent`s (app start, sync
+  runs, push received, push endpoint uploaded or not, push test result, realtime connection state, failed sends, outbox passes, call
+  phases, background-job runs, sign-in and sign-out kinds). An event is made of numbers, flags, enums and `Ref`s; there is no field that
+  takes free text (a unit test checks this structurally for every event type and tries to push message text, names, tokens, push endpoints,
+  addresses with a path, IPs and keys through each one). Ids are shortened to 8 hex digits of SHA-256 over a per-install random salt, so two
+  lines about the same chat can be told apart and nothing more; the salt is in the log folder, so an export from two phones never lines up.
+  Errors are logged as a kind (`OFFLINE`, `TLS`, `REFUSED_BY_SERVER`, ...) and an HTTP status, never as an exception message (which can hold a
+  host or a URL). Every key and value is cut down to `[A-Za-z0-9_.-]` and 40 characters when rendered, and a line read back from the file is
+  accepted only if it is made of the known tags and keys (`LogVocabulary`), so an edited file cannot add a sentence to an export.
+- **What it never contains:** message text, file names, display names or user names, tokens, keys, safety numbers, the push endpoint, URLs
+  with paths, IP addresses, SDP or ICE candidates, who a call was with. The diagnostics summary has the same limit: it names the server by host
+  only, and writes "IP address" instead of an IP number; the push endpoint is reported as yes or no.
+- **Where it lives:** the app's private files (a ring buffer of 2000 lines in memory, also appended to a file that rotates at 1 MB, two files at
+  most). It is not encrypted at rest beyond Android's own app sandbox and file-based encryption (it holds no secrets, so it is not put in the
+  database); deleting the account clears it, signing out does not (the log of a revoked session is what support needs). Nothing is sent by the
+  app. **Export** is the person's own act: a confirmation lists what is and is not in the file, and the system file dialog (SAF) decides where
+  it goes.
+- **The password-reset code in the admin view** is held in the view model's memory while the dialog is open and nowhere else: not in saved
+  state, preferences, the database, the log or a notification; the clipboard copy is flagged sensitive. Closing the dialog drops it. The
+  server shows it once and keeps only a hash.
+- **The admin view adds no server capability.** Every call it makes (`/admin/users`, suspend, role change, reset code, device revoke, stats,
+  audit, invitations) already existed and is enforced by the server; the row is hidden for non-administrators only as convenience, and a
+  non-administrator who calls the same endpoints gets `403`. Destructive actions confirm first; removing a user needs the username typed.
+  An administrator who issues a reset code can take over that account from then on (see "Password reset by an administrator" above); the
+  view says so before the code is created, and contacts still see the new device.
+- **Signing in with a reset code** is a normal sign-in on a new device (`POST /auth/password/reset` revokes every older device first). The app
+  does not skip any approval for it: the other people's apps treat the device like any new device, and the owner still approves new devices on
+  their own account. The code field is cleared from the form on success.
+- **Deleting the account** wipes the phone only after the server accepted `DELETE /users/me` (a wrong password, `last_admin` or a rate limit
+  change nothing); the password goes only in that request and is not kept.
+- **Battery optimisation exemption** (`REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`) is requested only when the person taps the button; it is not a
+  data permission, and it makes push and call wake-ups more reliable. The permission is one Google Play restricts; this app is not distributed there.
+
 ## Backups and encryption
 
 Server backups (SQLite online backup + attachments) contain accounts, password hashes, public keys, metadata
