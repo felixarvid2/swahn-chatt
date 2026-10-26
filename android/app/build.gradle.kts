@@ -23,8 +23,8 @@ android {
         applicationId = "se.swahnchat.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 6
-        versionName = "0.6.0"
+        versionCode = 7
+        versionName = "0.6.1"
         // libsignal ships arm64 for phones and x86_64 for emulators (see SECURITY.md)
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
