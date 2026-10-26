@@ -508,3 +508,28 @@ class MentionPollContentTest {
         assertTrue(!LocationSpec(0.0, 0.0, Double.NaN).isValid)
     }
 }
+
+class PrivacyDtoTest {
+    @Test
+    fun `a normal read keeps the old wire format and a silent read says notify false`() {
+        assertEquals("""{"up_to_seq":12}""", SwahnChatJson.encodeToString(MarkReadRequest.serializer(), MarkReadRequest(12)))
+        assertEquals(
+            """{"up_to_seq":12,"notify":false}""",
+            SwahnChatJson.encodeToString(MarkReadRequest.serializer(), MarkReadRequest(12, notify = false)),
+        )
+    }
+
+    @Test
+    fun `presence fields are optional on a user and the setting defaults to off`() {
+        val plain = SwahnChatJson.decodeFromString(User.serializer(), """{"id":"u","username":"a","display_name":"A"}""")
+        assertNull(plain.online)
+        assertNull(plain.lastSeenAt)
+        val shared = SwahnChatJson.decodeFromString(
+            User.serializer(), """{"id":"u","username":"a","display_name":"A","online":false,"last_seen_at":1700000000000}""",
+        )
+        assertEquals(false, shared.online)
+        assertEquals(1_700_000_000_000L, shared.lastSeenAt)
+        assertEquals(false, SwahnChatJson.decodeFromString(UserSettings.serializer(), "{}").sharePresence)
+        assertEquals("""{"share_presence":true}""", SwahnChatJson.encodeToString(UserSettings.serializer(), UserSettings(true)))
+    }
+}

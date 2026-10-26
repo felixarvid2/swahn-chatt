@@ -206,6 +206,14 @@ sent. `ScheduledSendWorker` (WorkManager, with an initial delay) and an in-proce
   The work is in the conversation view model's scope, so it survives a configuration change; the staged files stay in the strip
   when it is cancelled.
 
+### Notifications, privacy, appearance and layout (batch 7)
+
+- **Engine.** `SwahnChatEngine.sendReadReceipts` / `sendTypingIndicators` (set by `AppStarter` from `AppPrefs`) decide whether `markRead` sends `notify: false` (`MarkReadRequest.notify`, omitted from the wire while true) and whether `sendTyping` sends; a pending read remembers `:silent`. `presence` (in memory) is filled by `refreshPresence()` from `GET /users`; `sharePresence()` / `setSharePresence()` use `GET`/`PATCH /users/me/settings`. No database change in this batch.
+- **Notifications.** `Notifier` posts to one of three channels: `messages_quiet` (silent, during `QuietHours.isActive`, a pure java.time function on the wall clock), a per-chat `messages_chat_<id>` channel (child of `messages` via `setConversationId` on Android 11+, created when the person opens "Avisering"), or `messages`. `ConversationShortcuts` publishes long-lived share-target shortcuts (`res/xml/shortcuts.xml`, category `se.swahnchat.app.directshare.CHAT`); `ShortcutSync` keeps them in step with the list, the privacy setting and the session; `ShareReceiverActivity` reads `EXTRA_SHORTCUT_ID`.
+- **Theme.** `SwahnChatTheme(accent, highContrast)`: `withAccent` recolours the base schemes, `highContrast` pushes any scheme (also the dynamic one) to 7:1 using `ensureContrast`; `LocalChatBackground` + `Modifier.chatBackground` draw the patterns.
+- **Language.** `AppLocale`: `LocaleManager` on Android 13+, below that the saved choice is wrapped around the base context of the application and the three activities (`attachBaseContext`) and the visible activity is recreated. Chosen over AppCompat (dependency, AppCompat theme, three base classes) as the smaller correct change.
+- **Layout.** `isTwoPane` (width 840 dp, or 600 dp in landscape, and only when the smallest width is 600 dp so phones turned sideways stay single-pane). `AppRoot` puts `ConversationsHost` permanently on the left (`PaneLayout`) and keeps the one `NavHost` on the right, where the "conversations" route shows a placeholder; opening a chat pops to that route first so chats do not stack. Back, deep links, the share target and process death are therefore the navigation graph's own.
+
 ### App internals (`:app`)
 
 - **Storage.** One Room database, encrypted with SQLCipher, holds `LocalStore` (messages, conversations, outbox, cursor),

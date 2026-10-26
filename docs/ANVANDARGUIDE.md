@@ -17,6 +17,7 @@ ens den som sköter servern.
 6. [Aviseringar med ntfy och batterisparläge](#6-aviseringar-med-ntfy-och-batterisparläge)
 7. [Skriva, skicka bilder och röstmeddelanden](#7-skriva-skicka-bilder-och-röstmeddelanden)
    - [Samtal: ringa, svara och videosamtal](#samtal-ringa-svara-och-videosamtal)
+   - [Aviseringar, integritet och utseende](#aviseringar-integritet-och-utseende-batch-7)
 8. [Grupper](#8-grupper)
 9. [Skölden och varningarna](#9-skölden-och-varningarna)
 10. [Ny telefon: godkänn den nya telefonen](#10-ny-telefon-godkänn-den-nya-telefonen)
@@ -262,6 +263,32 @@ bara ett samtal åt gången. Ljud och bild krypteras från telefon till telefon;
   avisering.
 - **Går inte att göra:** att byta från röst- till videosamtal under pågående samtal, och att ringa via telefonens vanliga samtalslogg
   eller bilens handsfree (utöver ljudet).
+
+## Aviseringar, integritet och utseende (batch 7)
+
+### Genvägar och dela direkt
+Håll fingret på appens ikon: de fyra senaste chattarna finns som genvägar, och de dyker också upp i delningsmenyn ("Skicka till ..." på Android 10 och nyare). Ett tryck öppnar chatten, och applåset gäller som vanligt. Genvägarna visar namn på startskärmen: med "Innehåll i aviseringar" satt till "Inget namn" skapas inga genvägar, och de som finns tas bort. De tas också bort när du loggar ut och när du lämnar eller raderar en chatt.
+
+### Eget ljud för en chatt
+Öppna chatten, menyn (tre prickar), **Avisering**. Android öppnar aviseringsinställningarna för just den chatten: välj ljud, vibration och hur högt den ska höras. Kanalen skapas första gången du öppnar sidan och tas bort när chatten försvinner. Med "Inget namn" heter den "Chatt" och ett kort id.
+
+### Tysta timmar
+Inställningar, Notiser, **Tysta timmar**: välj från och till (standard 22:00-07:00) och vilka dagar. Under tiden kommer meddelanden tyst: de syns i aviseringslistan men utan ljud, vibration och popup. Timmar över midnatt hör till den dag de börjar. Samtal ringer som vanligt om du inte slår på **Tysta även samtal**; då visas samtalet ändå och går att svara på.
+
+### Läskvitton, "skriver" och online
+Under Integritet och säkerhet:
+- **Skicka läskvitton** (på som standard). Av: andra ser inte när du har läst. Du ser fortfarande andras kvitton.
+- **Visa när jag skriver** (på). Av: inget skickas medan du skriver. Du ser fortfarande när andra skriver.
+- **Visa när jag är online** (av). På: de du delar en chatt med ser "online" eller "senast sedd ..." under ditt namn i vår chatt. Du ser andras status om de har slagit på den, oavsett din egen inställning.
+
+### Utseende
+- **Hög kontrast**: starkare färger och tydliga ramar, all text minst 7:1 i kontrast. Bakgrundsmönster döljs.
+- **Färg**: Systemets färger (Android 12 och nyare) eller sex egna: blågrön, blå, lila, rosa, orange, grön.
+- **Chattbakgrund**: enkel, färgton, prickar, rutor eller linjer.
+- **Språk**: Systemets, Svenska eller English. Ändringen gäller direkt.
+
+### Surfplatta och vikbar telefon
+På en stor skärm (surfplatta, utvecklad vikbar telefon) visas chattlistan till vänster och den öppna chatten till höger. Bakåt-knappen stänger chatten. Telefoner är oförändrade.
 
 ## 8. Grupper
 

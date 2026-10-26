@@ -490,6 +490,15 @@ does not hide anything. Presence follows the WebSocket, which the app keeps open
 foreground. Contacts cannot opt out of *seeing* it except by ignoring the field, and the setting is per user, not
 per contact. If that is too much for your family, simply leave it off: the default sends nothing.
 
+## Privacy switches, shortcuts and language (batch 7)
+
+- **Read receipts and typing.** "Skicka läskvitton" off makes the app send `POST /conversations/{id}/read` with `notify: false`: the read position still moves and the account's own other devices get the receipt (their unread counts stay in step), the other members get none. The choice is stored with a read that could not be sent, so a retry never announces what was meant to be silent. "Visa när jag skriver" off sends no typing frames at all. Both are one-sided: the person still *receives* other people's receipts and typing events, the settings say so. A silent read cannot be announced afterwards. Receipts and typing are metadata the server can see in either case; only who gets told changes.
+- **Online status.** Opt-in on the server (`PATCH /users/me/settings`, off by default); the switch shows the server's answer, not a local flag. Being online/last seen is visible to every active user of the server, not only to chat partners (that is what `GET /users` returns; see Presence above), and the app only shows it in direct chats. The app keeps what it learns in memory only. Anyone can see others' status regardless of their own setting.
+- **Launcher shortcuts** show chat names on the launcher and in the share sheet, outside the app lock. With notification privacy "HIDDEN" none are published and existing ones are removed; they are also removed on sign-out and when a chat is left or deleted. Tapping one uses the normal deep link, so the app lock applies. They are long-lived (needed for conversation notifications); Android may keep a cached copy of a shortcut that a notification still refers to until that notification is gone. The share target hands over only a conversation id, validated against the account's conversations.
+- **Per-chat notification channels** are named after the chat, or "Chatt" plus a short id with hidden names (renamed when the setting changes), and removed with the chat and on sign-out.
+- **Quiet hours** only change how a notification is posted (silent channel); nothing leaves the phone.
+- **Language, accent, background, contrast** are non-secret preferences in `AppPrefs` (the language is read before the app starts, so it is not in the encrypted database).
+
 ## Backups and encryption
 
 Server backups (SQLite online backup + attachments) contain accounts, password hashes, public keys, metadata

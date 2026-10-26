@@ -1,5 +1,7 @@
 package se.swahnchat.core.model
 
+import kotlinx.serialization.EncodeDefault
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
@@ -19,7 +21,14 @@ data class User(
     @SerialName("avatar_attachment_id") val avatarAttachmentId: String? = null,
     @SerialName("is_admin") val isAdmin: Boolean = false,
     @SerialName("created_at") val createdAt: Long = 0,
+    /** Presence: both are null unless this user opted in to sharing it (`GET /users`); never stored, see `SwahnChatEngine.presence`. */
+    val online: Boolean? = null,
+    @SerialName("last_seen_at") val lastSeenAt: Long? = null,
 )
+
+/** `GET/PATCH /users/me/settings`: today only whether other people may see when this account is online. */
+@Serializable
+data class UserSettings(@SerialName("share_presence") val sharePresence: Boolean = false)
 
 /** A device of a user. [identityKey] (base64 `ECPublicKey`) is null until the device uploaded keys. */
 @Serializable
@@ -303,7 +312,13 @@ data class AddMembersRequest(@SerialName("user_ids") val userIds: List<String>)
 data class SetRoleRequest(val role: String)
 
 @Serializable
-data class MarkReadRequest(@SerialName("up_to_seq") val upToSeq: Long)
+data class MarkReadRequest(
+    @SerialName("up_to_seq") val upToSeq: Long,
+    /** `false` = silent read: the read pointer moves but the other members get no receipt. Omitted from the wire while true (older servers). */
+    @OptIn(ExperimentalSerializationApi::class)
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val notify: Boolean = true,
+)
 
 // ---------------------------------------------------------------------------------------------------------
 // Messages

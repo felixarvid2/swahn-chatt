@@ -61,6 +61,12 @@ internal class RetrofitSwahnChatApi(
         return call { raw.updateMe(body) }
     }
 
+    override suspend fun mySettings() = call { raw.mySettings() }
+    override suspend fun updateMySettings(sharePresence: Boolean?): UserSettings {
+        val body = JsonObject(buildMap { sharePresence?.let { put("share_presence", JsonPrimitive(it)) } })
+        return call { raw.updateMySettings(body) }
+    }
+
     override suspend fun changePassword(request: ChangePasswordRequest) = call { raw.changePassword(request) }
     override suspend fun listDevices(userId: String) = call { raw.listDevices(userId) }
     override suspend fun myDevice() = call { raw.myDevice() }

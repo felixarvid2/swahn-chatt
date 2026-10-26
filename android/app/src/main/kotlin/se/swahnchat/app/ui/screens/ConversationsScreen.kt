@@ -73,6 +73,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -174,6 +175,8 @@ fun ConversationsScreen(
     onSettings: () -> Unit,
     onSearch: () -> Unit,
     onStarred: () -> Unit = {},
+    /** The chat open in the right pane (tablets); its row is highlighted. */
+    selectedId: String? = null,
     vm: ConversationsViewModel = hiltViewModel(),
 ) {
     val items by vm.items.collectAsStateWithLifecycle()
@@ -195,6 +198,7 @@ fun ConversationsScreen(
         items, refreshing, vm::refresh, onOpen, onNew, onSettings, connection = connection, onSearch = onSearch, onStarred = onStarred,
         actions = ConversationActions(vm::pin, vm::unpin, vm::mute, vm::unmute, vm::archive, vm::unarchive),
         snackbarHost = { SnackbarHost(snackbar) },
+        selectedId = selectedId,
     )
 }
 
@@ -224,6 +228,7 @@ fun ConversationsContent(
     actions: ConversationActions = ConversationActions(),
     snackbarHost: @Composable () -> Unit = {},
     archivedExpanded: Boolean = false,
+    selectedId: String? = null,
 ) {
     val sections = remember(items) { arrangeConversations(items.orEmpty()) }
     var showArchived by rememberSaveable { mutableStateOf(archivedExpanded) }
@@ -278,7 +283,10 @@ fun ConversationsContent(
             }
             LazyColumn(Modifier.fillMaxSize()) {
                 items(sections.main, key = { it.id }) { item ->
-                    ConversationItem(item, onOpen, menuFor == item.id, { menuFor = if (it) item.id else null }, { muteFor = item.id }, actions)
+                    ConversationItem(
+                        item, onOpen, menuFor == item.id, { menuFor = if (it) item.id else null }, { muteFor = item.id }, actions,
+                        item.id == selectedId,
+                    )
                 }
                 if (sections.archived.isNotEmpty()) {
                     item(key = "archived-header") {
@@ -286,7 +294,10 @@ fun ConversationsContent(
                     }
                     if (showArchived) {
                         items(sections.archived, key = { it.id }) { item ->
-                            ConversationItem(item, onOpen, menuFor == item.id, { menuFor = if (it) item.id else null }, { muteFor = item.id }, actions)
+                            ConversationItem(
+                        item, onOpen, menuFor == item.id, { menuFor = if (it) item.id else null }, { muteFor = item.id }, actions,
+                        item.id == selectedId,
+                    )
                         }
                     }
                 }
@@ -306,9 +317,10 @@ private fun ConversationItem(
     setMenuOpen: (Boolean) -> Unit,
     askMute: () -> Unit,
     actions: ConversationActions,
+    selected: Boolean,
 ) {
     Box {
-        ConversationRow(item, onClick = { onOpen(item.id) }, onLongClick = { setMenuOpen(true) })
+        ConversationRow(item, onClick = { onOpen(item.id) }, onLongClick = { setMenuOpen(true) }, selected = selected)
         DropdownMenu(expanded = menuOpen, onDismissRequest = { setMenuOpen(false) }) {
             if (!item.archived) {
                 DropdownMenuItem(
@@ -382,14 +394,24 @@ private fun MuteDialog(onPick: (MuteDuration) -> Unit, onDismiss: () -> Unit) {
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun ConversationRow(item: ConversationItemUi, onClick: () -> Unit, modifier: Modifier = Modifier, onLongClick: (() -> Unit)? = null) {
+fun ConversationRow(
+    item: ConversationItemUi,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    onLongClick: (() -> Unit)? = null,
+    /** The chat that is open next to the list (tablets). */
+    selected: Boolean = false,
+) {
     val time = rememberListTimeFormatter()
     val unreadText = if (item.unread > 99) "99+" else item.unread.toString()
     // a typing contact is more current than a draft; a draft replaces the last message
     val showsDraft = item.draft != null && !item.typing
     val unreadDescription = if (item.unread > 0) pluralStringResource(R.plurals.unread_messages_description, item.unread, item.unread) else null
     Row(
-        modifier.fillMaxWidth().heightIn(min = 72.dp).combinedClickable(onClick = onClick, onLongClick = onLongClick).padding(horizontal = 16.dp, vertical = 10.dp),
+        modifier.fillMaxWidth().heightIn(min = 72.dp)
+            .then(if (selected) Modifier.background(MaterialTheme.colorScheme.secondaryContainer) else Modifier)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick).padding(horizontal = 16.dp, vertical = 10.dp)
+            .then(if (selected) Modifier.semantics { this.selected = true } else Modifier),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Avatar(item.avatar, size = 52.dp)

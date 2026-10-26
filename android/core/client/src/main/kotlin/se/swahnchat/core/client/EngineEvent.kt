@@ -49,3 +49,6 @@ data class CallSignalEvent(
 
 /** Who is typing where (cleared automatically after a few seconds without refresh). */
 typealias TypingMap = Map<String, Set<String>>
+
+/** A person who shares their online status: [online] now, or [lastSeenAt] (ms) when they were last seen. */
+data class Presence(val online: Boolean, val lastSeenAt: Long?)

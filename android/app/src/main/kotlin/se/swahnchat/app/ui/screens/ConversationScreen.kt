@@ -39,6 +39,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
@@ -144,6 +145,8 @@ import kotlinx.coroutines.launch
 import se.swahnchat.app.R
 import se.swahnchat.app.data.UiError
 import se.swahnchat.app.ui.components.Avatar
+import se.swahnchat.app.ui.components.chatBackground
+import se.swahnchat.app.ui.components.rememberListTimeFormatter
 import se.swahnchat.app.ui.components.BubbleActions
 import se.swahnchat.app.ui.components.MessageBubble
 import se.swahnchat.app.ui.components.PlaybackUi
@@ -362,6 +365,14 @@ fun ConversationScreen(
             onOpenStarred = { nav.onOpenStarred(vm.conversationId) },
             onOpenScheduled = { nav.onOpenScheduled(vm.conversationId) },
             onOpenGallery = { nav.onOpenGallery(vm.conversationId) },
+            onOpenNotificationSettings = {
+                scope.launch {
+                    val intent = runCatching { vm.notificationSettingsIntent() }.getOrNull()
+                    if (intent == null || runCatching { context.startActivity(intent) }.isFailure) {
+                        snackbar.showSnackbar(context.getString(R.string.notification_settings_unavailable))
+                    }
+                }
+            },
             onTakePhoto = attach.onTakePhoto,
             onRecordVideo = attach.onRecordVideo,
             onSharePosition = attach.onSharePosition,
@@ -581,6 +592,8 @@ class ConversationCallbacks(
     val onOpenStarred: () -> Unit = {},
     val onOpenScheduled: () -> Unit = {},
     val onOpenGallery: () -> Unit = {},
+    /** "Avisering": the system's notification settings of this conversation's own channel. */
+    val onOpenNotificationSettings: () -> Unit = {},
     /** The attach menu's "Kamera", "Spela in video" and "Position". */
     val onTakePhoto: () -> Unit = {},
     val onRecordVideo: () -> Unit = {},
@@ -626,6 +639,14 @@ fun ConversationContent(
                                 Text(
                                     typing, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis,
                                     fontStyle = FontStyle.Italic, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            } else if (state.presence != null && !state.isGroup) {
+                                val seen = rememberListTimeFormatter()
+                                Text(
+                                    if (state.presence.online) stringResource(R.string.presence_online)
+                                    else state.presence.lastSeenAt?.let { stringResource(R.string.presence_last_seen, seen(it)) }.orEmpty(),
+                                    style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                    color = if (state.presence.online) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             } else if (members != null || timerText != null) {
                                 Row(
@@ -706,6 +727,11 @@ fun ConversationContent(
                                 },
                                 leadingIcon = { Icon(Icons.Filled.Schedule, null) },
                                 onClick = { menuOpen = false; callbacks.onOpenScheduled() },
+                            )
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.menu_notification_settings)) },
+                                leadingIcon = { Icon(Icons.Filled.Notifications, null) },
+                                onClick = { menuOpen = false; callbacks.onOpenNotificationSettings() },
                             )
                             DropdownMenuItem(
                                 text = { Text(stringResource(R.string.disappearing_title)) },
@@ -850,7 +876,7 @@ private fun MessageList(
     }
     val scope = rememberCoroutineScope()
 
-    Box(modifier.onSizeChanged { viewport = it.height }) {
+    Box(modifier.chatBackground().onSizeChanged { viewport = it.height }) {
         if (state.loaded && state.latestId == null) {
             Text(
                 stringResource(R.string.conversation_empty), style = MaterialTheme.typography.bodyMedium,

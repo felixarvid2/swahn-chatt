@@ -42,7 +42,6 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import se.swahnchat.app.R
 import se.swahnchat.app.ui.model.AvatarUi
@@ -89,7 +88,9 @@ fun Avatar(avatar: AvatarUi, modifier: Modifier = Modifier, size: Dp = 48.dp) {
         if (picture != null) {
             AsyncImage(model = picture, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.size(size))
         } else {
-            Text(initialsOf(avatar.name), color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = (size.value * 0.38f).sp)
+            // sized in dp: text at 200 % must not overflow the circle
+            val fontSize = with(androidx.compose.ui.platform.LocalDensity.current) { (size * 0.38f).toSp() }
+            Text(initialsOf(avatar.name), color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = fontSize)
         }
     }
 }

@@ -236,4 +236,29 @@ class CallNotifierTest {
         // (the test WorkManager has no Hilt worker factory, so the request may already have failed; that it was made is the point)
         assertEquals(1, infos.size)
     }
+
+    private fun nightAt(hour: Int) = java.time.ZonedDateTime.of(java.time.LocalDateTime.of(2026, 10, 20, hour, 0), java.time.ZoneId.of("Europe/Stockholm"))
+
+    @Test fun `in quiet hours a call still rings unless the calls are silenced too`() {
+        prefs.setQuietHours(se.swahnchat.app.data.QuietHoursSettings(enabled = true, muteCalls = false))
+        notifier.now = { nightAt(23) }
+        ring("night-1")
+        assertTrue(ringer.ringing, "messages go quiet, calls do not")
+    }
+
+    @Test fun `with silenced calls a call in quiet hours is shown and can be answered but does not ring`() {
+        prefs.setQuietHours(se.swahnchat.app.data.QuietHoursSettings(enabled = true, muteCalls = true))
+        notifier.now = { nightAt(23) }
+        ring("night-2")
+        assertFalse(ringer.ringing)
+        assertEquals(0, ringer.starts)
+        assertEquals(listOf("Avvisa", "Svara"), incoming()!!.actions.map { it.title.toString() })
+    }
+
+    @Test fun `silenced calls still ring outside quiet hours`() {
+        prefs.setQuietHours(se.swahnchat.app.data.QuietHoursSettings(enabled = true, muteCalls = true))
+        notifier.now = { nightAt(14) }
+        ring("day-1")
+        assertTrue(ringer.ringing)
+    }
 }

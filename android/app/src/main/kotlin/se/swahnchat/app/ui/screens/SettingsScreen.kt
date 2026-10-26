@@ -71,6 +71,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -88,6 +90,19 @@ import se.swahnchat.app.data.ThemeMode
 import se.swahnchat.app.platform.security.Authenticator
 import androidx.fragment.app.FragmentActivity
 import androidx.activity.compose.LocalActivity
+import androidx.compose.material.icons.filled.Bedtime
+import androidx.compose.material.icons.filled.ColorLens
+import androidx.compose.material.icons.filled.Contrast
+import androidx.compose.material.icons.filled.DoneAll
+import androidx.compose.material.icons.filled.Keyboard
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.Wallpaper
+import se.swahnchat.app.AppLocale
+import se.swahnchat.app.data.Accent
+import se.swahnchat.app.data.AppLanguage
+import se.swahnchat.app.data.ChatBackground
+import se.swahnchat.app.data.QuietHours
+import se.swahnchat.app.data.QuietHoursSettings
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.filled.Timer
@@ -126,7 +141,14 @@ class SettingsCallbacks(
     val onDismissPasswordChanged: () -> Unit = {},
     val onLogout: () -> Unit = {},
     val onOpenSystemNotificationSettings: () -> Unit = {},
-    val onOpenLanguageSettings: (() -> Unit)? = null,
+    val onQuietHours: (QuietHoursSettings) -> Unit = {},
+    val onSendReadReceipts: (Boolean) -> Unit = {},
+    val onShowTyping: (Boolean) -> Unit = {},
+    val onSharePresence: (Boolean) -> Unit = {},
+    val onHighContrast: (Boolean) -> Unit = {},
+    val onAccent: (Accent) -> Unit = {},
+    val onChatBackground: (ChatBackground) -> Unit = {},
+    val onLanguage: (AppLanguage) -> Unit = {},
     /** Opens the safety screen of the own account (verify own devices). */
     val onOpenOwnSafety: () -> Unit = {},
     val onOpenStorage: () -> Unit = {},
@@ -153,8 +175,10 @@ fun SettingsScreen(
     LifecycleResumeEffect(vm) { vm.onShown(); fullScreenAllowed = canShowFullScreenCalls(context); onPauseOrDispose {} }
     val activity = LocalActivity.current as? FragmentActivity
     val promptTitle = stringResource(R.string.lock_prompt_title)
+    // the choice lives in the system (Android 13+) or in the preferences; read it here so the row shows the real one
+    var chosenLanguage by remember { mutableStateOf(AppLocale.current(context)) }
     SettingsContent(
-        state,
+        state.copy(language = chosenLanguage),
         SettingsCallbacks(
             onBack = onBack, onSetName = vm::setDisplayName,
             onPickAvatar = { pick.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
@@ -171,9 +195,13 @@ fun SettingsScreen(
                     Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName),
                 )
             },
-            onOpenLanguageSettings = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                { context.startActivity(Intent(Settings.ACTION_APP_LOCALE_SETTINGS, Uri.fromParts("package", context.packageName, null))) }
-            } else null,
+            onQuietHours = vm::setQuietHours, onSendReadReceipts = vm::setSendReadReceipts, onShowTyping = vm::setShowTyping,
+            onSharePresence = vm::setSharePresence, onHighContrast = vm::setHighContrast, onAccent = vm::setAccent,
+            onChatBackground = vm::setChatBackground,
+            onLanguage = { language ->
+                (activity)?.let { vm.applyLanguage(it, language) }
+                chosenLanguage = language
+            },
             onOpenOwnSafety = { onOpenSafety(state.userId) },
             onOpenStorage = onOpenStorage, onOpenAutoDownload = onOpenAutoDownload, onOpenHistory = onOpenHistory,
             onCopy = { copyInvitation(context, it) },
@@ -202,6 +230,10 @@ fun SettingsContent(state: SettingsUiState, cb: SettingsCallbacks, modifier: Mod
     var pickTheme by remember { mutableStateOf(false) }
     var pickPrivacy by remember { mutableStateOf(false) }
     var pickTimeout by remember { mutableStateOf(false) }
+    var quietDialog by remember { mutableStateOf(false) }
+    var pickAccent by remember { mutableStateOf(false) }
+    var pickBackground by remember { mutableStateOf(false) }
+    var pickLanguage by remember { mutableStateOf(false) }
     var lockUnavailable by remember { mutableStateOf(false) }
     var createInvite by remember { mutableStateOf(false) }
     var confirmLogout by remember { mutableStateOf(false) }
@@ -256,6 +288,15 @@ fun SettingsContent(state: SettingsUiState, cb: SettingsCallbacks, modifier: Mod
                 Icons.Filled.Notifications, stringResource(R.string.notifications),
                 stringResource(if (notificationsOn) R.string.notifications_on else R.string.notifications_off), onClick = cb.onOpenSystemNotificationSettings,
             )
+            SettingRow(
+                Icons.Filled.Bedtime, stringResource(R.string.quiet_hours),
+                if (state.quietHours.enabled) {
+                    stringResource(R.string.quiet_hours_summary, QuietHours.clock(state.quietHours.startMinutes), QuietHours.clock(state.quietHours.endMinutes))
+                } else {
+                    stringResource(R.string.quiet_hours_off)
+                },
+                onClick = { quietDialog = true },
+            )
             SettingRow(Icons.Filled.Apps, stringResource(R.string.push_title), pushSummary(state), onClick = { pickDistributor = true })
             if (!cb.fullScreenIntentAllowed) {
                 SettingRow(
@@ -271,6 +312,18 @@ fun SettingsContent(state: SettingsUiState, cb: SettingsCallbacks, modifier: Mod
                 onClick = { pickPrivacy = true },
             )
             SwitchRow(
+                Icons.Filled.DoneAll, stringResource(R.string.read_receipts), stringResource(R.string.read_receipts_hint),
+                state.sendReadReceipts, cb.onSendReadReceipts,
+            )
+            SwitchRow(
+                Icons.Filled.Keyboard, stringResource(R.string.show_typing), stringResource(R.string.show_typing_hint),
+                state.showTyping, cb.onShowTyping,
+            )
+            SwitchRow(
+                Icons.Filled.Visibility, stringResource(R.string.share_presence), stringResource(R.string.share_presence_hint),
+                state.sharePresence == true, cb.onSharePresence, enabled = state.sharePresence != null,
+            )
+            SwitchRow(
                 Icons.Filled.PhoneAndroid, stringResource(R.string.block_screenshots), stringResource(R.string.block_screenshots_hint),
                 state.blockScreenshots, cb.onBlockScreenshots,
             )
@@ -280,9 +333,8 @@ fun SettingsContent(state: SettingsUiState, cb: SettingsCallbacks, modifier: Mod
             )
             SwitchRow(
                 Icons.Filled.Lock, stringResource(R.string.app_lock), stringResource(R.string.app_lock_hint), state.appLockEnabled,
-            ) { on ->
-                if (on && !cb.lockAvailable) lockUnavailable = true else cb.onAuthenticate { cb.onAppLock(on) }
-            }
+                onChange = { on -> if (on && !cb.lockAvailable) lockUnavailable = true else cb.onAuthenticate { cb.onAppLock(on) } },
+            )
             if (state.appLockEnabled) {
                 SettingRow(
                     Icons.Filled.Timer, stringResource(R.string.lock_after), stringResource(timeoutLabel(state.lockTimeout)),
@@ -302,7 +354,23 @@ fun SettingsContent(state: SettingsUiState, cb: SettingsCallbacks, modifier: Mod
             // --- appearance ---
             Section(R.string.settings_appearance)
             SettingRow(Icons.Filled.Palette, stringResource(R.string.theme), stringResource(themeLabel(state.theme)), onClick = { pickTheme = true })
-            cb.onOpenLanguageSettings?.let { open -> SettingRow(Icons.Filled.Language, stringResource(R.string.language), stringResource(R.string.language_hint), onClick = open) }
+            SwitchRow(
+                Icons.Filled.Contrast, stringResource(R.string.high_contrast), stringResource(R.string.high_contrast_hint),
+                state.highContrast, cb.onHighContrast,
+            )
+            SettingRow(
+                Icons.Filled.ColorLens, stringResource(R.string.accent_color),
+                stringResource(accentLabel(if (state.accent == Accent.SYSTEM && Build.VERSION.SDK_INT < Build.VERSION_CODES.S) Accent.TEAL else state.accent)),
+                onClick = { pickAccent = true },
+            )
+            SettingRow(
+                Icons.Filled.Wallpaper, stringResource(R.string.chat_background), stringResource(backgroundLabel(state.chatBackground)),
+                onClick = { pickBackground = true },
+            )
+            SettingRow(
+                Icons.Filled.Language, stringResource(R.string.language), stringResource(languageLabel(state.language)),
+                onClick = { pickLanguage = true },
+            )
 
             // --- about ---
             Section(R.string.settings_about)
@@ -374,6 +442,20 @@ fun SettingsContent(state: SettingsUiState, cb: SettingsCallbacks, modifier: Mod
         ChoiceDialog(
             R.string.lock_after, LockTimeout.entries, state.lockTimeout, ::timeoutLabel,
             onPick = { cb.onLockTimeout(it); pickTimeout = false }, onDismiss = { pickTimeout = false },
+        )
+    }
+    if (quietDialog) QuietHoursDialog(state.quietHours, cb.onQuietHours, onDismiss = { quietDialog = false })
+    if (pickAccent) {
+        AccentDialog(
+            state.accent, systemAvailable = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S,
+            onPick = { cb.onAccent(it); pickAccent = false }, onDismiss = { pickAccent = false },
+        )
+    }
+    if (pickBackground) ChatBackgroundDialog(state.chatBackground, { cb.onChatBackground(it); pickBackground = false }, { pickBackground = false })
+    if (pickLanguage) {
+        ChoiceDialog(
+            R.string.language, AppLanguage.entries, state.language, ::languageLabel, explanation = R.string.language_hint,
+            onPick = { cb.onLanguage(it); pickLanguage = false }, onDismiss = { pickLanguage = false },
         )
     }
     if (lockUnavailable) {
@@ -495,10 +577,11 @@ private fun <T> ChoiceDialog(
 
 @Composable
 private fun SwitchRow(
-    icon: androidx.compose.ui.graphics.vector.ImageVector, title: String, subtitle: String, checked: Boolean, onChange: (Boolean) -> Unit,
+    icon: androidx.compose.ui.graphics.vector.ImageVector, title: String, subtitle: String, checked: Boolean,
+    onChange: (Boolean) -> Unit, enabled: Boolean = true,
 ) {
     Row(
-        Modifier.fillMaxWidth().heightIn(min = 56.dp).toggleable(value = checked, role = Role.Switch, onValueChange = onChange)
+        Modifier.fillMaxWidth().heightIn(min = 56.dp).toggleable(value = checked, enabled = enabled, role = Role.Switch, onValueChange = onChange)
             .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -509,6 +592,12 @@ private fun SwitchRow(
         }
         Switch(checked = checked, onCheckedChange = null)
     }
+}
+
+internal fun languageLabel(language: AppLanguage): Int = when (language) {
+    AppLanguage.SYSTEM -> R.string.language_system
+    AppLanguage.SWEDISH -> R.string.language_swedish
+    AppLanguage.ENGLISH -> R.string.language_english
 }
 
 private fun themeLabel(mode: ThemeMode): Int = when (mode) {
@@ -533,7 +622,7 @@ private fun distributorLabel(state: SettingsUiState): String =
 private fun Section(title: Int) {
     Text(
         stringResource(title), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary,
-        modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 4.dp),
+        modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 4.dp).semantics { heading() },
     )
 }
 

@@ -35,6 +35,10 @@ class SwahnChatApp : Application(), Configuration.Provider {
     override val workManagerConfiguration: Configuration
         get() = Configuration.Builder().setWorkerFactory(workerFactory).build()
 
+    override fun attachBaseContext(base: android.content.Context) {
+        super.attachBaseContext(AppLocale.wrap(base))
+    }
+
     override fun onCreate() {
         super.onCreate()
         starter.start()
@@ -64,12 +68,15 @@ class AppStarter @Inject constructor(
     private val expiry: se.swahnchat.app.platform.work.ExpiryManager,
     private val calls: CallManager,
     private val callNotifier: CallNotifier,
+    private val shortcutSync: se.swahnchat.app.platform.notify.ShortcutSync,
+    private val prefs: se.swahnchat.app.data.AppPrefs,
     @ApplicationScope private val scope: CoroutineScope,
 ) {
     fun start() {
         foreground.addListener { fg -> if (fg) appLock.onForeground() else appLock.onBackground() }
         foreground.attach()
         notifier.start()
+        shortcutSync.start()
         calls.start()
         callNotifier.start()
         session.start()
@@ -78,11 +85,16 @@ class AppStarter @Inject constructor(
         scope.launch {
             session.state.collect {
                 if (it is SessionState.SignedOut) {
+                    notifier.onSignedOut() // notifications, per-chat channels and launcher shortcuts name people: none stays
                     calls.hangup()
                     if (appLock.enabled) appLock.disable()
                 }
             }
         }
+
+        // The privacy switches of the settings decide what the engine tells other people.
+        scope.launch { prefs.sendReadReceipts.collect { engine.sendReadReceipts = it } }
+        scope.launch { prefs.showTyping.collect { engine.sendTypingIndicators = it } }
 
         // Realtime (WebSocket + sync on hints) while the app is visible or a call is going on (the caller's hang-up must reach a
         // ringing phone); otherwise push and WorkManager take over.

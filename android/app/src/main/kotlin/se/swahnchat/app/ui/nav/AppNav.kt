@@ -2,6 +2,10 @@ package se.swahnchat.app.ui.nav
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.material3.VerticalDivider
+import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
@@ -106,6 +110,22 @@ object Routes {
     fun scheduled(conversationId: String) = "scheduled/$conversationId"
 }
 
+/**
+ * Whether the window is wide enough for the conversation list and the open chat side by side: 840 dp or more, or 600 dp or
+ * more in landscape. Only on a device whose shorter side is a tablet's ([smallestWidthDp] 600 or more: tablets, an unfolded
+ * foldable): a phone turned sideways is wider than 840 dp too, and phones keep the single-pane navigation.
+ */
+fun isTwoPane(widthDp: Int, landscape: Boolean, smallestWidthDp: Int): Boolean =
+    smallestWidthDp >= TABLET_SMALLEST_WIDTH_DP &&
+        (widthDp >= TWO_PANE_MIN_WIDTH_DP || (landscape && widthDp >= TWO_PANE_MIN_LANDSCAPE_WIDTH_DP))
+
+private const val TABLET_SMALLEST_WIDTH_DP = 600
+private const val TWO_PANE_MIN_WIDTH_DP = 840
+private const val TWO_PANE_MIN_LANDSCAPE_WIDTH_DP = 600
+
+/** True while the list sits permanently on the left: the "conversations" route then shows an empty detail pane instead of the list. */
+val LocalTwoPane = androidx.compose.runtime.staticCompositionLocalOf { false }
+
 /** The window: a persistent red strip on top while the connection is insecure, then the app. */
 @Composable
 fun AppFrame(insecure: Boolean, content: @Composable () -> Unit) {
@@ -142,11 +162,26 @@ fun AppRoot(vm: AppViewModel = hiltViewModel()) {
             locked -> LockScreen(onUnlocked = vm::unlock)
             else -> {
                 val call by vm.activeCall.collectAsStateWithLifecycle()
+                val signedIn = session is SessionState.SignedIn
+                val configuration = androidx.compose.ui.platform.LocalConfiguration.current
+                val wide = isTwoPane(
+                    configuration.screenWidthDp, configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE,
+                    configuration.smallestScreenWidthDp,
+                )
+                val entry by nav.currentBackStackEntryAsState()
+                val route = entry?.destination?.route
+                // the list stays on the left on every screen of the signed-in app; sign-in and server settings use the whole width
+                val twoPane = wide && signedIn && route != null && route != Routes.LOGIN && route != Routes.SERVER
+                val selected = if (route == Routes.CONVERSATION) entry?.arguments?.getString("id") else null
                 Column(Modifier.fillMaxSize()) {
                     // under the insecure strip the status bar is already taken care of; without a call the bar is not there at all
                     call?.let { OngoingCallBar(it, padStatusBar = !insecure) }
-                    Box(Modifier.weight(1f).then(if (call != null) Modifier.consumeWindowInsets(WindowInsets.statusBars) else Modifier)) {
-                        AppNavHost(nav, signedIn = session is SessionState.SignedIn)
+                    PaneLayout(
+                        twoPane,
+                        list = { ConversationsHost(nav, selected = selected, twoPane = true) },
+                        modifier = Modifier.weight(1f).then(if (call != null) Modifier.consumeWindowInsets(WindowInsets.statusBars) else Modifier),
+                    ) {
+                        androidx.compose.runtime.CompositionLocalProvider(LocalTwoPane provides twoPane) { AppNavHost(nav, signedIn = signedIn) }
                     }
                 }
                 LaunchedEffect(pendingLink) {
@@ -157,9 +192,61 @@ fun AppRoot(vm: AppViewModel = hiltViewModel()) {
     }
 }
 
+private const val LIST_PANE_WEIGHT = 0.38f
+
+/**
+ * The list on the left (38 %) and [detail] on the right when [twoPane]; just [detail] otherwise. [detail] keeps its place in the
+ * composition when the window changes between the two (unfolding a phone), so the navigation host is not rebuilt.
+ */
+@Composable
+fun PaneLayout(twoPane: Boolean, list: @Composable () -> Unit, modifier: Modifier = Modifier, detail: @Composable () -> Unit) {
+    Row(modifier) {
+        if (twoPane) {
+            Box(Modifier.weight(LIST_PANE_WEIGHT).fillMaxHeight()) { list() }
+            VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        }
+        Box(Modifier.weight(if (twoPane) 1f - LIST_PANE_WEIGHT else 1f).fillMaxHeight()) { detail() }
+    }
+}
+
+/** Opens [id]: as the next screen on a phone; on a tablet the chat replaces the one in the right pane (the list stays below it in the stack). */
+private fun openConversation(nav: androidx.navigation.NavHostController, id: String, twoPane: Boolean, selected: String?) {
+    if (!twoPane) {
+        nav.navigate(Routes.conversation(id))
+    } else if (id != selected) {
+        nav.navigate(Routes.conversation(id)) { popUpTo(Routes.CONVERSATIONS) }
+    }
+}
+
+/** The conversation list with its navigation; the same on a phone (as the "conversations" screen) and on a tablet (the left pane). */
+@Composable
+private fun ConversationsHost(nav: androidx.navigation.NavHostController, selected: String?, twoPane: Boolean) {
+    ConversationsScreen(
+        onOpen = { openConversation(nav, it, twoPane, selected) },
+        onNew = { nav.navigate(Routes.NEW) },
+        onSettings = { nav.navigate(Routes.SETTINGS) },
+        onSearch = { nav.navigate(Routes.search()) },
+        onStarred = { nav.navigate(Routes.starred()) },
+        selectedId = selected,
+    )
+}
+
+/** The right pane while no chat is open. */
+@Composable
+private fun SelectConversationPlaceholder() {
+    Column(Modifier.fillMaxSize().padding(32.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(stringResource(R.string.select_conversation), style = MaterialTheme.typography.titleMedium)
+        Text(
+            stringResource(R.string.select_conversation_hint), style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp),
+        )
+    }
+}
+
 @Composable
 private fun AppNavHost(nav: androidx.navigation.NavHostController, signedIn: Boolean) {
     val context = androidx.compose.ui.platform.LocalContext.current
+    val twoPane = LocalTwoPane.current
     // fixed at first composition; later sign-ins and sign-outs navigate (below) instead of rebuilding the graph
     val start = remember { if (signedIn) Routes.CONVERSATIONS else Routes.LOGIN }
     // Follow the session: a revoked device or a logout leads to the login screen, a sign-in to the conversations.
@@ -175,13 +262,7 @@ private fun AppNavHost(nav: androidx.navigation.NavHostController, signedIn: Boo
         composable(Routes.SERVER) { ServerSettingsScreen(onBack = { nav.popBackStack() }) }
         composable(Routes.LOGIN) { LoginScreen(onServerSettings = { nav.navigate(Routes.SERVER) }) }
         composable(Routes.CONVERSATIONS) {
-            ConversationsScreen(
-                onOpen = { nav.navigate(Routes.conversation(it)) },
-                onNew = { nav.navigate(Routes.NEW) },
-                onSettings = { nav.navigate(Routes.SETTINGS) },
-                onSearch = { nav.navigate(Routes.search()) },
-                onStarred = { nav.navigate(Routes.starred()) },
-            )
+            if (LocalTwoPane.current) SelectConversationPlaceholder() else ConversationsHost(nav, selected = null, twoPane = false)
         }
         composable(
             Routes.STARRED,
@@ -248,7 +329,7 @@ private fun AppNavHost(nav: androidx.navigation.NavHostController, signedIn: Boo
                     onForward = { nav.navigate(Routes.forward(it)) },
                     onOpenStarred = { nav.navigate(Routes.starred(it)) },
                     onOpenScheduled = { nav.navigate(Routes.scheduled(it)) },
-                    onOpenConversation = { nav.navigate(Routes.conversation(it)) },
+                    onOpenConversation = { openConversation(nav, it, twoPane, entry.arguments?.getString("id")) },
                     onOpenGallery = { nav.navigate(Routes.gallery(it)) },
                 ),
             )

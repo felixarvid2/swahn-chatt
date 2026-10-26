@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import se.swahnchat.app.data.Accent
 import se.swahnchat.app.data.AppPrefs
 import se.swahnchat.app.data.SessionManager
 import se.swahnchat.app.data.SessionState
@@ -32,6 +33,9 @@ class AppViewModel @Inject constructor(
     val session: StateFlow<SessionState> = sessionManager.state
 
     val theme: StateFlow<ThemeMode> = prefs.theme
+    val accent: StateFlow<Accent> = prefs.accent
+    val highContrast: StateFlow<Boolean> = prefs.highContrast
+    val chatBackground: StateFlow<se.swahnchat.app.data.ChatBackground> = prefs.chatBackground
 
     /** True while the app lock hides the app (only with an account). */
     val locked: StateFlow<Boolean> = combine(lock.locked, sessionManager.state) { l, s -> l && s is SessionState.SignedIn }

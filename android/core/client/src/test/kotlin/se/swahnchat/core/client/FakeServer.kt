@@ -35,7 +35,12 @@ class FakeServer {
         var revoked: Boolean = false, var acked: Long = 0, var createdAt: Long = 0,
     )
 
-    class UserRec(val id: String, val username: String, var displayName: String, val password: String, val isAdmin: Boolean)
+    class UserRec(val id: String, val username: String, var displayName: String, val password: String, val isAdmin: Boolean) {
+        /** Presence as the backend keeps it: opt-in, off by default; the last-seen time is dropped when sharing is switched off. */
+        var sharePresence = false
+        var online = false
+        var presenceLastSeenAt: Long? = null
+    }
 
     class ConvRec(
         val id: String, val type: String, var name: String?, val createdBy: String,
@@ -86,6 +91,8 @@ class FakeServer {
     private val realtimes = CopyOnWriteArrayList<FakeRealtime>()
 
     /** Chronological log of API calls (e.g. "sync:0", "ack:7", "send:<id>") for ordering assertions. */
+    /** The next this many mark-read calls fail like a dropped connection. */
+    @Volatile var failReads = 0
     val log: MutableList<String> = CopyOnWriteArrayList()
 
     /** The server's clock for call messages (`server_ts`); ordinary messages keep the fixed 1000 the tests expect. */
@@ -189,7 +196,17 @@ class FakeServer {
         "access-${d.id}", 0, "refresh-${d.id}", 0, userDto(u), deviceDto(d),
     )
 
-    private fun userDto(u: UserRec) = User(u.id, u.username, u.displayName, null, u.isAdmin, 0)
+    /** Like `GET /users`: `online` and `last_seen_at` only for users who share their presence. */
+    private fun userDto(u: UserRec) =
+        if (u.sharePresence) User(u.id, u.username, u.displayName, null, u.isAdmin, 0, u.online, if (u.online) serverTime() else u.presenceLastSeenAt)
+        else User(u.id, u.username, u.displayName, null, u.isAdmin, 0)
+
+    /** Test control: [username] connects to or leaves the server (only visible to others if that user shares presence). */
+    fun setOnline(username: String, online: Boolean, lastSeenAt: Long? = null) = synchronized(lock) {
+        val u = users.values.first { it.username == username }
+        u.online = online
+        if (!online) u.presenceLastSeenAt = lastSeenAt ?: serverTime()
+    }
     private fun deviceDto(d: DeviceRec) = Device(d.id, d.userId, d.number, d.name, d.createdAt, 0, d.keys?.identityKey)
 
     // --- internals ----------------------------------------------------------------------------------------------------
@@ -260,6 +277,16 @@ class FakeServer {
 
         override suspend fun listUsers(): List<User> = synchronized(lock) { users.values.map { userDto(it) } }
         override suspend fun me(): User = synchronized(lock) { userDto(users.getValue(me.userId)) }
+        override suspend fun mySettings(): UserSettings = synchronized(lock) { UserSettings(users.getValue(me.userId).sharePresence) }
+        override suspend fun updateMySettings(sharePresence: Boolean?): UserSettings = synchronized(lock) {
+            log += "settings:$sharePresence"
+            val u = users.getValue(me.userId)
+            if (sharePresence != null && sharePresence != u.sharePresence) {
+                u.sharePresence = sharePresence
+                u.presenceLastSeenAt = null // nothing from the sharing period is kept
+            }
+            UserSettings(u.sharePresence)
+        }
         override suspend fun updateMe(displayName: String?, avatarAttachmentId: String?, clearAvatar: Boolean): User = me()
         override suspend fun changePassword(request: ChangePasswordRequest) = Unit
         override suspend fun listDevices(userId: String): List<Device> = synchronized(lock) {
@@ -389,8 +416,9 @@ class FakeServer {
         override suspend fun listMessages(conversationId: String, beforeSeq: Long?, limit: Int) = emptyList<Message>()
 
         override suspend fun markRead(conversationId: String, request: MarkReadRequest) {
+            if (failReads > 0) { failReads--; throw IOException("simulated network failure") }
             synchronized(lock) {
-                log += "read:$conversationId:${request.upToSeq}"
+                log += if (request.notify) "read:$conversationId:${request.upToSeq}" else "read:$conversationId:${request.upToSeq}:silent"
                 val c = conversations[conversationId]?.takeIf { me.userId in it.members } ?: throw ApiException.NotFound("not_found", "x")
                 val mem = c.members.getValue(me.userId)
                 if (request.upToSeq <= mem.readSeq) return
@@ -398,7 +426,10 @@ class FakeServer {
                 val data = SwahnChatJson.encodeToJsonElement(
                     ReceiptData(conversationId, me.userId, ReceiptData.READ, emptyList(), request.upToSeq),
                 )
-                for (u in c.members.keys) for (d in activeDevices(u)) if (d.id != me.id) enqueue(d.id, EventType.RECEIPT, conversationId, data)
+                // a silent read (notify=false) reaches only the caller's own other devices, like the backend
+                for (u in c.members.keys) if (request.notify || u == me.userId) {
+                    for (d in activeDevices(u)) if (d.id != me.id) enqueue(d.id, EventType.RECEIPT, conversationId, data)
+                }
             }
         }
 

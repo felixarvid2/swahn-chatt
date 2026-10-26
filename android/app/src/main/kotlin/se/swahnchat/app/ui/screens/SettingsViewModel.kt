@@ -13,7 +13,11 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import se.swahnchat.app.BuildConfig
+import se.swahnchat.app.data.Accent
+import se.swahnchat.app.data.AppLanguage
 import se.swahnchat.app.data.AppPrefs
+import se.swahnchat.app.data.ChatBackground
+import se.swahnchat.app.data.QuietHoursSettings
 import se.swahnchat.app.data.LockTimeout
 import se.swahnchat.app.data.NotificationPrivacy
 import se.swahnchat.app.platform.security.AppLock
@@ -60,6 +64,15 @@ data class SettingsUiState(
     val callsRelayOnly: Boolean = false,
     val appLockEnabled: Boolean = false,
     val lockTimeout: LockTimeout = LockTimeout.IMMEDIATELY,
+    val quietHours: QuietHoursSettings = QuietHoursSettings(),
+    val sendReadReceipts: Boolean = true,
+    val showTyping: Boolean = true,
+    /** The server's word on whether presence is shared; null until it answered (the switch is then off and disabled). */
+    val sharePresence: Boolean? = null,
+    val highContrast: Boolean = false,
+    val accent: Accent = Accent.SYSTEM,
+    val chatBackground: ChatBackground = ChatBackground.PLAIN,
+    val language: AppLanguage = AppLanguage.SYSTEM,
     val versionName: String = "",
     val busy: Boolean = false,
     val error: UiError? = null,
@@ -87,7 +100,22 @@ class SettingsViewModel @Inject constructor(
     private val distributorsTick = MutableStateFlow(0)
 
     private val account = combine(engine.account, repo.userMap()) { a, users -> a to a?.let { users[it.userId] } }
-    private val transient = combine(busy, error, passwordChanged, invitation) { b, e, p, i -> arrayOf<Any?>(b, e, p, i) }
+    private val sharePresence = MutableStateFlow<Boolean?>(null)
+
+    private class Extras(
+        val quiet: QuietHoursSettings, val receipts: Boolean, val typing: Boolean, val presence: Boolean?,
+        val highContrast: Boolean, val accent: Accent, val background: ChatBackground,
+    )
+
+    private val extras = combine(
+        combine(prefs.quietHours, prefs.sendReadReceipts, prefs.showTyping, ::Triple),
+        sharePresence,
+        combine(prefs.highContrast, prefs.accent, prefs.chatBackground, ::Triple),
+    ) { (quiet, receipts, typing), presence, (contrast, accent, background) ->
+        Extras(quiet, receipts, typing, presence, contrast, accent, background)
+    }
+
+    private val transient = combine(busy, error, passwordChanged, invitation, extras) { b, e, p, i, x -> arrayOf<Any?>(b, e, p, i, x) }
 
     private class Choices0(
         val theme: ThemeMode, val privacy: NotificationPrivacy, val blockScreenshots: Boolean, val lockEnabled: Boolean, val lockTimeout: LockTimeout,
@@ -115,6 +143,9 @@ class SettingsViewModel @Inject constructor(
             devices = d, pushStatus = ps, distributors = push.distributors(), selectedDistributor = push.selectedDistributor(),
             theme = c.theme, notificationPrivacy = c.privacy, blockScreenshots = c.blockScreenshots, callsRelayOnly = c.callsRelayOnly,
             appLockEnabled = c.lockEnabled, lockTimeout = c.lockTimeout, versionName = BuildConfig.VERSION_NAME,
+            quietHours = (t[4] as Extras).quiet, sendReadReceipts = (t[4] as Extras).receipts, showTyping = (t[4] as Extras).typing,
+            sharePresence = (t[4] as Extras).presence, highContrast = (t[4] as Extras).highContrast, accent = (t[4] as Extras).accent,
+            chatBackground = (t[4] as Extras).background,
             busy = t[0] as Boolean, error = t[1] as UiError?, passwordChanged = t[2] as Boolean, invitation = t[3] as CreatedInvitation?,
             invitationQr = (t[3] as CreatedInvitation?)?.let { inv -> a?.serverUrl?.let { server -> InviteQr.payload(server, inv.code) } },
         )
@@ -125,6 +156,20 @@ class SettingsViewModel @Inject constructor(
         distributorsTick.update { it + 1 }
         push.refreshStatus()
         loadDevices()
+        loadSharePresence()
+    }
+
+    /** Presence is a setting of the account on the server, not of this phone: read it every time the screen is shown. */
+    private fun loadSharePresence() {
+        viewModelScope.launch {
+            sharePresence.value = try {
+                engine.sharePresence()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                sharePresence.value // offline: keep what we last knew (null = unknown)
+            }
+        }
     }
 
     private fun loadDevices() {
@@ -176,6 +221,18 @@ class SettingsViewModel @Inject constructor(
     fun setBlockScreenshots(value: Boolean) = prefs.setBlockScreenshots(value)
     fun setCallsRelayOnly(value: Boolean) = prefs.setCallsRelayOnly(value)
     fun setLockTimeout(value: LockTimeout) = prefs.setLockTimeout(value)
+    fun setQuietHours(value: QuietHoursSettings) = prefs.setQuietHours(value)
+    fun setSendReadReceipts(value: Boolean) = prefs.setSendReadReceipts(value)
+    fun setShowTyping(value: Boolean) = prefs.setShowTyping(value)
+    fun setHighContrast(value: Boolean) = prefs.setHighContrast(value)
+    fun setAccent(value: Accent) = prefs.setAccent(value)
+    fun setChatBackground(value: ChatBackground) = prefs.setChatBackground(value)
+
+    /** The language is applied by [se.swahnchat.app.AppLocale] (it needs the activity); this keeps the choice. */
+    fun applyLanguage(activity: android.app.Activity, value: AppLanguage) = se.swahnchat.app.AppLocale.set(activity, prefs, value)
+
+    /** Switches presence on the server; the switch shows the server's answer, not the wish. A failure is shown like any other. */
+    fun setSharePresence(value: Boolean) = run { sharePresence.value = engine.setSharePresence(value) }
 
     /** Called after the user authenticated (the screen asks first). */
     fun setAppLock(enabled: Boolean) = if (enabled) lock.enable() else lock.disable()

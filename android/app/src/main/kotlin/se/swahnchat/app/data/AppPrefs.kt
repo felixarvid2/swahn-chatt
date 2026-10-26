@@ -9,6 +9,10 @@ import kotlinx.coroutines.flow.asStateFlow
 import javax.inject.Inject
 import javax.inject.Singleton
 
+/** The preference file and the language key are read before the app (and Hilt) start, see [AppLocale]. */
+internal const val PREFS_FILE = "swahnchat_prefs"
+internal const val PREF_LANGUAGE = "language"
+
 enum class ThemeMode { SYSTEM, LIGHT, DARK }
 
 /** What a message notification reveals (also on the lock screen). */
@@ -49,7 +53,7 @@ object VoiceSpeed {
  */
 @Singleton
 class AppPrefs @Inject constructor(@ApplicationContext context: Context) {
-    private val prefs: SharedPreferences = context.getSharedPreferences("swahnchat_prefs", Context.MODE_PRIVATE)
+    private val prefs: SharedPreferences = context.getSharedPreferences(PREFS_FILE, Context.MODE_PRIVATE)
 
     private val _serverUrl = MutableStateFlow(prefs.getString(KEY_SERVER, "").orEmpty())
 
@@ -151,6 +155,79 @@ class AppPrefs @Inject constructor(@ApplicationContext context: Context) {
         prefs.edit().putString(key, mode.name).apply()
     }
 
+    private val _quietHours = MutableStateFlow(
+        QuietHoursSettings(
+            enabled = prefs.getBoolean(KEY_QUIET_ENABLED, false),
+            startMinutes = prefs.getInt(KEY_QUIET_START, 22 * 60).coerceIn(0, QuietHours.MINUTES_PER_DAY - 1),
+            endMinutes = prefs.getInt(KEY_QUIET_END, 7 * 60).coerceIn(0, QuietHours.MINUTES_PER_DAY - 1),
+            days = daysFromMask(prefs.getInt(KEY_QUIET_DAYS, ALL_DAYS_MASK)),
+            muteCalls = prefs.getBoolean(KEY_QUIET_CALLS, false),
+        ),
+    )
+
+    /** Quiet hours for message notifications (and optionally calls). Off by default. */
+    val quietHours: StateFlow<QuietHoursSettings> = _quietHours.asStateFlow()
+
+    fun setQuietHours(value: QuietHoursSettings) {
+        _quietHours.value = value
+        prefs.edit().putBoolean(KEY_QUIET_ENABLED, value.enabled).putInt(KEY_QUIET_START, value.startMinutes)
+            .putInt(KEY_QUIET_END, value.endMinutes).putInt(KEY_QUIET_DAYS, daysToMask(value.days)).putBoolean(KEY_QUIET_CALLS, value.muteCalls).apply()
+    }
+
+    private val _sendReadReceipts = MutableStateFlow(prefs.getBoolean(KEY_READ_RECEIPTS, true))
+
+    /** "Skicka läskvitton": off = reads are sent silently (`notify: false`). You still see other people's receipts. */
+    val sendReadReceipts: StateFlow<Boolean> = _sendReadReceipts.asStateFlow()
+
+    fun setSendReadReceipts(value: Boolean) {
+        _sendReadReceipts.value = value
+        prefs.edit().putBoolean(KEY_READ_RECEIPTS, value).apply()
+    }
+
+    private val _showTyping = MutableStateFlow(prefs.getBoolean(KEY_SHOW_TYPING, true))
+
+    /** "Visa när jag skriver": off = no typing events are sent. You still see when others type. */
+    val showTyping: StateFlow<Boolean> = _showTyping.asStateFlow()
+
+    fun setShowTyping(value: Boolean) {
+        _showTyping.value = value
+        prefs.edit().putBoolean(KEY_SHOW_TYPING, value).apply()
+    }
+
+    private val _highContrast = MutableStateFlow(prefs.getBoolean(KEY_HIGH_CONTRAST, false))
+
+    /** "Hög kontrast": a colour variant with at least 7:1 for text and strong outlines. */
+    val highContrast: StateFlow<Boolean> = _highContrast.asStateFlow()
+
+    fun setHighContrast(value: Boolean) {
+        _highContrast.value = value
+        prefs.edit().putBoolean(KEY_HIGH_CONTRAST, value).apply()
+    }
+
+    private val _accent = MutableStateFlow(enumPref(KEY_ACCENT, Accent.SYSTEM))
+    val accent: StateFlow<Accent> = _accent.asStateFlow()
+
+    fun setAccent(value: Accent) {
+        _accent.value = value
+        prefs.edit().putString(KEY_ACCENT, value.name).apply()
+    }
+
+    private val _chatBackground = MutableStateFlow(enumPref(KEY_CHAT_BACKGROUND, ChatBackground.PLAIN))
+    val chatBackground: StateFlow<ChatBackground> = _chatBackground.asStateFlow()
+
+    fun setChatBackground(value: ChatBackground) {
+        _chatBackground.value = value
+        prefs.edit().putString(KEY_CHAT_BACKGROUND, value.name).apply()
+    }
+
+    /**
+     * The language chosen in the app. Android 13+ keeps the real choice in the system (`LocaleManager`, also changed in the
+     * phone's settings); this is what older versions use, and what is read before anything else starts (see [AppLocale]).
+     */
+    var language: AppLanguage
+        get() = enumPref(PREF_LANGUAGE, AppLanguage.SYSTEM)
+        set(v) { prefs.edit().putString(PREF_LANGUAGE, v.name).apply() }
+
     /** The endpoint the distributor gave us. */
     var pushEndpoint: String?
         get() = prefs.getString(KEY_PUSH_ENDPOINT, null)
@@ -175,6 +252,21 @@ class AppPrefs @Inject constructor(@ApplicationContext context: Context) {
         set(v) { prefs.edit().putBoolean(KEY_NOTIF_ASKED, v).apply() }
 
     private companion object {
+        const val KEY_QUIET_ENABLED = "quiet_enabled"
+        const val KEY_QUIET_START = "quiet_start"
+        const val KEY_QUIET_END = "quiet_end"
+        const val KEY_QUIET_DAYS = "quiet_days"
+        const val KEY_QUIET_CALLS = "quiet_calls"
+        const val KEY_READ_RECEIPTS = "send_read_receipts"
+        const val KEY_SHOW_TYPING = "show_typing"
+        const val KEY_HIGH_CONTRAST = "high_contrast"
+        const val KEY_ACCENT = "accent"
+        const val KEY_CHAT_BACKGROUND = "chat_background"
+        const val ALL_DAYS_MASK = 0b1111111
+
+        fun daysToMask(days: Set<java.time.DayOfWeek>): Int = days.fold(0) { m, d -> m or (1 shl (d.value - 1)) }
+        fun daysFromMask(mask: Int): Set<java.time.DayOfWeek> = java.time.DayOfWeek.entries.filterTo(HashSet()) { mask and (1 shl (it.value - 1)) != 0 }
+
         const val KEY_SERVER = "server_url"
         const val KEY_THEME = "theme"
         const val KEY_VOICE_SPEED = "voice_speed"

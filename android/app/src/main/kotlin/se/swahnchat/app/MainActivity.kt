@@ -22,6 +22,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dagger.hilt.android.AndroidEntryPoint
 import se.swahnchat.app.data.ThemeMode
 import se.swahnchat.app.ui.components.LocalAvatarLoader
+import se.swahnchat.app.ui.components.LocalChatBackground
 import se.swahnchat.app.ui.nav.AppRoot
 import se.swahnchat.app.ui.nav.AppViewModel
 import se.swahnchat.app.ui.theme.SwahnChatTheme
@@ -30,6 +31,10 @@ import se.swahnchat.app.ui.theme.SwahnChatTheme
 class MainActivity : FragmentActivity() { // FragmentActivity: BiometricPrompt needs one
     @Inject lateinit var prefs: AppPrefs
     @Inject lateinit var lock: AppLock
+
+    override fun attachBaseContext(newBase: android.content.Context) {
+        super.attachBaseContext(se.swahnchat.app.AppLocale.wrap(newBase))
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -44,14 +49,17 @@ class MainActivity : FragmentActivity() { // FragmentActivity: BiometricPrompt n
         setContent {
             val vm: AppViewModel = hiltViewModel()
             val theme by vm.theme.collectAsStateWithLifecycle()
+            val accent by vm.accent.collectAsStateWithLifecycle()
+            val highContrast by vm.highContrast.collectAsStateWithLifecycle()
+            val background by vm.chatBackground.collectAsStateWithLifecycle()
             val dark = when (theme) {
                 ThemeMode.SYSTEM -> isSystemInDarkTheme()
                 ThemeMode.LIGHT -> false
                 ThemeMode.DARK -> true
             }
             val loader: suspend (String) -> java.io.File? = remember(vm) { { id -> vm.avatarFile(id) } }
-            SwahnChatTheme(darkTheme = dark) {
-                CompositionLocalProvider(LocalAvatarLoader provides loader) { AppRoot(vm) }
+            SwahnChatTheme(darkTheme = dark, accent = accent, highContrast = highContrast) {
+                CompositionLocalProvider(LocalAvatarLoader provides loader, LocalChatBackground provides background) { AppRoot(vm) }
             }
         }
     }
