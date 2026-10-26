@@ -1,10 +1,16 @@
 name: Swahn Chat release
 
-# Push a tag such as `swahnchat-v1.0.0` to build the release APK and publish it as a GitHub release.
+# Push a tag such as `swahnchat-v1.0.0` to build the release APK and publish it as a GitHub release, or run the
+# workflow by hand with a version: it then creates the tag `swahnchat-v<version>` on the commit it built.
 on:
   push:
     tags:
       - "swahnchat-v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version without the prefix, e.g. 0.6.0 (must match versionName in app/build.gradle.kts)"
+        required: true
 
 permissions:
   contents: write # create the release
@@ -21,13 +27,19 @@ jobs:
       run:
         working-directory: android
     env:
-      TAG: ${{ github.ref_name }}
+      TAG: ${{ github.event_name == 'workflow_dispatch' && format('swahnchat-v{0}', inputs.version) || github.ref_name }}
       KEYSTORE_BASE64: ${{ secrets.SWAHNCHAT_KEYSTORE_BASE64 }}
       KEYSTORE_PASSWORD: ${{ secrets.SWAHNCHAT_KEYSTORE_PASSWORD }}
       KEY_ALIAS: ${{ secrets.SWAHNCHAT_KEY_ALIAS }}
       KEY_PASSWORD: ${{ secrets.SWAHNCHAT_KEY_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Check the version matches the app
+        run: |
+          want="${TAG#swahnchat-v}"
+          have=$(sed -n 's/^ *versionName = "\(.*\)"$/\1/p' app/build.gradle.kts)
+          if [ "$want" != "$have" ]; then echo "::error::tag $TAG does not match versionName $have"; exit 1; fi
 
       - uses: actions/setup-java@v4
         with:
@@ -95,4 +107,9 @@ jobs:
             notes="RELEASE KEY MISSING: this APK is signed with the public debug key. Do not hand it to the family; set the SWAHNCHAT_KEYSTORE_* secrets and re-run (docs/ANDROID_SETUP.md). SHA-256 is in \`$APK_NAME.sha256\`."
           fi
           # shellcheck disable=SC2086
-          gh release create "$TAG" "$APK_NAME" "$APK_NAME.sha256" --repo "$GITHUB_REPOSITORY" --verify-tag --title "Swahn Chat ${TAG#swahnchat-v}" --notes "$notes" $flags
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            flags="$flags --target $GITHUB_SHA" # creates the tag on the commit that was built
+          else
+            flags="$flags --verify-tag"
+          fi
+          gh release create "$TAG" "$APK_NAME" "$APK_NAME.sha256" --repo "$GITHUB_REPOSITORY" --title "Swahn Chat ${TAG#swahnchat-v}" --notes "$notes" $flags
