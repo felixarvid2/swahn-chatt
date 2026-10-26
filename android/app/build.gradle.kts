@@ -1,6 +1,7 @@
+import com.android.build.api.variant.HostTestBuilder
+
 plugins {
     alias(libs.plugins.android.application)
-    alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.ksp)
@@ -9,7 +10,10 @@ plugins {
 
 android {
     namespace = "se.swahnchat.app"
-    compileSdk = 35
+    compileSdk = 37
+    // The NDK only strips libsignal_jni.so (74 MB -> 7 MB per ABI). Pinned to the version CI installs: AGP 9 would otherwise
+    // look for its own default (28.x) and, when that is missing, silently package the unstripped libraries.
+    ndkVersion = "27.0.12077973"
     // Which build type the instrumented tests run against: debug (default) or qa (R8-minified, see below). The tasks are
     // connected<Debug|Qa>AndroidTest; AGP only creates the one for this build type, so CI passes -PtestBuildType=qa.
     val testBuild = providers.gradleProperty("testBuildType").getOrElse("debug")
@@ -111,9 +115,9 @@ android {
 
     // Room's exported schemas are assets of the debug variant (never of release), so MigrationTestHelper can open old
     // versions in Robolectric tests and on a device; unit tests read the assets of the variant under test.
-    sourceSets.getByName("debug").assets.srcDir("$projectDir/schemas")
+    sourceSets.getByName("debug").assets.directories.add("$projectDir/schemas")
     // ... and of the test APK, which is where MigrationTestHelper looks on a device (needed for the qa build too).
-    sourceSets.getByName("androidTest").assets.srcDir("$projectDir/schemas")
+    sourceSets.getByName("androidTest").assets.directories.add("$projectDir/schemas")
 }
 
 // The UnifiedPush connector drags in the JVM build of Tink, which duplicates tink-android's classes.
@@ -122,15 +126,13 @@ configurations.all { exclude(group = "com.google.crypto.tink", module = "tink") 
 // Unit tests run against the debug variant: the exported Room schemas and the Compose test manifest are debug-only. The
 // release variant is checked by assembleRelease (R8 with the real rules) instead.
 androidComponents {
-    beforeVariants(selector().withBuildType("release")) { variant -> variant.enableUnitTest = false }
-    beforeVariants(selector().withBuildType("qa")) { variant -> variant.enableUnitTest = false }
+    beforeVariants(selector().withBuildType("release")) { variant -> variant.hostTests[HostTestBuilder.UNIT_TEST_TYPE]?.enable = false }
+    beforeVariants(selector().withBuildType("qa")) { variant -> variant.hostTests[HostTestBuilder.UNIT_TEST_TYPE]?.enable = false }
 }
 
 kotlin {
     compilerOptions {
         jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
-        // Qualifiers such as @ApplicationScope on constructor properties apply to the parameter and the field (Dagger needs that).
-        freeCompilerArgs.add("-Xannotation-default-target=param-property")
     }
 }
 
@@ -195,7 +197,8 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
 
-    testImplementation(kotlin("test"))
+    // AGP's built-in Kotlin does not pick the JUnit variant of kotlin-test by itself (the Kotlin Android plugin used to)
+    testImplementation(kotlin("test-junit"))
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.robolectric)
@@ -208,7 +211,7 @@ dependencies {
     testImplementation(libs.androidx.work.testing)
 
     // On-device tests (src/androidTest): connectedDebugAndroidTest / connectedQaAndroidTest
-    androidTestImplementation(kotlin("test"))
+    androidTestImplementation(kotlin("test-junit"))
     androidTestImplementation(libs.junit)
     androidTestImplementation(libs.androidx.test.core)
     androidTestImplementation(libs.androidx.test.runner)

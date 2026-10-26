@@ -36,7 +36,7 @@ jobs:
 
       - uses: android-actions/setup-android@v3
         with:
-          packages: "platform-tools platforms;android-35 build-tools;35.0.0"
+          packages: "platform-tools platforms;android-37.0 build-tools;36.0.0"
 
       - uses: gradle/actions/setup-gradle@v4
 
@@ -85,7 +85,7 @@ jobs:
 
       - uses: android-actions/setup-android@v3
         with:
-          packages: "platform-tools platforms;android-35 build-tools;35.0.0 ndk;27.0.12077973"
+          packages: "platform-tools platforms;android-37.0 build-tools;36.0.0 ndk;27.0.12077973"
 
       - uses: gradle/actions/setup-gradle@v4
 
@@ -164,7 +164,7 @@ jobs:
       # (see docs/ANDROID_SETUP.md); without it the APK would be ~185 MB.
       - uses: android-actions/setup-android@v3
         with:
-          packages: "platform-tools platforms;android-35 build-tools;35.0.0 ndk;27.0.12077973"
+          packages: "platform-tools platforms;android-37.0 build-tools;36.0.0 ndk;27.0.12077973"
 
       - uses: gradle/actions/setup-gradle@v4
 

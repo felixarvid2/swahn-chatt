@@ -78,6 +78,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.heading
@@ -191,6 +192,7 @@ fun SettingsScreen(
 ) {
     val state by vm.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    val resources = LocalResources.current
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri -> uri?.let(vm::setAvatar) }
     // checked again when the person comes back from the system page that switches it
     var fullScreenAllowed by remember { mutableStateOf(canShowFullScreenCalls(context)) }
@@ -232,7 +234,8 @@ fun SettingsScreen(
             onBattery = { se.swahnchat.app.diagnostics.BatteryOptimization.open(context) },
             onCopy = { copyInvitation(context, it) },
             onShare = { code ->
-                val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, context.getString(R.string.invitation_share_text, code))
+                val send = Intent(Intent.ACTION_SEND).setType("text/plain")
+                    .putExtra(Intent.EXTRA_TEXT, resources.getString(R.string.invitation_share_text, code))
                 context.startActivity(Intent.createChooser(send, null))
             },
         ),

@@ -70,6 +70,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
@@ -183,6 +184,7 @@ fun ConversationsScreen(
     val refreshing by vm.refreshing.collectAsStateWithLifecycle()
     val connection by vm.connection.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    val resources = LocalResources.current
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
     LaunchedEffect(Unit) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
@@ -193,7 +195,7 @@ fun ConversationsScreen(
         }
     }
     val snackbar = remember { SnackbarHostState() }
-    LaunchedEffect(vm) { vm.messages.collect { snackbar.showSnackbar(context.getString(it, MAX_PINNED)) } }
+    LaunchedEffect(vm) { vm.messages.collect { snackbar.showSnackbar(resources.getString(it, MAX_PINNED)) } }
     ConversationsContent(
         items, refreshing, vm::refresh, onOpen, onNew, onSettings, connection = connection, onSearch = onSearch, onStarred = onStarred,
         actions = ConversationActions(vm::pin, vm::unpin, vm::mute, vm::unmute, vm::archive, vm::unarchive),

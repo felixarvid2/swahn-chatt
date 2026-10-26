@@ -41,11 +41,11 @@ import se.swahnchat.app.data.Accent
 import se.swahnchat.app.data.ChatBackground
 import se.swahnchat.app.data.QuietHours
 import se.swahnchat.app.data.QuietHoursSettings
+import se.swahnchat.app.ui.components.currentLocale
 import se.swahnchat.app.ui.components.chatBackground
 import se.swahnchat.app.ui.theme.accentSwatch
 import java.time.DayOfWeek
 import java.time.format.TextStyle
-import java.util.Locale
 
 /** "Tysta timmar": on/off, from and to (the system's time picker), the days and whether calls are silenced too. */
 @OptIn(ExperimentalLayoutApi::class)
@@ -76,7 +76,7 @@ fun QuietHoursDialog(settings: QuietHoursSettings, onChange: (QuietHoursSettings
                             FilterChip(
                                 selected = on, modifier = Modifier.heightIn(min = 48.dp),
                                 onClick = { onChange(settings.copy(days = if (on) settings.days - day else settings.days + day)) },
-                                label = { Text(day.getDisplayName(TextStyle.SHORT, Locale.getDefault())) },
+                                label = { Text(day.getDisplayName(TextStyle.SHORT, currentLocale())) },
                             )
                         }
                     }

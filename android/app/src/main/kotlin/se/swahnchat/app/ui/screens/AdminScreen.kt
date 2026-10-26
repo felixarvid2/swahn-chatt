@@ -49,6 +49,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.ImeAction
@@ -120,6 +121,7 @@ class AdminCallbacks(
 fun AdminScreen(onBack: () -> Unit, vm: AdminViewModel = hiltViewModel()) {
     val state by vm.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    val resources = LocalResources.current
     AdminContent(
         state,
         AdminCallbacks(
@@ -138,7 +140,7 @@ fun AdminScreen(onBack: () -> Unit, vm: AdminViewModel = hiltViewModel()) {
             onLoadMoreAudit = vm::loadMoreAudit, onCopy = { copySensitive(context, it) },
             onShare = { code ->
                 val send = android.content.Intent(android.content.Intent.ACTION_SEND).setType("text/plain")
-                    .putExtra(android.content.Intent.EXTRA_TEXT, context.getString(R.string.invitation_share_text, code))
+                    .putExtra(android.content.Intent.EXTRA_TEXT, resources.getString(R.string.invitation_share_text, code))
                 context.startActivity(android.content.Intent.createChooser(send, null))
             },
             onDismissError = vm::dismissError,

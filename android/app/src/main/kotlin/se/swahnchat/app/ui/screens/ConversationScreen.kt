@@ -123,6 +123,7 @@ import androidx.compose.ui.input.pointer.changedToUp
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -205,6 +206,7 @@ fun ConversationScreen(
     val playback by vm.playback.collectAsStateWithLifecycle()
     val items = vm.rows.collectAsLazyPagingItems()
     val context = LocalContext.current
+    val resources = LocalResources.current
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     var confirmDelete by remember { mutableStateOf<String?>(null) }
@@ -225,7 +227,7 @@ fun ConversationScreen(
     val pickMedia = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(10)) { vm.attach(it) }
     val pickDocs = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { vm.attach(it) }
     val micPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (!granted) scope.launch { snackbar.showSnackbar(context.getString(R.string.error_microphone_permission)) }
+        if (!granted) scope.launch { snackbar.showSnackbar(resources.getString(R.string.error_microphone_permission)) }
     }
 
     val attach = rememberAttachCallbacks(vm, state.locationShare)
@@ -244,7 +246,7 @@ fun ConversationScreen(
         vm.effects.collect { effect ->
             when (effect) {
                 is ConversationEffect.Error -> snackbar.showSnackbar(errorText(effect.error))
-                is ConversationEffect.Notice -> snackbar.showSnackbar(context.getString(effect.message))
+                is ConversationEffect.Notice -> snackbar.showSnackbar(resources.getString(effect.message))
                 is ConversationEffect.OpenFile -> openFile(context, effect.path, effect.mime, effect.name)
                 is ConversationEffect.ScrollTo -> scrollTo(effect.messageId)
                 is ConversationEffect.OpenConversation -> nav.onOpenConversation(effect.conversationId)
@@ -369,7 +371,7 @@ fun ConversationScreen(
                 scope.launch {
                     val intent = runCatching { vm.notificationSettingsIntent() }.getOrNull()
                     if (intent == null || runCatching { context.startActivity(intent) }.isFailure) {
-                        snackbar.showSnackbar(context.getString(R.string.notification_settings_unavailable))
+                        snackbar.showSnackbar(resources.getString(R.string.notification_settings_unavailable))
                     }
                 }
             },
@@ -532,9 +534,10 @@ internal fun openFile(context: Context, path: String, mime: String, name: String
 @Composable
 fun errorTexts(): (UiError) -> String {
     val context = LocalContext.current
+    val resources = LocalResources.current
     return remember(context) {
         { e: UiError ->
-            context.getString(
+            resources.getString(
                 when (e) {
                     UiError.NETWORK -> R.string.error_network
                     UiError.INVALID_CREDENTIALS -> R.string.error_invalid_credentials
