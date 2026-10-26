@@ -70,11 +70,11 @@ class RoomEngineE2ETest {
         )
         try {
             val admin = MemoryPhone("admin", scope)
-            admin.engine.redeemInvite(url, adminInvite, "admin_$run", "admin-password-1", "Admin")
+            honouringRateLimit { admin.engine.redeemInvite(url, adminInvite, "admin_$run", "admin-password-1", "Admin") }
             var alice = aliceEngine()
-            alice.redeemInvite(url, admin.engine.createInvitation(note = "alice").code, "alice_$run", "alice-password-1", "Alice")
+            honouringRateLimit { alice.redeemInvite(url, admin.engine.createInvitation(note = "alice").code, "alice_$run", "alice-password-1", "Alice") }
             val bob = MemoryPhone("bob", scope)
-            bob.engine.redeemInvite(url, admin.engine.createInvitation(note = "bob").code, "bob_$run", "bob-password-1", "Bob")
+            honouringRateLimit { bob.engine.redeemInvite(url, admin.engine.createInvitation(note = "bob").code, "bob_$run", "bob-password-1", "Bob") }
             alice.refreshDirectory(); bob.engine.refreshDirectory()
             val aliceId = alice.account.value!!.userId
             val aliceStore = RoomLocalStore(db)
@@ -170,4 +170,19 @@ class RoomEngineE2ETest {
             db.close()
         }
     }
+}
+
+/**
+ * Runs [block] and, when the real server answers 429, waits as long as it asks and tries again (at most [attempts] times).
+ * The e2e suites sign many accounts up from one address faster than a family would; the limit itself stays on.
+ */
+private suspend fun <T> honouringRateLimit(attempts: Int = 4, block: suspend () -> T): T {
+    repeat(attempts - 1) {
+        try {
+            return block()
+        } catch (e: se.swahnchat.core.network.ApiException.RateLimited) {
+            kotlinx.coroutines.delay(((e.retryAfterSeconds ?: 5L).coerceIn(1L, 60L)) * 1000L)
+        }
+    }
+    return block()
 }
