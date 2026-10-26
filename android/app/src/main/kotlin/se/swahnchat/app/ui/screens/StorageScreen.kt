@@ -39,6 +39,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -160,10 +161,11 @@ fun StorageContent(
     var confirm by remember { mutableStateOf<StorageConfirm?>(null) }
     val snackbar = remember { SnackbarHostState() }
     val context = LocalContext.current
+    val resources = LocalResources.current
     val freed = state.freed
     LaunchedEffect(freed) {
         if (freed != null) {
-            snackbar.showSnackbar(context.getString(R.string.storage_freed, android.text.format.Formatter.formatShortFileSize(context, freed)))
+            snackbar.showSnackbar(resources.getString(R.string.storage_freed, android.text.format.Formatter.formatShortFileSize(context, freed)))
             onMessageShown()
         }
     }

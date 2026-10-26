@@ -52,6 +52,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -87,6 +88,7 @@ import se.swahnchat.app.R
 import se.swahnchat.app.data.ChatRepository
 import se.swahnchat.app.data.db.toModel
 import se.swahnchat.app.media.MediaValidator
+import se.swahnchat.app.ui.components.currentLocale
 import se.swahnchat.app.ui.components.formatSize
 import se.swahnchat.app.ui.model.FileItem
 import se.swahnchat.app.ui.model.GalleryItem
@@ -177,12 +179,13 @@ fun MediaGalleryScreen(
     vm: MediaGalleryViewModel = hiltViewModel(),
 ) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(vm) {
         vm.effects.collect { effect ->
             when (effect) {
                 is GalleryEffect.OpenFile -> openFile(context, effect.path, effect.mime, effect.name)
-                GalleryEffect.Failed -> snackbar.showSnackbar(context.getString(R.string.attachment_invalid))
+                GalleryEffect.Failed -> snackbar.showSnackbar(resources.getString(R.string.attachment_invalid))
             }
         }
     }
@@ -270,7 +273,7 @@ private fun <T : Any> LazyPagingItems<T>.isEmptyAndLoaded() =
 @Composable
 private fun MediaGrid(items: LazyPagingItems<GalleryItem>, onOpen: (String, String) -> Unit) {
     EmptyOrLoading(items.isInitialLoading(), items.isEmptyAndLoaded(), R.string.gallery_empty_media) {
-        val locale = Locale.getDefault()
+        val locale = currentLocale()
         val monthFormat = remember(locale) { DateTimeFormatter.ofPattern("LLLL yyyy", locale) }
         LazyVerticalGrid(
             columns = GridCells.Adaptive(minSize = 104.dp),
@@ -402,7 +405,7 @@ private fun LinkList(items: LazyPagingItems<LinkItem>, onOpenMessage: (String) -
 
 @Composable
 private fun rememberDateFormatter(): (Long) -> String {
-    val locale = Locale.getDefault()
+    val locale = currentLocale()
     val format = remember(locale) { DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM).withLocale(locale) }
     return { time -> java.time.Instant.ofEpochMilli(time).atZone(ZoneId.systemDefault()).toLocalDate().format(format) }
 }

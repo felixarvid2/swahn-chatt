@@ -150,7 +150,7 @@ fun isInsecureUrl(url: String?): Boolean = url != null && url.trim().startsWith(
 // --- formatting -------------------------------------------------------------------------------------------------------
 
 @Composable
-fun currentLocale(): Locale = LocalConfiguration.current.locales[0] ?: Locale.getDefault()
+fun currentLocale(): Locale = LocalConfiguration.current.locales[0] ?: Locale.ROOT
 
 /** "14:05" / "2:05 PM", following the device's 12/24 hour setting. */
 @Composable

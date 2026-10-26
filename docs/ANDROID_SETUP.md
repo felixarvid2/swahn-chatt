@@ -13,7 +13,7 @@ set to English (Android 13+ can also set the language per app).
 | | |
 |---|---|
 | JDK | 17 or newer (JDK 21 works). `java -version` must work in the shell that runs Gradle |
-| Android SDK | Platform **android-35** and build-tools **35.0.0**. Easiest: install Android Studio, or only the command-line tools and `sdkmanager "platforms;android-35" "build-tools;35.0.0"` |
+| Android SDK | Platform **android-37.0** and build-tools **36.0.0** (compileSdk 37; the app still targets API 35). Easiest: install Android Studio, or only the command-line tools and `sdkmanager "platforms;android-37.0" "build-tools;36.0.0"` |
 | Android NDK | `sdkmanager "ndk;27.0.12077973"`. Not needed to compile, but **without it the Android Gradle plugin cannot strip the Signal library** (`libsignal_jni.so` is 74 MB per CPU architecture with debug symbols and 7 MB without), so the APK becomes ~185 MB instead of ~30 MB. Gradle prints "Unable to strip the following libraries" when it is missing |
 | Internet | The first build downloads about 1 GB of dependencies |
 
