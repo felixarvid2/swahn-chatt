@@ -22,9 +22,11 @@ import se.swahnchat.app.data.AppPrefs
 import se.swahnchat.app.data.ConversationSettingsStore
 import se.swahnchat.app.data.MuteDuration
 import se.swahnchat.app.data.NotificationPrivacy
+import se.swahnchat.app.data.QuietHoursSettings
 import se.swahnchat.app.data.RoomTestDb
 import se.swahnchat.app.data.db.AppDatabase
 import se.swahnchat.app.data.db.RoomLocalStore
+import se.swahnchat.app.platform.notify.ConversationShortcuts
 import se.swahnchat.app.platform.notify.MarkReadReceiver
 import se.swahnchat.app.platform.notify.Notifier
 import se.swahnchat.app.platform.notify.ReplyReceiver
@@ -44,6 +46,7 @@ import se.swahnchat.core.network.InMemoryTokenProvider
 import se.swahnchat.core.network.Tokens
 import java.io.File
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
@@ -60,6 +63,7 @@ class NotifierTest {
     private lateinit var foreground: AppForeground
     private lateinit var active: ActiveConversation
     private lateinit var notifier: Notifier
+    private lateinit var shortcuts: ConversationShortcuts
     private lateinit var prefs: AppPrefs
     private lateinit var manager: NotificationManager
     private val scope = CoroutineScope(Job())
@@ -82,7 +86,8 @@ class NotifierTest {
         active = ActiveConversation()
         context.getSharedPreferences("swahnchat_prefs", Context.MODE_PRIVATE).edit().clear().commit()
         prefs = AppPrefs(context)
-        notifier = Notifier(context, engine, store, db, foreground, active, prefs, scope)
+        shortcuts = ConversationShortcuts(context, prefs)
+        notifier = Notifier(context, engine, store, db, foreground, active, prefs, shortcuts, scope)
         notifier.createChannels()
         manager = context.getSystemService(NotificationManager::class.java)
     }
@@ -376,5 +381,137 @@ class NotifierTest {
         notifier.notifyNow(listOf("direct"))
         assertTrue(conversationNotifications().isEmpty())
         assertNotNull(manager)
+    }
+
+    // --- batch 7: quiet hours, per-chat channels, shortcuts -----------------------------------------------------------------
+
+    private fun at(h: Int, m: Int = 0) = java.time.ZonedDateTime.of(java.time.LocalDateTime.of(2026, 10, 20, h, m), java.time.ZoneId.of("Europe/Stockholm"))
+
+    private fun quietNights() = prefs.setQuietHours(QuietHoursSettings(enabled = true))
+
+    @Test fun `during quiet hours a message is posted to the silent channel and is still listed`() = runBlocking<Unit> {
+        quietNights()
+        notifier.now = { at(23, 15) }
+        store.upsertMessage(incoming("m1", "direct", "bob", 1, "Sover du?"))
+        notifier.notifyNow(listOf("direct"))
+        val n = conversationNotifications().single()
+        assertEquals(Notifier.CHANNEL_QUIET, n.channelId)
+        assertEquals("Bertil", titleOf(n))
+        val channel = manager.getNotificationChannel(Notifier.CHANNEL_QUIET)
+        assertEquals(NotificationManager.IMPORTANCE_LOW, channel.importance)
+        assertEquals(null, channel.sound)
+        assertEquals(false, channel.shouldVibrate())
+        assertEquals(Notifier.CHANNEL_QUIET, shadowOf(manager).allNotifications.first { it.flags and Notification.FLAG_GROUP_SUMMARY != 0 }.channelId)
+    }
+
+    @Test fun `outside quiet hours - or with the setting off - messages use the normal channel`() = runBlocking<Unit> {
+        quietNights()
+        notifier.now = { at(12, 0) }
+        store.upsertMessage(incoming("m1", "direct", "bob", 1, "Hej"))
+        notifier.notifyNow(listOf("direct"))
+        assertEquals(Notifier.CHANNEL_MESSAGES, conversationNotifications().single().channelId)
+        prefs.setQuietHours(QuietHoursSettings(enabled = false))
+        notifier.now = { at(23, 0) }
+        store.upsertMessage(incoming("m2", "direct", "bob", 2, "Hej igen"))
+        notifier.notifyNow(listOf("direct"))
+        assertEquals(Notifier.CHANNEL_MESSAGES, conversationNotifications().single().channelId)
+    }
+
+    @Test fun `a chat's own notification settings open its channel, a child of the messages channel`() = runBlocking<Unit> {
+        val intent = notifier.channelSettingsIntent("direct")!!
+        assertEquals(android.provider.Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS, intent.action)
+        val id = Notifier.conversationChannelId("direct")
+        assertEquals(id, intent.getStringExtra(android.provider.Settings.EXTRA_CHANNEL_ID))
+        assertEquals(context.packageName, intent.getStringExtra(android.provider.Settings.EXTRA_APP_PACKAGE))
+        assertEquals("direct", intent.getStringExtra(android.provider.Settings.EXTRA_CONVERSATION_ID))
+        val channel = manager.getNotificationChannel(id)
+        assertEquals("Bertil", channel.name.toString())
+        assertEquals(Notifier.CHANNEL_MESSAGES, channel.parentChannelId)
+        assertEquals("direct", channel.conversationId)
+        assertEquals(null, notifier.channelSettingsIntent("nonexistent"))
+        // from now on the chat's messages go through it, the other chat's do not
+        store.upsertMessage(incoming("m1", "direct", "bob", 1, "Hej"))
+        store.upsertMessage(incoming("m2", "group", "cia", 2, "Hej alla"))
+        notifier.notifyNow(listOf("direct", "group"))
+        assertEquals(setOf(id, Notifier.CHANNEL_MESSAGES), conversationNotifications().map { it.channelId }.toSet())
+        assertEquals(id, conversationNotifications().first { titleOf(it) == "Bertil" }.channelId)
+    }
+
+    @Test fun `quiet hours win over a chat's own channel`() = runBlocking<Unit> {
+        notifier.channelSettingsIntent("direct")
+        quietNights()
+        notifier.now = { at(2, 0) }
+        store.upsertMessage(incoming("m1", "direct", "bob", 1, "Hej"))
+        notifier.notifyNow(listOf("direct"))
+        assertEquals(Notifier.CHANNEL_QUIET, conversationNotifications().single().channelId)
+    }
+
+    @Test fun `channel names follow the privacy setting and a chat that is gone loses its channel`() = runBlocking<Unit> {
+        notifier.channelSettingsIntent("group")
+        val id = Notifier.conversationChannelId("group")
+        assertEquals("Familjen", manager.getNotificationChannel(id).name.toString())
+        prefs.setNotificationPrivacy(NotificationPrivacy.HIDDEN)
+        notifier.renameConversationChannels()
+        assertEquals("Chatt grou", manager.getNotificationChannel(id).name.toString(), "no name, only a short id")
+        prefs.setNotificationPrivacy(NotificationPrivacy.NAME_ONLY)
+        notifier.renameConversationChannels()
+        assertEquals("Familjen", manager.getNotificationChannel(id).name.toString())
+        store.removeConversation("group")
+        notifier.renameConversationChannels()
+        assertEquals(null, manager.getNotificationChannel(id), "the channel of a deleted chat is removed")
+        notifier.channelSettingsIntent("direct")
+        notifier.deleteConversationChannels("direct")
+        assertEquals(null, manager.getNotificationChannel(Notifier.conversationChannelId("direct")))
+    }
+
+    @Test fun `a message notification is tied to a long-lived share-target shortcut of the chat`() = runBlocking<Unit> {
+        store.upsertMessage(incoming("m1", "direct", "bob", 1, "Hej"))
+        notifier.notifyNow(listOf("direct"))
+        val n = conversationNotifications().single()
+        assertEquals("direct", NotificationCompat.getShortcutId(n))
+        val shortcut = androidx.core.content.pm.ShortcutManagerCompat.getShortcuts(context, androidx.core.content.pm.ShortcutManagerCompat.FLAG_MATCH_DYNAMIC)
+            .single { it.id == "direct" }
+        assertEquals(setOf(ConversationShortcuts.CATEGORY_SHARE), shortcut.categories)
+        assertEquals("Bertil", shortcut.shortLabel.toString())
+        val open = shortcut.intent
+        assertEquals(Notifier.deepLink("direct"), open.data) // the normal deep link: the app lock still applies
+        assertEquals(android.content.Intent.ACTION_VIEW, open.action)
+    }
+
+    @Test fun `with hidden names there is no shortcut, no shortcut id and the old ones are removed`() = runBlocking<Unit> {
+        store.upsertMessage(incoming("m1", "direct", "bob", 1, "Hej"))
+        notifier.notifyNow(listOf("direct"))
+        assertTrue(shortcuts.knownIds().isNotEmpty())
+        prefs.setNotificationPrivacy(NotificationPrivacy.HIDDEN)
+        shortcuts.removeAll() // what ShortcutSync does when the setting changes
+        assertEquals(emptySet(), shortcuts.knownIds())
+        store.upsertMessage(incoming("m2", "direct", "bob", 2, "Hej igen"))
+        notifier.notifyNow(listOf("direct"))
+        assertEquals(null, NotificationCompat.getShortcutId(conversationNotifications().single()))
+        assertEquals(emptySet(), shortcuts.knownIds(), "nothing was published for the hidden-name notification")
+        assertFalse(shortcuts.ensure("direct", "Bertil"))
+    }
+
+    @Test fun `signing out takes down notifications, chat channels and shortcuts`() = runBlocking<Unit> {
+        notifier.channelSettingsIntent("direct")
+        store.upsertMessage(incoming("m1", "direct", "bob", 1, "Hej"))
+        notifier.notifyNow(listOf("direct"))
+        assertTrue(conversationNotifications().isNotEmpty())
+        notifier.onSignedOut()
+        assertTrue(shadowOf(manager).allNotifications.isEmpty())
+        assertEquals(null, manager.getNotificationChannel(Notifier.conversationChannelId("direct")))
+        assertEquals(emptySet(), shortcuts.knownIds())
+    }
+
+    @Test fun `shortcuts - only the most recent four are published and a left chat's long-lived shortcut goes`() {
+        val chats = (1..6).map { ConversationShortcuts.Chat("c$it", "Chatt $it") }
+        shortcuts.publish(chats.take(ConversationShortcuts.MAX_SHORTCUTS), existing = chats.map { it.id }.toSet())
+        assertEquals(setOf("c1", "c2", "c3", "c4"), shortcuts.knownIds())
+        shortcuts.ensure("c6", "Chatt 6") // a notification of another chat needs one too
+        assertTrue("c6" in shortcuts.knownIds())
+        shortcuts.publish(chats.take(2), existing = setOf("c1", "c2")) // c3.. left or deleted
+        assertEquals(setOf("c1", "c2"), shortcuts.knownIds())
+        shortcuts.remove("c1")
+        assertEquals(setOf("c2"), shortcuts.knownIds())
     }
 }

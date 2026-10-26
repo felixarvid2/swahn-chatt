@@ -67,6 +67,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
@@ -97,6 +98,7 @@ import se.swahnchat.app.ui.model.MessageUi
 import se.swahnchat.app.ui.model.ReplyUi
 import se.swahnchat.app.ui.model.TransferUi
 import se.swahnchat.app.ui.model.UndecryptableUi
+import se.swahnchat.app.ui.theme.LocalHighContrast
 import se.swahnchat.app.ui.theme.LocalStatusColors
 import java.io.File
 
@@ -210,6 +212,8 @@ fun MessageBubble(
                         shape = shape,
                         color = container,
                         contentColor = content,
+                        // high contrast: the bubble is told apart by an outline, not only by its tint
+                        border = if (LocalHighContrast.current) BorderStroke(2.dp, scheme.outline) else null,
                         modifier = Modifier
                             .then(if (scheduled) Modifier.alpha(SCHEDULED_ALPHA) else Modifier)
                             .clip(shape)
@@ -611,6 +615,7 @@ fun ReplyQuote(reply: ReplyUi, onClick: () -> Unit, modifier: Modifier = Modifie
     val scheme = MaterialTheme.colorScheme
     Row(
         modifier = modifier.padding(bottom = 4.dp).clip(RoundedCornerShape(8.dp)).background(scheme.surface.copy(alpha = 0.55f))
+            .defaultMinSize(minHeight = 48.dp)
             .clickable(onClick = onClick).height(IntrinsicSize.Min),
     ) {
         Box(Modifier.width(4.dp).fillMaxHeight().background(scheme.primary))

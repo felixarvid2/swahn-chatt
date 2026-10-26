@@ -110,6 +110,8 @@ data class ConversationUiState(
     val memberCount: Int = 0,
     val avatar: AvatarUi = AvatarUi(""),
     val typingNames: List<String> = emptyList(),
+    /** Online status of the other person of a direct chat; null when they do not share it (or in a group). */
+    val presence: se.swahnchat.core.client.Presence? = null,
     /** The other person of a direct conversation (for the contact screen). */
     val otherUserId: String? = null,
     val replyTo: ReplyUi? = null,
@@ -226,6 +228,7 @@ class ConversationViewModel @Inject constructor(
     private val members = MutableStateFlow<List<MemberUi>>(emptyList())
     private var recordingTicker: Job? = null
     private var typingJob: Job? = null
+    private var presenceJob: Job? = null
 
     private val _effects = MutableSharedFlow<ConversationEffect>(extraBufferCapacity = 8)
     val effects: SharedFlow<ConversationEffect> = _effects.asSharedFlow()
@@ -292,7 +295,9 @@ class ConversationViewModel @Inject constructor(
         }.withSeparators(ctx.zone, firstUnread)
     }
 
-    private val header = combine(repo.conversation(conversationId), repo.members(conversationId), engine.typing, engine.account) { c, members, typing, account ->
+    private val header = combine(
+        repo.conversation(conversationId), repo.members(conversationId), engine.typing, engine.account, engine.presence,
+    ) { c, members, typing, account, presence ->
         if (c == null) return@combine null
         val isGroup = c.type == ConversationType.GROUP
         val other = members.firstOrNull { !it.isMe }
@@ -302,12 +307,13 @@ class ConversationViewModel @Inject constructor(
             title, isGroup, members.size,
             if (isGroup) AvatarUi(title, c.avatarAttachmentId) else other?.avatar ?: AvatarUi(title),
             typingNames, if (isGroup) null else other?.userId, members.any { it.isMe && it.isAdmin },
+            if (isGroup) null else other?.userId?.let { presence[it] },
         )
     }
 
     private class Header(
         val title: String, val isGroup: Boolean, val memberCount: Int, val avatar: AvatarUi,
-        val typingNames: List<String>, val otherUserId: String?, val iAmAdmin: Boolean,
+        val typingNames: List<String>, val otherUserId: String?, val iAmAdmin: Boolean, val presence: se.swahnchat.core.client.Presence?,
     )
 
     private val composer = combine<Any?, Composer>(
@@ -366,7 +372,7 @@ class ConversationViewModel @Inject constructor(
         }
         ConversationUiState(
             title = h.title, isGroup = h.isGroup, memberCount = h.memberCount, avatar = h.avatar,
-            typingNames = h.typingNames, otherUserId = h.otherUserId, replyTo = reply, editingMessageId = c.editing,
+            typingNames = h.typingNames, presence = h.presence, otherUserId = h.otherUserId, replyTo = reply, editingMessageId = c.editing,
             draft = c.draft, recording = c.recording, sending = c.sending, loaded = true,
             latestId = ar.latest?.id, latestOutgoing = ar.latest?.outgoing == true, newMessages = ar.newMessages,
             openUnread = ar.openUnread, connection = ar.connection, safety = ar.safety,
@@ -420,9 +426,33 @@ class ConversationViewModel @Inject constructor(
         active.enter(conversationId)
         notifier.cancel(conversationId)
         resumed.value = true
+        startPresence()
     }
 
+    /** Online status of the other person: read on opening and then every minute while the chat is visible (direct chats only). */
+    private fun startPresence() {
+        presenceJob?.cancel()
+        presenceJob = viewModelScope.launch {
+            if (store.getConversation(conversationId)?.type == ConversationType.GROUP) return@launch
+            while (true) {
+                try {
+                    engine.refreshPresence()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    // offline: the last known status stays until the next try
+                }
+                delay(PRESENCE_REFRESH_MS)
+            }
+        }
+    }
+
+    /** The system page of this conversation's notification channel (sound, vibration, importance); the channel is created on first use. */
+    suspend fun notificationSettingsIntent(): android.content.Intent? = notifier.channelSettingsIntent(conversationId)
+
     fun onPause() {
+        presenceJob?.cancel()
+        presenceJob = null
         flushDraft()
         active.leave(conversationId)
         resumed.value = false
@@ -1013,6 +1043,7 @@ class ConversationViewModel @Inject constructor(
         AutoDownloadPolicy.shouldDownload(prefs.autoDownload.value, kind, size, connectivity.isMetered())
 
     private companion object {
+        const val PRESENCE_REFRESH_MS = 60_000L
         const val PAGE_SIZE = 40
         const val MAX_INITIAL_LOAD = 400
         const val LOAD_AROUND_CONTEXT = 10

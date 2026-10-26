@@ -75,7 +75,8 @@ class CallNotifier @Inject constructor(
         val previous = lastIncoming
         if (state is CallState.Incoming) {
             lastIncoming = state
-            ringer.start()
+            // "Tysta även samtal" in quiet hours: the call is still shown (and can be answered), it just does not ring
+            if (!ringSilenced()) ringer.start()
             showIncoming(state)
             if (!foreground.isForeground.value) work.enqueueCallRing()
             return
@@ -85,6 +86,13 @@ class CallNotifier @Inject constructor(
         if (previous == null) return
         manager.cancel(ID_INCOMING)
         if (state is CallState.Ended && state.callId == previous.callId && state.reason == EndReason.MISSED) showMissed(previous)
+    }
+
+    internal var now: () -> java.time.ZonedDateTime = { java.time.ZonedDateTime.now() }
+
+    private fun ringSilenced(): Boolean {
+        val quiet = prefs.quietHours.value
+        return quiet.muteCalls && se.swahnchat.app.data.QuietHours.isActive(quiet, now())
     }
 
     private suspend fun callerName(userId: String): String? =

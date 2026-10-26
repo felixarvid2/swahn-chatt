@@ -24,6 +24,8 @@ internal interface RawApi {
     @GET("users") suspend fun listUsers(): List<User>
     @GET("users/me") suspend fun me(): User
     @PATCH("users/me") suspend fun updateMe(@Body body: JsonObject): User
+    @GET("users/me/settings") suspend fun mySettings(): UserSettings
+    @PATCH("users/me/settings") suspend fun updateMySettings(@Body body: JsonObject): UserSettings
     @PUT("users/me/password") suspend fun changePassword(@Body r: ChangePasswordRequest)
     @GET("users/{id}/devices") suspend fun listDevices(@Path("id") userId: String): List<Device>
     @GET("devices/me") suspend fun myDevice(): Device

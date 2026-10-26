@@ -23,6 +23,7 @@ import se.swahnchat.app.MainActivity
 import se.swahnchat.app.R
 import se.swahnchat.app.data.AppPrefs
 import se.swahnchat.app.data.NotificationPrivacy
+import se.swahnchat.app.data.QuietHours
 import se.swahnchat.app.data.isMuted
 import se.swahnchat.app.data.db.AppDatabase
 import se.swahnchat.app.data.db.MessageEntity
@@ -52,8 +53,12 @@ class Notifier @Inject constructor(
     private val foreground: AppForeground,
     private val active: ActiveConversation,
     private val prefs: AppPrefs,
+    private val shortcuts: ConversationShortcuts,
     @ApplicationScope private val scope: CoroutineScope,
 ) {
+    /** The clock of the quiet hours; tests set it. */
+    internal var now: () -> java.time.ZonedDateTime = { java.time.ZonedDateTime.now() }
+
     private val manager = NotificationManagerCompat.from(context)
     private val pending = LinkedHashSet<String>()
     private val flushRequests = Channel<Unit>(Channel.CONFLATED)
@@ -69,11 +74,114 @@ class Notifier @Inject constructor(
                 description = context.getString(R.string.channel_messages_description)
             },
         )
+        // During quiet hours messages are posted here: listed, but no sound, vibration or heads-up (see [QuietHours])
+        nm.createNotificationChannel(
+            NotificationChannel(CHANNEL_QUIET, context.getString(R.string.channel_quiet), NotificationManager.IMPORTANCE_LOW).apply {
+                description = context.getString(R.string.channel_quiet_description)
+                setSound(null, null)
+                enableVibration(false)
+            },
+        )
         nm.createNotificationChannel(
             NotificationChannel(CHANNEL_SYNC, context.getString(R.string.channel_sync), NotificationManager.IMPORTANCE_MIN).apply {
                 description = context.getString(R.string.channel_sync_description)
             },
         )
+    }
+
+    /** Whether message notifications are silent right now (the quiet hours of the settings). */
+    internal fun quietNow(): Boolean = QuietHours.isActive(prefs.quietHours.value, now())
+
+    /**
+     * The channel a message of [conversationId] is posted to: the silent one during quiet hours (it wins over a chat's own
+     * settings: the person asked for quiet), else the chat's own channel if the person has made one, else the common one.
+     */
+    internal fun channelFor(conversationId: String): String = when {
+        quietNow() -> CHANNEL_QUIET
+        context.getSystemService(NotificationManager::class.java).getNotificationChannel(conversationChannelId(conversationId)) != null ->
+            conversationChannelId(conversationId)
+        else -> CHANNEL_MESSAGES
+    }
+
+    /**
+     * The name of a chat's channel: follows the privacy setting (with hidden names only "Chatt" and a short id, the same as
+     * the notification itself shows no name). Android 11+ lists conversation channels under the chat's own name; below that
+     * every channel is a line of its own in the list of the app's channels and needs the "Meddelanden –" prefix.
+     */
+    internal suspend fun channelName(conversationId: String): String {
+        val hidden = prefs.notificationPrivacy.value == NotificationPrivacy.HIDDEN
+        val title = if (hidden) null else conversationTitle(conversationId)
+        return when {
+            title == null -> context.getString(R.string.channel_conversation_hidden, conversationId.take(SHORT_ID))
+            android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R -> title
+            else -> context.getString(R.string.channel_conversation_named, title)
+        }
+    }
+
+    private suspend fun conversationTitle(conversationId: String): String? {
+        val c = store.getConversation(conversationId) ?: return null
+        val me = engine.account.value?.userId
+        return if (c.type == ConversationType.GROUP) c.name.orEmpty().ifEmpty { context.getString(R.string.group_default_name) }
+        else c.members.firstOrNull { it.userId != me }?.let { store.getUser(it.userId)?.displayName }
+    }
+
+    /** Creates (or renames) the channel of [conversationId]. Android 11+: a child of the common channel, shown as the chat's conversation settings. */
+    private suspend fun upsertConversationChannel(conversationId: String): String {
+        val nm = context.getSystemService(NotificationManager::class.java)
+        val id = conversationChannelId(conversationId)
+        val channel = NotificationChannel(id, channelName(conversationId), NotificationManager.IMPORTANCE_HIGH).apply {
+            description = context.getString(R.string.channel_messages_description)
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) setConversationId(CHANNEL_MESSAGES, conversationId)
+        }
+        nm.createNotificationChannel(channel)
+        return id
+    }
+
+    /**
+     * The system's settings page for this chat's notifications (sound, vibration, importance); the channel is created on first use.
+     * Null if the chat is gone.
+     */
+    suspend fun channelSettingsIntent(conversationId: String): Intent? {
+        if (store.getConversation(conversationId) == null) return null
+        val id = upsertConversationChannel(conversationId)
+        // it now exists, so the next message of this chat goes through it; the one on screen moves over
+        notifyNow(listOf(conversationId), quiet = true)
+        return Intent(android.provider.Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
+            .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, context.packageName)
+            .putExtra(android.provider.Settings.EXTRA_CHANNEL_ID, id)
+            .also {
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+                    it.putExtra(android.provider.Settings.EXTRA_CONVERSATION_ID, conversationId)
+                }
+            }
+    }
+
+    /** Takes the channel of a chat away (the chat is gone, or the person signed out). */
+    internal fun deleteConversationChannels(only: String? = null) {
+        val nm = context.getSystemService(NotificationManager::class.java)
+        if (only != null) { nm.deleteNotificationChannel(conversationChannelId(only)); return }
+        nm.notificationChannels.filter { it.id.startsWith(CHANNEL_CONVERSATION_PREFIX) }.forEach { nm.deleteNotificationChannel(it.id) }
+    }
+
+    /** The names of the chat channels follow the privacy setting: renamed when it changes (the channel's other settings stay). */
+    internal suspend fun renameConversationChannels() {
+        val nm = context.getSystemService(NotificationManager::class.java)
+        for (channel in nm.notificationChannels.filter { it.id.startsWith(CHANNEL_CONVERSATION_PREFIX) }) {
+            val conversationId = channel.id.removePrefix(CHANNEL_CONVERSATION_PREFIX)
+            if (store.getConversation(conversationId) == null) nm.deleteNotificationChannel(channel.id)
+            else upsertConversationChannel(conversationId)
+        }
+    }
+
+    /** Signed out: no notification, channel or shortcut of this account stays. */
+    fun onSignedOut() {
+        try {
+            cancelAll()
+            deleteConversationChannels()
+            shortcuts.removeAll()
+        } catch (e: Exception) {
+            // never throw from a collector
+        }
     }
 
     /** Call once from Application.onCreate. */
@@ -86,7 +194,15 @@ class Notifier @Inject constructor(
                         synchronized(pending) { pending += event.conversationId }
                         flushRequests.trySend(Unit)
                     }
-                    is EngineEvent.ConversationRemoved -> cancel(event.conversationId)
+                    is EngineEvent.ConversationRemoved -> {
+                        cancel(event.conversationId)
+                        try {
+                            deleteConversationChannels(event.conversationId)
+                            shortcuts.remove(event.conversationId)
+                        } catch (e: Exception) {
+                            // never let a notification problem break the collector
+                        }
+                    }
                     is EngineEvent.ConversationChanged -> {
                         // read on another device or in the app: the unread count dropped to zero
                         if (store.unreadCount(event.conversationId) == 0 && event.conversationId !in replied) cancel(event.conversationId)
@@ -100,6 +216,7 @@ class Notifier @Inject constructor(
             // are already posted, not only the next: repost them (quietly) or take them down.
             combine(prefs.notificationPrivacy, prefs.appLockEnabled) { privacy, locked -> privacy to locked }.drop(1).collect {
                 try {
+                    renameConversationChannels()
                     refreshPosted()
                 } catch (e: CancellationException) {
                     throw e
@@ -189,16 +306,20 @@ class Notifier @Inject constructor(
         val alert = !quiet && newest > (lastNotifiedSeq[conversationId] ?: 0L)
         lastNotifiedSeq[conversationId] = maxOf(newest, lastNotifiedSeq[conversationId] ?: 0L)
         replied.remove(conversationId)
+        val channel = channelFor(conversationId)
+        val silent = channel == CHANNEL_QUIET
+        // a long-lived shortcut for the chat makes this a conversation notification (not with hidden names: the shortcut shows one)
+        val shortcutId = if (shortcuts.ensure(conversationId, title)) conversationId else null
 
         // What the lock screen shows when the phone hides sensitive notification content: never the text; the name only
         // if the setting allows names.
-        val publicVersion = NotificationCompat.Builder(context, CHANNEL_MESSAGES)
+        val publicVersion = NotificationCompat.Builder(context, channel)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(shownTitle)
             .setContentText(countText)
             .build()
 
-        val builder = NotificationCompat.Builder(context, CHANNEL_MESSAGES)
+        val builder = NotificationCompat.Builder(context, channel)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(shownTitle)
             .setStyle(style)
@@ -206,10 +327,12 @@ class Notifier @Inject constructor(
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
             .setPublicVersion(publicVersion)
-            .setOnlyAlertOnce(!alert)
+            .setOnlyAlertOnce(!alert || silent)
+            .setSilent(silent)
             .setAutoCancel(true)
             .setGroup(GROUP_KEY)
             .setContentIntent(openIntent(conversationId))
+        shortcutId?.let { builder.setShortcutId(it) }
         if (replyAllowed()) builder.addAction(replyAction(conversationId, shownTitle))
         builder.addAction(
             NotificationCompat.Action.Builder(R.drawable.ic_notification, context.getString(R.string.action_mark_read), markReadIntent(conversationId))
@@ -221,10 +344,11 @@ class Notifier @Inject constructor(
         manager.notify(idFor(conversationId), notification)
         manager.notify(
             ID_SUMMARY,
-            NotificationCompat.Builder(context, CHANNEL_MESSAGES)
+            NotificationCompat.Builder(context, if (silent) CHANNEL_QUIET else CHANNEL_MESSAGES)
                 .setSmallIcon(R.drawable.ic_notification)
                 .setGroup(GROUP_KEY)
                 .setGroupSummary(true)
+                .setSilent(silent)
                 .setAutoCancel(true)
                 .setOnlyAlertOnce(true)
                 .build(),
@@ -347,6 +471,9 @@ class Notifier @Inject constructor(
 
     companion object {
         const val CHANNEL_MESSAGES = "messages"
+        const val CHANNEL_QUIET = "messages_quiet"
+        private const val CHANNEL_CONVERSATION_PREFIX = "messages_chat_"
+        private const val SHORT_ID = 4
         const val CHANNEL_SYNC = "sync"
         const val ID_SYNC = 2
         private const val ID_SUMMARY = 1
@@ -356,6 +483,9 @@ class Notifier @Inject constructor(
         private const val MAX_TEXT = 400
         private const val DEBOUNCE_MS = 400L
         private const val REPLIED_TIMEOUT_MS = 8_000L
+
+        /** The notification channel of one chat's own settings. */
+        fun conversationChannelId(conversationId: String) = CHANNEL_CONVERSATION_PREFIX + conversationId
 
         fun deepLink(conversationId: String): Uri = "swahnchat://conversation/$conversationId".toUri()
     }

@@ -112,7 +112,7 @@ fun PollView(
                         if (!poll.canVote) disabled()
                     },
             ) {
-                Row(Modifier.heightIn(min = 36.dp).padding(horizontal = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                Row(Modifier.heightIn(min = 48.dp).padding(horizontal = 2.dp), verticalAlignment = Alignment.CenterVertically) {
                     Icon(
                         when {
                             poll.multiple && o.mine -> Icons.Filled.CheckBox
@@ -131,7 +131,7 @@ fun PollView(
                         o.count.toString(), style = MaterialTheme.typography.labelLarge, color = content,
                         fontWeight = if (o.count > 0 && o.count == top) FontWeight.Bold else FontWeight.Normal,
                         modifier = Modifier
-                            .heightIn(min = 36.dp).defaultMinSize(minWidth = 28.dp)
+                            .heightIn(min = 48.dp).defaultMinSize(minWidth = 48.dp)
                             .clickable(role = Role.Button, onClickLabel = stringResource(R.string.poll_show_voters)) { votersOf = o }
                             .padding(horizontal = 6.dp),
                         textAlign = androidx.compose.ui.text.style.TextAlign.End,

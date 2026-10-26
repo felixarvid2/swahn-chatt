@@ -68,6 +68,10 @@ class CallActivity : ComponentActivity() {
 
     private val permissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { onPermissions(it) }
 
+    override fun attachBaseContext(newBase: android.content.Context) {
+        super.attachBaseContext(se.swahnchat.app.AppLocale.wrap(newBase))
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         showOverLockScreen()
@@ -79,13 +83,15 @@ class CallActivity : ComponentActivity() {
         }
         setContent {
             val theme by vm.theme.collectAsStateWithLifecycle()
+            val accent by vm.accent.collectAsStateWithLifecycle()
+            val highContrast by vm.highContrast.collectAsStateWithLifecycle()
             val dark = when (theme) {
                 ThemeMode.SYSTEM -> isSystemInDarkTheme()
                 ThemeMode.LIGHT -> false
                 ThemeMode.DARK -> true
             }
             val loader: suspend (String) -> java.io.File? = remember(vm) { { id -> vm.avatarFile(id) } }
-            SwahnChatTheme(darkTheme = dark) {
+            SwahnChatTheme(darkTheme = dark, accent = accent, highContrast = highContrast) {
                 CompositionLocalProvider(LocalAvatarLoader provides loader) {
                     CallRoute(vm, keyguardWatcher.locked, starting = starting, onFinish = ::finish, onBack = ::leave)
                 }

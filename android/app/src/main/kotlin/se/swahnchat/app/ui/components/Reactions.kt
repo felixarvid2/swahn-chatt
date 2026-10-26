@@ -153,7 +153,7 @@ fun ReactionsRow(reactions: List<ReactionUi>, onClick: () -> Unit, modifier: Mod
     val description = stringResource(R.string.reactions_row_description)
     val spoken = reactions.map { stringResource(R.string.reaction_chip_description, it.emoji, it.count) }.joinToString(", ")
     Row(
-        modifier.defaultMinSize(minHeight = 36.dp).clip(RoundedCornerShape(14.dp))
+        modifier.defaultMinSize(minHeight = 48.dp).clip(RoundedCornerShape(14.dp))
             .clickable(role = Role.Button, onClickLabel = description, onClick = onClick)
             .semantics { contentDescription = spoken },
         horizontalArrangement = Arrangement.spacedBy(4.dp),

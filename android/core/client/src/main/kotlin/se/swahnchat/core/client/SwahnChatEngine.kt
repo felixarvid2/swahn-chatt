@@ -113,6 +113,23 @@ class SwahnChatEngine(
     /** State of the WebSocket (for a "connecting..." indicator). */
     val realtimeState: StateFlow<se.swahnchat.core.network.RealtimeState> = _realtimeState.asStateFlow()
 
+    private val _presence = MutableStateFlow<Map<String, Presence>>(emptyMap())
+
+    /**
+     * userId -> online status, only for people who share it (opt-in on their side). Kept in memory, never stored: it is
+     * stale the moment it is read, and a stored "last seen" would outlive the person switching sharing off.
+     */
+    val presence: StateFlow<Map<String, Presence>> = _presence.asStateFlow()
+
+    /**
+     * Whether [markRead] tells the other members (read receipts, the double check). Off = silent reads: the read position
+     * still moves and this account's other devices stay in step. Set by the app from its setting.
+     */
+    @Volatile var sendReadReceipts: Boolean = true
+
+    /** Whether [sendTyping] sends anything. Off = other people never see that this account is typing. */
+    @Volatile var sendTypingIndicators: Boolean = true
+
     private var realtime: RealtimeConnection? = null
     private var realtimeJob: Job? = null
     private var workerJob: Job? = null
@@ -244,6 +261,7 @@ class SwahnChatEngine(
         ctx.connection = null
         _account.value = null
         _typing.value = emptyMap()
+        _presence.value = emptyMap()
     }
 
     // =========================================================================================================
@@ -780,15 +798,16 @@ class SwahnChatEngine(
         if (latest <= c.myReadSeq) return
         ctx.store.setMyReadSeq(conversationId, latest)
         ctx.emit(EngineEvent.ConversationChanged(conversationId))
-        postRead(conversationId, latest)
+        postRead(conversationId, latest, notify = sendReadReceipts)
     }
 
-    private suspend fun postRead(conversationId: String, seq: Long) {
+    /** [notify] false = silent read. A read that could not be sent keeps its choice, so a retry never announces what was meant to be silent. */
+    private suspend fun postRead(conversationId: String, seq: Long, notify: Boolean) {
         try {
-            ctx.api.markRead(conversationId, MarkReadRequest(seq))
+            ctx.api.markRead(conversationId, MarkReadRequest(seq, notify))
             ctx.store.setMeta("$META_PENDING_READ$conversationId", null)
         } catch (e: IOException) {
-            ctx.store.setMeta("$META_PENDING_READ$conversationId", seq.toString())
+            ctx.store.setMeta("$META_PENDING_READ$conversationId", if (notify) seq.toString() else "$seq$SILENT_SUFFIX")
         } catch (e: ApiException.NotFound) {
             // no longer a member
         }
@@ -796,9 +815,31 @@ class SwahnChatEngine(
 
     private suspend fun flushPendingReads() {
         for (c in ctx.store.getConversations()) {
-            val seq = ctx.store.getMeta("$META_PENDING_READ${c.id}")?.toLongOrNull() ?: continue
-            postRead(c.id, seq)
+            val pending = ctx.store.getMeta("$META_PENDING_READ${c.id}")
+            val seq = pending?.removeSuffix(SILENT_SUFFIX)?.toLongOrNull()
+            if (pending != null && seq != null) postRead(c.id, seq, notify = !pending.endsWith(SILENT_SUFFIX))
         }
+    }
+
+    // =========================================================================================================
+    // Presence (online status; opt-in on both sides)
+    // =========================================================================================================
+
+    /** Whether this account lets others see when it is online (the server's setting; off by default). */
+    suspend fun sharePresence(): Boolean = ctx.api.mySettings().sharePresence
+
+    /** Switches sharing on or off on the server and returns what the server now has. */
+    suspend fun setSharePresence(enabled: Boolean): Boolean = ctx.api.updateMySettings(sharePresence = enabled).sharePresence
+
+    /** Reads who is online from `GET /users` (people who do not share have no entry). Call on opening a chat and about once a minute while it is visible. */
+    suspend fun refreshPresence() {
+        val me = ctx.account?.userId
+        val seen = HashMap<String, Presence>()
+        for (u in ctx.api.listUsers()) {
+            if (u.id == me || u.online == null) continue
+            seen[u.id] = Presence(u.online!!, u.lastSeenAt)
+        }
+        _presence.value = seen
     }
 
     // =========================================================================================================
@@ -807,6 +848,7 @@ class SwahnChatEngine(
 
     /** Tells the other members you started/stopped typing (throttled: a "start" is re-sent at most every 3 s). */
     fun sendTyping(conversationId: String, active: Boolean) {
+        if (!sendTypingIndicators) return
         val rt = realtime ?: return
         val now = ctx.now()
         if (active) {
@@ -1104,3 +1146,4 @@ const val MAX_SCHEDULE_MS = 30L * 24 * 60 * 60 * 1000
 internal const val SCHEDULE_RECHECK_MS = 5_000L
 internal const val META_KEYS_UPLOADED = "keys_uploaded"
 internal const val META_PENDING_READ = "pending_read:"
+private const val SILENT_SUFFIX = ":silent"

@@ -37,6 +37,12 @@ interface SwahnChatApi {
     /** Only non-null arguments are sent; set [clearAvatar] to send `avatar_attachment_id: null`. */
     suspend fun updateMe(displayName: String? = null, avatarAttachmentId: String? = null, clearAvatar: Boolean = false): User
     suspend fun changePassword(request: ChangePasswordRequest)
+
+    /** The account's settings kept on the server (whether presence is shared). */
+    suspend fun mySettings(): UserSettings
+
+    /** Only non-null arguments are sent. */
+    suspend fun updateMySettings(sharePresence: Boolean? = null): UserSettings
     suspend fun listDevices(userId: String): List<Device>
     suspend fun myDevice(): Device
     suspend fun setPush(request: PushRegistration)

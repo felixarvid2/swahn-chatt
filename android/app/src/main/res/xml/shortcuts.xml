@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Direct share: the conversation shortcuts the app publishes (ConversationShortcuts) carry this category, so the share sheet
+    offers them as "send to <chat>" and starts ShareReceiverActivity with the shortcut id (= the conversation id). The shortcuts
+    themselves are all dynamic; there is no static one.
+-->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <share-target android:targetClass="se.swahnchat.app.ShareReceiverActivity">
+        <data android:mimeType="*/*" />
+        <category android:name="se.swahnchat.app.directshare.CHAT" />
+    </share-target>
+</shortcuts>

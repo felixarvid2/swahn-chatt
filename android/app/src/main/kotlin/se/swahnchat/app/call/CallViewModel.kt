@@ -41,6 +41,8 @@ class CallViewModel @Inject constructor(
     val muted: StateFlow<Boolean> = calls.muted
     val speakerOn: StateFlow<Boolean> = audio.speakerOn
     val theme: StateFlow<ThemeMode> = prefs.theme
+    val accent: StateFlow<se.swahnchat.app.data.Accent> = prefs.accent
+    val highContrast: StateFlow<Boolean> = prefs.highContrast
     val blockScreenshots: StateFlow<Boolean> = prefs.blockScreenshots
 
     /** The media session of the call in progress; null before it is set up and after the call. */
