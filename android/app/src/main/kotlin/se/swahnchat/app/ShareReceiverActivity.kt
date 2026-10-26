@@ -17,7 +17,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.fragment.app.FragmentActivity
@@ -89,15 +88,11 @@ class ShareReceiverActivity : FragmentActivity() {
                         Text(stringResource(R.string.share_not_signed_in), style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(32.dp))
                     }
                     else -> {
-                        // Chosen in the share sheet as a "direct share" target: the shortcut id is the conversation id. It is only
-                        // taken if it is one of this account's conversations (the extra comes from outside).
+                        // Chosen in the share sheet as a "direct share" target: the shortcut id is the conversation id. Any app can
+                        // send this extra to an explicit intent, so it only marks the chat in the picker; the user still taps it.
                         val shortcutTarget = remember { intent.getStringExtra(Intent.EXTRA_SHORTCUT_ID) }
-                        LaunchedEffect(shortcutTarget, state, items) {
-                            val known = shortcutTarget != null && items?.any { it.id == shortcutTarget } == true
-                            if (known && vm.choose(shortcutTarget!!)) openConversation(shortcutTarget)
-                        }
                         ShareScreen(
-                            state = state, items = items,
+                            state = state, items = items, highlighted = shortcutTarget,
                             onChoose = { id -> if (vm.choose(id)) openConversation(id) },
                             onClose = { vm.discard(); finish() },
                         )

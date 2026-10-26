@@ -23,7 +23,7 @@ class BatchEightTests : FeatureTestBase() {
     fun `a reset code signs in on a new device, ends the old one and works once`() = runBlocking<Unit> {
         val t = trio()
         makeAdmin(t.alice)
-        val created = t.alice.engine.issuePasswordReset(t.bob.userId())
+        val created = t.alice.engine.issuePasswordReset(t.bob.userId(), "password-alice")
         assertTrue(created.expiresAt > 0)
 
         val newPhone = client("bobnew")
@@ -52,7 +52,7 @@ class BatchEightTests : FeatureTestBase() {
             "invalid_reset_code",
             assertFailsWith<ApiException.NotFound> { other.engine.resetPassword("https://fake.example", "NOPE", "a-brand-new-password") }.code,
         )
-        val code = t.alice.engine.issuePasswordReset(t.bob.userId()).code
+        val code = t.alice.engine.issuePasswordReset(t.bob.userId(), "password-alice").code
         assertFailsWith<ApiException.Invalid> { other.engine.resetPassword("https://fake.example", code, "short") }
         assertNull(other.engine.account.value)
         assertFalse(server.devices.getValue(t.bob.deviceIdOnServer()).revoked, "a refused reset must not end the old device")
@@ -62,8 +62,8 @@ class BatchEightTests : FeatureTestBase() {
     fun `a new code cancels the older one`() = runBlocking<Unit> {
         val t = trio()
         makeAdmin(t.alice)
-        val first = t.alice.engine.issuePasswordReset(t.bob.userId()).code
-        val second = t.alice.engine.issuePasswordReset(t.bob.userId()).code
+        val first = t.alice.engine.issuePasswordReset(t.bob.userId(), "password-alice").code
+        val second = t.alice.engine.issuePasswordReset(t.bob.userId(), "password-alice").code
         assertFailsWith<ApiException.NotFound> { client("a").engine.resetPassword("https://fake.example", first, "a-brand-new-password") }
         assertNotNull(client("b").engine.resetPassword("https://fake.example", second, "a-brand-new-password"))
     }
@@ -73,7 +73,7 @@ class BatchEightTests : FeatureTestBase() {
         val t = trio()
         makeAdmin(t.alice)
         t.alice.engine.setVerified(t.bob.deviceIdOnServer(), true) // alice compared safety numbers with bob's phone
-        val code = t.alice.engine.issuePasswordReset(t.bob.userId()).code
+        val code = t.alice.engine.issuePasswordReset(t.bob.userId(), "password-alice").code
         val newPhone = client("bobnew")
         newPhone.engine.resetPassword("https://fake.example", code, "a-brand-new-password", "New phone")
         t.alice.engine.sync()
@@ -209,11 +209,22 @@ class BatchEightTests : FeatureTestBase() {
     // --- administration --------------------------------------------------------------------------------------------------
 
     @Test
+    fun `reset codes and user removal need the administrators own password`() = runBlocking<Unit> {
+        val t = trio()
+        makeAdmin(t.alice)
+        assertEquals("invalid_credentials", assertFailsWith<ApiException.Forbidden> { t.alice.engine.issuePasswordReset(t.bob.userId(), "wrong") }.code)
+        assertFailsWith<ApiException.Forbidden> { t.alice.engine.removeUser(t.carol.userId(), "wrong") }
+        assertTrue(t.alice.engine.adminUsers().first { it.username == "carol" }.disabledAt == null, "a wrong password removes nobody")
+        assertFailsWith<ApiException.Conflict> { t.alice.engine.issuePasswordReset(t.alice.userId(), "password-alice") }
+        assertTrue(t.alice.engine.issuePasswordReset(t.bob.userId(), "password-alice").code.isNotBlank())
+    }
+
+    @Test
     fun `the admin calls are refused for everybody else`() = runBlocking<Unit> {
         val t = trio()
         assertFailsWith<ApiException.Forbidden> { t.bob.engine.adminUsers() }
         assertFailsWith<ApiException.Forbidden> { t.bob.engine.adminStats() }
-        assertFailsWith<ApiException.Forbidden> { t.bob.engine.issuePasswordReset(t.carol.userId()) }
+        assertFailsWith<ApiException.Forbidden> { t.bob.engine.issuePasswordReset(t.carol.userId(), "password-bob") }
     }
 
     @Test
@@ -241,7 +252,7 @@ class BatchEightTests : FeatureTestBase() {
 
         t.alice.engine.revokeUserDevice(t.bob.userId(), t.bob.deviceIdOnServer())
         assertTrue(server.devices.getValue(t.bob.deviceIdOnServer()).revoked)
-        t.alice.engine.removeUser(t.carol.userId())
+        t.alice.engine.removeUser(t.carol.userId(), "password-alice")
         assertTrue(t.alice.engine.adminUsers().first { it.username == "carol" }.disabledAt != null)
 
         val page1 = t.alice.engine.adminAudit(limit = 1)

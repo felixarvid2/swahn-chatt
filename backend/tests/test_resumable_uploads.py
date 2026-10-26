@@ -305,7 +305,7 @@ def test_orphaned_temp_files_are_swept_but_live_ones_are_not(app, alice):
 
 def test_sessions_of_removed_accounts_are_collected(app, admin, alice):
     uid = start(alice, b"x" * 10).json()["upload_id"]
-    assert admin.delete(f"/admin/users/{alice.id}").status_code == 204
+    assert admin.delete(f"/admin/users/{alice.id}", json={"password": admin.password}).status_code == 204
     assert run_prune(app)["upload_sessions"] == 1
     assert not part_file(app, uid).exists()
     with app.state.session_factory() as db:

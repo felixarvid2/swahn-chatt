@@ -31,7 +31,7 @@ interface SwahnChatApi {
     suspend fun createInvitation(request: CreateInvitationRequest = CreateInvitationRequest()): CreatedInvitation
     suspend fun listInvitations(): List<Invitation>
     suspend fun deleteInvitation(id: String)
-    suspend fun deleteUser(userId: String)
+    suspend fun deleteUser(userId: String, request: AdminConfirmRequest)
 
     /** `GET /admin/users`: all accounts (removed ones too) with usage and push health. */
     suspend fun adminUsers(): List<AdminUser>
@@ -41,8 +41,11 @@ interface SwahnChatApi {
     /** `409 last_admin` when it would leave no active administrator. */
     suspend fun setUserAdmin(userId: String, admin: Boolean): AdminUser
 
-    /** The returned code is shown only here; the server keeps just a hash. */
-    suspend fun issuePasswordReset(userId: String): PasswordResetCreated
+    /**
+     * The returned code is shown only here; the server keeps just a hash. [request] carries the calling administrator's own
+     * password (`403` when wrong, `409` for the administrator's own account).
+     */
+    suspend fun issuePasswordReset(userId: String, request: AdminConfirmRequest): PasswordResetCreated
     suspend fun revokeUserDevice(userId: String, deviceId: String)
     suspend fun adminStats(): AdminStats
 

@@ -100,7 +100,7 @@ def test_error_statuses_are_documented_where_they_apply(spec):
         ("patch", "/api/v1/conversations/{conversation_id}", {"403", "404", "409", "422"}),
         ("post", "/api/v1/attachments", {"401", "413", "415", "422"}),
         ("get", "/api/v1/attachments/{attachment_id}", {"404", "416"}),
-        ("post", "/api/v1/admin/users/{user_id}/password-reset", {"403", "404"}),
+        ("post", "/api/v1/admin/users/{user_id}/password-reset", {"403", "404", "409", "422"}),
         ("delete", "/api/v1/admin/users/{user_id}", {"404", "409"}),
         ("get", "/api/v1/keys/{user_id}", {"404", "429"}),
         ("put", "/api/v1/users/me/password", {"403", "429"}),

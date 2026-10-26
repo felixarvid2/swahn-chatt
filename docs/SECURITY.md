@@ -280,7 +280,10 @@ Risks of libsignal that we accept and mitigate:
   the server without an **active** administrator (not removed, not suspended), the caller included; the check
   runs inside the serialised write transaction, so two administrators cannot demote each other at once. Users
   can delete their own account (`DELETE /users/me`) after re-entering the password (rate limited, failures
-  audited); a stolen unlocked phone with a valid session therefore cannot erase the account without the password.
+  audited); a stolen unlocked phone with a valid session therefore cannot erase the account without the password. An administrator's
+  session is not enough either to remove another account or to issue a password reset code: both `DELETE /admin/users/{id}` and
+  `POST /admin/users/{id}/password-reset` need the administrator's own current password (same lockout and audit as above), and a
+  reset code cannot be issued for the administrator's own account, so a stolen admin session cannot take over any account or its own.
   The effect is that of an administrator's removal, plus the avatar being unlinked and the account's
   unreferenced attachments being garbage-collected at the next hourly run.
 - **Re-authentication and lockout:** the password prompts of `DELETE /users/me` and `PUT /users/me/password` count wrong passwords toward the same persistent per-username lockout as `/auth/login` (`429` while locked, surviving restarts); `PUT /users/me/password` audits `password_change_failed` (no passwords are stored).
@@ -299,7 +302,7 @@ Risks of libsignal that we accept and mitigate:
   `action`, target user, target id, `ip`, small `details`). Actions: `invitation_created`, `invitation_revoked`,
   `invitation_redeemed` (once per use of a multi-use code, with the new user as target and `details.use`/`max_uses`),
   `admin_granted` (`via` = `invitation` or `admin`) and `admin_revoked` (role changes through `PATCH /admin/users/{id}`),
-  `user_suspended`, `user_unsuspended`, `login_blocked` (right password, suspended account), `self_delete_failed`, `password_change_failed`,
+  `user_suspended`, `user_unsuspended`, `login_blocked` (right password, suspended account), `self_delete_failed`, `password_change_failed`, `device_renamed` (device id only, never the name), `password_reset_denied` and `user_remove_failed` (an administrator typed a wrong password),
   `presence_setting_changed` (`share_presence` true/false), `login_success`, `login_failure`, `password_changed`, `refresh_token_reuse`,
   `device_revoked` (`details.by`: `self`, `admin` or `logout`), `user_removed` (API or CLI; `details.via` = `self` for self-deletion), `password_reset_issued`
   (`details.via`: `admin` or `cli`) and `password_reset_used` (`details.revoked_devices`). It is written in the
@@ -310,7 +313,8 @@ Risks of libsignal that we accept and mitigate:
   `SWAHNCHAT_AUDIT_RETENTION_DAYS` (default 180) are deleted by the hourly maintenance job. The log lives in the
   server's database: whoever controls the server can alter it, so it is a record for the family, not tamper-proof
   evidence.
-- **Password reset by an administrator:** the administrator (API) or whoever has the server shell (CLI) gets a
+- **Password reset by an administrator:** the administrator (API, which needs their own current password and refuses their own account)
+  or whoever has the server shell (CLI) gets a
   single-use code, valid 24 hours, stored as a SHA-256 hash (in its own hash domain, so an invitation code is
   not a reset code), which they pass to the user. Redeeming it sets the new password and **ends everything that was
   signed in**: all sessions and devices of the account are revoked, their keys and queued ciphertext deleted, their
@@ -492,10 +496,10 @@ per contact. If that is too much for your family, simply leave it off: the defau
 
 ## Privacy switches, shortcuts and language (batch 7)
 
-- **Read receipts and typing.** "Skicka läskvitton" off makes the app send `POST /conversations/{id}/read` with `notify: false`: the read position still moves and the account's own other devices get the receipt (their unread counts stay in step), the other members get none. The choice is stored with a read that could not be sent, so a retry never announces what was meant to be silent. "Visa när jag skriver" off sends no typing frames at all. Both are one-sided: the person still *receives* other people's receipts and typing events, the settings say so. A silent read cannot be announced afterwards. Receipts and typing are metadata the server can see in either case; only who gets told changes.
+- **Read receipts and typing.** "Skicka läskvitton" off makes the app send `POST /conversations/{id}/read` with `notify: false`: the read position still moves and the account's own other devices get the receipt (their unread counts stay in step), the other members get none. The choice is stored with a read that could not be sent, so a retry never announces what was meant to be silent. "Visa när jag skriver" off sends no typing frames at all. Both settings are per device, not per account: another phone of the same person that still has the default keeps announcing receipts and typing. Both are one-sided: the person still *receives* other people's receipts and typing events, the settings say so. A silent read cannot be announced afterwards. Receipts and typing are metadata the server can see in either case; only who gets told changes.
 - **Online status.** Opt-in on the server (`PATCH /users/me/settings`, off by default); the switch shows the server's answer, not a local flag. Being online/last seen is visible to every active user of the server, not only to chat partners (that is what `GET /users` returns; see Presence above), and the app only shows it in direct chats. The app keeps what it learns in memory only. Anyone can see others' status regardless of their own setting.
-- **Launcher shortcuts** show chat names on the launcher and in the share sheet, outside the app lock. With notification privacy "HIDDEN" none are published and existing ones are removed; they are also removed on sign-out and when a chat is left or deleted. Tapping one uses the normal deep link, so the app lock applies. They are long-lived (needed for conversation notifications); Android may keep a cached copy of a shortcut that a notification still refers to until that notification is gone. The share target hands over only a conversation id, validated against the account's conversations.
-- **Per-chat notification channels** are named after the chat, or "Chatt" plus a short id with hidden names (renamed when the setting changes), and removed with the chat and on sign-out.
+- **Launcher shortcuts** show chat names on the launcher and in the share sheet, outside the app lock. With notification privacy "HIDDEN" none are published and existing ones are removed (a shortcut the user pinned to the home screen is given a neutral label and icon and then disabled, since the launcher keeps pinned ones until they are disabled); they are also removed on sign-out and when a chat is left or deleted. Tapping one uses the normal deep link, so the app lock applies. They are long-lived (needed for conversation notifications); Android may keep a cached copy of a shortcut that a notification still refers to until that notification is gone. The share target hands over only a conversation id; any app can send that extra to the share screen, so it only marks the chat in the picker and the user still has to tap the chat.
+- **Per-chat notification channels** are named after the chat, or "Chatt" plus a short id with hidden names (renamed when the setting changes), and removed with the chat and on sign-out. A hidden-name channel contains the first 4 characters of the conversation id. Android keeps deleted notification channels, names included, in system storage until the app's data is cleared, so deleting them hides the names from the settings but does not erase them.
 - **Quiet hours** only change how a notification is posted (silent channel); nothing leaves the phone.
 - **Language, accent, background, contrast** are non-secret preferences in `AppPrefs` (the language is read before the app starts, so it is not in the encrypted database).
 
@@ -520,11 +524,11 @@ per contact. If that is too much for your family, simply leave it off: the defau
   it goes.
 - **The password-reset code in the admin view** is held in the view model's memory while the dialog is open and nowhere else: not in saved
   state, preferences, the database, the log or a notification; the clipboard copy is flagged sensitive. Closing the dialog drops it. The
-  server shows it once and keeps only a hash.
+  server shows it once and keeps only a hash. While it is shown (and an invitation code or QR), the dialog window is FLAG_SECURE whatever the "block screenshots" setting says (a dialog is a window of its own, so the activity's flag does not cover it), and the code input fields use the password keyboard type, which asks keyboards not to learn or suggest the text.
 - **The admin view adds no server capability.** Every call it makes (`/admin/users`, suspend, role change, reset code, device revoke, stats,
   audit, invitations) already existed and is enforced by the server; the row is hidden for non-administrators only as convenience, and a
-  non-administrator who calls the same endpoints gets `403`. Destructive actions confirm first; removing a user needs the username typed.
-  An administrator who issues a reset code can take over that account from then on (see "Password reset by an administrator" above); the
+  non-administrator who calls the same endpoints gets `403`. Destructive actions confirm first; removing a user needs the username typed. Creating a reset code and removing a user also ask for the administrator's own password in a password field (sent once, cleared after use, never logged).
+  An administrator who issues a reset code (after confirming with their own password) can take over that account from then on (see "Password reset by an administrator" above); the
   view says so before the code is created, and contacts still see the new device.
 - **Signing in with a reset code** is a normal sign-in on a new device (`POST /auth/password/reset` revokes every older device first). The app
   does not skip any approval for it: the other people's apps treat the device like any new device, and the owner still approves new devices on

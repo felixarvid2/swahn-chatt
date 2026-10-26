@@ -11,6 +11,7 @@ import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.core.graphics.drawable.IconCompat
 import dagger.hilt.android.qualifiers.ApplicationContext
 import se.swahnchat.app.MainActivity
+import se.swahnchat.app.R
 import se.swahnchat.app.data.AppPrefs
 import se.swahnchat.app.data.NotificationPrivacy
 import javax.inject.Inject
@@ -44,9 +45,10 @@ class ConversationShortcuts @Inject constructor(
         }
     }
 
-    /** One chat is gone (left, deleted): its shortcut goes. */
+    /** One chat is gone (left, deleted): its shortcut goes, a copy the user pinned to the launcher is disabled. */
     fun remove(conversationId: String) {
         try {
+            disablePinned(listOf(conversationId)) // first: the update needs the shortcut to exist
             ShortcutManagerCompat.removeDynamicShortcuts(context, listOf(conversationId))
             ShortcutManagerCompat.removeLongLivedShortcuts(context, listOf(conversationId))
         } catch (e: Exception) {
@@ -54,10 +56,11 @@ class ConversationShortcuts @Inject constructor(
         }
     }
 
-    /** Removes every shortcut of this app (sign-out, hidden names). */
+    /** Removes every shortcut of this app (sign-out, hidden names); the ones pinned to the launcher are disabled and lose the name. */
     fun removeAll() {
         try {
             val ids = knownIds().toList()
+            disablePinned(ids) // first: the update needs the shortcuts to exist
             ShortcutManagerCompat.removeAllDynamicShortcuts(context)
             if (ids.isNotEmpty()) ShortcutManagerCompat.removeLongLivedShortcuts(context, ids)
         } catch (e: Exception) {
@@ -65,18 +68,54 @@ class ConversationShortcuts @Inject constructor(
         }
     }
 
+    /**
+     * The launcher keeps a shortcut the user pinned even after it was removed here, with the chat's name, until it is
+     * disabled; a disabled one stays visible but cannot be used. So the label and the icon (the first letter of the name)
+     * are replaced by neutral ones first, then it is disabled with a message that names nothing.
+     */
+    private fun disablePinned(ids: List<String>) {
+        if (ids.isEmpty()) return
+        val message = context.getString(R.string.shortcut_disabled)
+        try {
+            // updateShortcuts ignores ids that are neither published nor pinned
+            val neutral = ids.map { id ->
+                ShortcutInfoCompat.Builder(context, id)
+                    .setShortLabel(message)
+                    .setLongLabel(message)
+                    .setIntent(Intent(Intent.ACTION_MAIN).setClass(context, MainActivity::class.java))
+                    .setIcon(IconCompat.createWithResource(context, R.mipmap.ic_launcher))
+                    .build()
+            }
+            ShortcutManagerCompat.updateShortcuts(context, neutral)
+        } catch (e: Exception) {
+            // still disabled below
+        }
+        ShortcutManagerCompat.disableShortcuts(context, ids, message)
+    }
+
     /** Replaces the dynamic shortcuts by [recent] (most recent first) and drops long-lived ones of chats that are not in [existing] any more. */
     internal fun publish(recent: List<Chat>, existing: Set<String>) {
+        if (prefs.notificationPrivacy.value == NotificationPrivacy.HIDDEN) { // names must not reach the launcher, pinned copies included
+            removeAll()
+            return
+        }
         ShortcutManagerCompat.setDynamicShortcuts(context, recent.mapIndexed { rank, chat -> build(chat, rank) })
         // chats that are gone: their long-lived (cached) shortcuts would otherwise keep the name on the share sheet
         val stale = knownIds() - existing
-        if (stale.isNotEmpty()) ShortcutManagerCompat.removeLongLivedShortcuts(context, stale.toList())
+        if (stale.isNotEmpty()) {
+            disablePinned(stale.toList())
+            ShortcutManagerCompat.removeLongLivedShortcuts(context, stale.toList())
+        }
     }
 
     internal data class Chat(val id: String, val title: String)
 
     internal fun knownIds(): Set<String> = ShortcutManagerCompat
-        .getShortcuts(context, ShortcutManagerCompat.FLAG_MATCH_DYNAMIC or ShortcutManagerCompat.FLAG_MATCH_CACHED)
+        .getShortcuts(
+            context,
+            ShortcutManagerCompat.FLAG_MATCH_DYNAMIC or ShortcutManagerCompat.FLAG_MATCH_CACHED or ShortcutManagerCompat.FLAG_MATCH_PINNED,
+        )
+        .filter { it.isEnabled } // a pinned shortcut that was disabled is already neutral; it is not a name on the launcher any more
         .mapTo(HashSet()) { it.id }
 
     private fun build(chat: Chat, rank: Int): ShortcutInfoCompat {

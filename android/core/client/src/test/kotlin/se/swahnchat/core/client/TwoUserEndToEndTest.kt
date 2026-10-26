@@ -576,7 +576,11 @@ class TwoUserEndToEndTest {
     fun anAdministratorsResetCodeSignsTheUserInOnANewDeviceAndEndsTheOldOnes() = runBlocking<Unit> {
         val dave = newPhone("dave", "dave-password-1")
         val oldDevice = dave.deviceId
-        val created = admin.engine.issuePasswordReset(dave.userId)
+        // the administrator's session alone is not enough: the server asks for their own password
+        assertFailsWith<ApiException.Forbidden> { admin.engine.issuePasswordReset(dave.userId, "not-the-password") }
+        assertFailsWith<ApiException.Forbidden> { admin.engine.removeUser(dave.userId, "not-the-password") }
+        assertFailsWith<ApiException.Conflict> { admin.engine.issuePasswordReset(admin.userId, "admin-password-1") }
+        val created = admin.engine.issuePasswordReset(dave.userId, "admin-password-1")
         assertTrue(created.code.isNotBlank() && created.expiresAt > System.currentTimeMillis())
 
         val daveNew = phone("dave2")
@@ -605,7 +609,7 @@ class TwoUserEndToEndTest {
     @Test
     fun aWeakPasswordOrAnUnknownCodeSignsNobodyIn() = runBlocking<Unit> {
         val erik = newPhone("erik", "erik-password-1")
-        val code = admin.engine.issuePasswordReset(erik.userId).code
+        val code = admin.engine.issuePasswordReset(erik.userId, "admin-password-1").code
         val other = phone("erik2")
         assertFailsWith<ApiException.Invalid> { other.engine.resetPassword(url, code, "short", "Phone") }
         assertNull(other.engine.account.value)
@@ -654,7 +658,7 @@ class TwoUserEndToEndTest {
         assertFailsWith<ApiException.Forbidden> { phone("frida2").engine.login(url, "frida_$run", "frida-password-1") }
         admin.engine.unsuspendUser(frida.userId)
         phone("frida3").engine.login(url, "frida_$run", "frida-password-1")
-        admin.engine.issuePasswordReset(frida.userId)
+        admin.engine.issuePasswordReset(frida.userId, "admin-password-1")
         admin.engine.revokeUserDevice(frida.userId, frida.deviceId)
         assertFailsWith<ApiException> { frida.engine.myDevices() }
 

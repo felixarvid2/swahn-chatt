@@ -1,5 +1,6 @@
 package se.swahnchat.app.ui.components
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -26,6 +27,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.selected as semanticsSelected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import se.swahnchat.app.R
@@ -52,6 +55,8 @@ fun ConversationPicker(
     onQuery: (String) -> Unit,
     onToggle: (String) -> Unit,
     modifier: Modifier = Modifier,
+    /** One chat that is marked (and announced as selected) without choosing it: the user still has to tap. */
+    highlighted: String? = null,
 ) {
     Column(modifier.fillMaxSize()) {
         OutlinedTextField(
@@ -86,11 +91,16 @@ fun ConversationPicker(
                 }
                 items(shown, key = { it.id }) { c ->
                     val isSelected = c.id in selected
+                    val marked = c.id == highlighted
                     Row(
                         Modifier.fillMaxWidth().heightIn(min = 64.dp)
                             .then(
                                 if (multiple) Modifier.toggleable(value = isSelected, role = Role.Checkbox, onValueChange = { onToggle(c.id) })
                                 else Modifier.clickable(role = Role.Button) { onToggle(c.id) },
+                            )
+                            .then(
+                                if (marked) Modifier.background(MaterialTheme.colorScheme.primaryContainer).semantics { semanticsSelected = true }
+                                else Modifier,
                             )
                             .padding(horizontal = 16.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,

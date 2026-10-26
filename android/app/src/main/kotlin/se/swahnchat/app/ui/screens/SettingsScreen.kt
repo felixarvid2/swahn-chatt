@@ -524,6 +524,7 @@ fun SettingsContent(state: SettingsUiState, cb: SettingsCallbacks, modifier: Mod
     state.invitation?.let { inv ->
         AlertDialog(
             onDismissRequest = cb.onDismissInvitation,
+            properties = SecureDialogProperties,
             title = { Text(stringResource(R.string.invitation_created)) },
             text = { InvitationCreated(inv.code, state.invitationQr, cb.onCopy, cb.onShare) },
             confirmButton = { TextButton(onClick = cb.onDismissInvitation) { Text(stringResource(R.string.action_close)) } },

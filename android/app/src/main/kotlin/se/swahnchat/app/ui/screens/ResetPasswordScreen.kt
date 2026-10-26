@@ -150,7 +150,7 @@ fun ResetPasswordContent(state: ResetPasswordUiState, cb: ResetPasswordCallbacks
                 supporting = R.string.server_address_hint, capitalization = KeyboardCapitalization.None,
             )
             Field(
-                state.code, cb.onCode, R.string.reset_code, KeyboardType.Ascii, error = FieldError.CODE in state.fieldErrors,
+                state.code, cb.onCode, R.string.reset_code, KeyboardType.Password, error = FieldError.CODE in state.fieldErrors,
                 supporting = R.string.reset_code_hint, capitalization = KeyboardCapitalization.None,
             )
             PasswordField(

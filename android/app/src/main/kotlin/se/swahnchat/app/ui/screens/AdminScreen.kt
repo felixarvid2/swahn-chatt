@@ -50,6 +50,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -62,6 +66,13 @@ import se.swahnchat.core.model.AdminDevice
 import se.swahnchat.core.model.AdminUser
 import se.swahnchat.core.model.AuditEvent
 import se.swahnchat.core.model.Invitation
+
+/**
+ * A dialog that shows a secret (reset code, invitation code or QR): FLAG_SECURE on the dialog's own window, whatever the
+ * "block screenshots" setting says. A dialog is a window of its own, so the activity's flag (see MainActivity) does not
+ * cover it, and the setting is only added to, never replaced.
+ */
+internal val SecureDialogProperties = androidx.compose.ui.window.DialogProperties(securePolicy = androidx.compose.ui.window.SecureFlagPolicy.SecureOn)
 
 /** What the administrator can do with one account, in the order the menu shows it. */
 enum class AdminAction { SUSPEND, UNSUSPEND, MAKE_ADMIN, REMOVE_ADMIN, RESET_CODE, REMOVE }
@@ -91,9 +102,10 @@ class AdminCallbacks(
     val onSuspend: (String) -> Unit = {},
     val onUnsuspend: (String) -> Unit = {},
     val onSetAdmin: (userId: String, admin: Boolean) -> Unit = { _, _ -> },
-    val onResetCode: (AdminUser) -> Unit = {},
+    /** The second argument is the calling administrator's own password; the server asks for it. */
+    val onResetCode: (AdminUser, String) -> Unit = { _, _ -> },
     val onRevokeDevice: (userId: String, deviceId: String) -> Unit = { _, _ -> },
-    val onRemoveUser: (String) -> Unit = {},
+    val onRemoveUser: (userId: String, adminPassword: String) -> Unit = { _, _ -> },
     val onCreateInvitation: (note: String, hours: Int, admin: Boolean) -> Unit = { _, _, _ -> },
     val onRevokeInvitation: (String) -> Unit = {},
     val onDismissInvitation: () -> Unit = {},
@@ -189,6 +201,7 @@ fun AdminContent(state: AdminUiState, cb: AdminCallbacks, modifier: Modifier = M
     state.invitation?.let { inv ->
         AlertDialog(
             onDismissRequest = cb.onDismissInvitation,
+            properties = SecureDialogProperties,
             title = { Text(stringResource(R.string.invitation_created)) },
             text = { InvitationCreated(inv.code, state.invitationQr, cb.onCopy, cb.onShare) },
             confirmButton = { TextButton(onClick = cb.onDismissInvitation) { Text(stringResource(R.string.action_close)) } },
@@ -197,6 +210,7 @@ fun AdminContent(state: AdminUiState, cb: AdminCallbacks, modifier: Modifier = M
     state.resetCode?.let { r ->
         AlertDialog(
             onDismissRequest = cb.onDismissResetCode,
+            properties = SecureDialogProperties,
             title = { Text(stringResource(R.string.admin_reset_code_title, r.userName)) },
             text = { ResetCodeCard(r, whenText = rememberScheduleFormatter(), onCopy = cb.onCopy) },
             confirmButton = { TextButton(onClick = cb.onDismissResetCode) { Text(stringResource(R.string.admin_reset_code_done)) } },
@@ -377,7 +391,10 @@ internal fun pushHealth(d: AdminDevice): String = when {
 private fun ConfirmAdminDialog(p: Pending, cb: AdminCallbacks, onDone: () -> Unit) {
     when (p) {
         is Pending.OnUser -> when (p.action) {
-            AdminAction.REMOVE -> RemoveUserDialog(p.user, onDismiss = onDone, onConfirm = { cb.onRemoveUser(p.user.id); onDone() })
+            AdminAction.REMOVE -> RemoveUserDialog(
+                p.user, onDismiss = onDone,
+                onConfirm = { password -> runAdminAction(AdminAction.REMOVE, p.user, password, cb); onDone() },
+            )
             else -> {
                 val (title, text, label) = when (p.action) {
                     AdminAction.SUSPEND -> Triple(R.string.admin_suspend_title, R.string.admin_suspend_text, R.string.admin_action_suspend)
@@ -386,20 +403,25 @@ private fun ConfirmAdminDialog(p: Pending, cb: AdminCallbacks, onDone: () -> Uni
                     AdminAction.REMOVE_ADMIN -> Triple(R.string.admin_remove_admin_title, R.string.admin_remove_admin_text, R.string.admin_action_remove_admin)
                     else -> Triple(R.string.admin_reset_title, R.string.admin_reset_text, R.string.admin_reset_create)
                 }
+                // a reset code takes the account over, so it also needs the administrator's own password
+                var password by remember { mutableStateOf("") }
+                val needsPassword = p.action == AdminAction.RESET_CODE
                 AlertDialog(
                     onDismissRequest = onDone,
                     title = { Text(stringResource(title, p.user.displayName)) },
-                    text = { Text(stringResource(text, p.user.displayName)) },
+                    text = {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(stringResource(text, p.user.displayName))
+                            if (needsPassword) AdminPasswordForm(password, onPassword = { password = it })
+                        }
+                    },
                     confirmButton = {
                         TextButton(
+                            enabled = !needsPassword || canConfirmReset(password),
                             onClick = {
-                                when (p.action) {
-                                    AdminAction.SUSPEND -> cb.onSuspend(p.user.id)
-                                    AdminAction.UNSUSPEND -> cb.onUnsuspend(p.user.id)
-                                    AdminAction.MAKE_ADMIN -> cb.onSetAdmin(p.user.id, true)
-                                    AdminAction.REMOVE_ADMIN -> cb.onSetAdmin(p.user.id, false)
-                                    else -> cb.onResetCode(p.user)
-                                }
+                                val typed = password
+                                password = "" // never kept after use
+                                runAdminAction(p.action, p.user, typed, cb)
                                 onDone()
                             },
                         ) { Text(stringResource(label)) }
@@ -425,10 +447,14 @@ private fun ConfirmAdminDialog(p: Pending, cb: AdminCallbacks, onDone: () -> Uni
     }
 }
 
-/** Removing an account cannot be undone: the username has to be typed to enable the button. */
+/**
+ * Removing an account cannot be undone: the username has to be typed to enable the button, and the administrator's own
+ * password is asked for as well (an administrator's session alone must not be enough).
+ */
 @Composable
-private fun RemoveUserDialog(user: AdminUser, onDismiss: () -> Unit, onConfirm: () -> Unit) {
+private fun RemoveUserDialog(user: AdminUser, onDismiss: () -> Unit, onConfirm: (adminPassword: String) -> Unit) {
     var typed by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.admin_remove_title, user.displayName)) },
@@ -436,12 +462,30 @@ private fun RemoveUserDialog(user: AdminUser, onDismiss: () -> Unit, onConfirm: 
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(stringResource(R.string.admin_remove_text), style = MaterialTheme.typography.bodyMedium)
                 RemoveUserForm(user.username, typed, onTyped = { typed = it })
+                AdminPasswordForm(password, onPassword = { password = it })
             }
         },
-        confirmButton = { TextButton(enabled = canConfirmRemoval(typed, user.username),
-            onClick = onConfirm) { Text(stringResource(R.string.admin_action_remove)) } },
+        confirmButton = { TextButton(enabled = canRemoveUser(typed, user.username, password),
+            onClick = { val given = password; password = ""; onConfirm(given) }) { Text(stringResource(R.string.admin_action_remove)) } },
         dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) } },
     )
+}
+
+/** A reset code takes the account over, so it needs the administrator's own password as well. */
+fun canConfirmReset(adminPassword: String): Boolean = adminPassword.isNotEmpty()
+
+/** Removing needs the username typed and the administrator's own password. */
+fun canRemoveUser(typed: String, username: String, adminPassword: String): Boolean =
+    canConfirmRemoval(typed, username) && adminPassword.isNotEmpty()
+
+/** What a confirmed [action] calls; [adminPassword] only goes to the two calls the server protects with it. */
+internal fun runAdminAction(action: AdminAction, user: AdminUser, adminPassword: String, cb: AdminCallbacks) = when (action) {
+    AdminAction.SUSPEND -> cb.onSuspend(user.id)
+    AdminAction.UNSUSPEND -> cb.onUnsuspend(user.id)
+    AdminAction.MAKE_ADMIN -> cb.onSetAdmin(user.id, true)
+    AdminAction.REMOVE_ADMIN -> cb.onSetAdmin(user.id, false)
+    AdminAction.RESET_CODE -> cb.onResetCode(user, adminPassword)
+    AdminAction.REMOVE -> cb.onRemoveUser(user.id, adminPassword)
 }
 
 /** The removal is confirmed once the username was typed exactly (surrounding spaces do not count). */
@@ -452,6 +496,18 @@ fun canConfirmRemoval(typed: String, username: String): Boolean = typed.trim() =
 internal fun RemoveUserForm(username: String, typed: String, onTyped: (String) -> Unit) {
     Text(stringResource(R.string.admin_remove_type, username), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
     OutlinedTextField(typed, onTyped, singleLine = true, label = { Text(stringResource(R.string.username)) })
+}
+
+/** The calling administrator's own password, asked for before a reset code is created or a user is removed. Not logged, not kept. */
+@Composable
+internal fun AdminPasswordForm(password: String, onPassword: (String) -> Unit) {
+    Text(stringResource(R.string.admin_confirm_password), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+    OutlinedTextField(
+        password, onPassword, singleLine = true, label = { Text(stringResource(R.string.admin_your_password)) },
+        visualTransformation = PasswordVisualTransformation(),
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done, autoCorrectEnabled = false),
+        modifier = Modifier.fillMaxWidth(),
+    )
 }
 
 // --- invitations, status, log -----------------------------------------------------------------------------------------------------

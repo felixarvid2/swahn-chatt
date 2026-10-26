@@ -83,7 +83,7 @@ def test_suspend_rules(admin, alice, factory):
     assert alice.post(f"/admin/users/{admin.id}/suspend").status_code == 403
     assert alice.post(f"/admin/users/{admin.id}/unsuspend").status_code == 403
     gone = factory.user("gone")
-    assert admin.delete(f"/admin/users/{gone.id}").status_code == 204
+    assert admin.delete(f"/admin/users/{gone.id}", json={"password": admin.password}).status_code == 204
     assert admin.post(f"/admin/users/{gone.id}/suspend").status_code == 404  # removed accounts cannot be suspended
 
 
@@ -101,7 +101,7 @@ def test_suspend_is_idempotent_audited_and_listed(admin, alice):
 
 
 def test_blocked_login_is_audited_and_a_reset_code_does_not_get_a_suspended_user_in(client, admin, alice):
-    code = admin.post(f"/admin/users/{alice.id}/password-reset").json()["code"]
+    code = admin.post(f"/admin/users/{alice.id}/password-reset", {"password": admin.password}).json()["code"]
     admin.post(f"/admin/users/{alice.id}/suspend")
     client.post("/api/v1/auth/login", json={"username": "alice", "password": PASSWORD, "device_name": "x"})
     blocked = actions(admin, "login_blocked")

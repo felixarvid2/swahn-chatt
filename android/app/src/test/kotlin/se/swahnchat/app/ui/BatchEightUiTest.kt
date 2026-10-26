@@ -12,6 +12,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasText
@@ -45,7 +46,12 @@ import se.swahnchat.app.ui.screens.AdminContent
 import se.swahnchat.app.ui.screens.AdminTab
 import se.swahnchat.app.ui.screens.RemoveUserForm
 import se.swahnchat.app.ui.screens.RenameDeviceForm
+import se.swahnchat.app.ui.screens.AdminAction
+import se.swahnchat.app.ui.screens.AdminPasswordForm
 import se.swahnchat.app.ui.screens.canConfirmRemoval
+import se.swahnchat.app.ui.screens.canConfirmReset
+import se.swahnchat.app.ui.screens.canRemoveUser
+import se.swahnchat.app.ui.screens.runAdminAction
 import se.swahnchat.app.ui.screens.AdminUiState
 import se.swahnchat.app.ui.screens.DeleteAccountCallbacks
 import se.swahnchat.app.ui.screens.DeleteAccountContent
@@ -596,6 +602,40 @@ class AdminUiTest : BatchEightUiBase() {
         assertEquals("bertil", typed)
     }
 
+    @Test fun `removing needs the username and the administrators own password, a reset code the password`() {
+        assertFalse(canRemoveUser("bertil", "bertil", ""))
+        assertFalse(canRemoveUser("bert", "bertil", "pw"))
+        assertTrue(canRemoveUser(" bertil ", "bertil", "pw"))
+        assertFalse(canConfirmReset(""))
+        assertTrue(canConfirmReset("pw"))
+    }
+
+    @Test fun `the password goes only to the two calls the server protects with it`() {
+        val seen = ArrayList<String>()
+        val cb = AdminCallbacks(
+            onResetCode = { u, pw -> seen += "reset:${u.id}:$pw" }, onRemoveUser = { id, pw -> seen += "remove:$id:$pw" },
+            onSuspend = { seen += "suspend:$it" }, onSetAdmin = { id, a -> seen += "admin:$id:$a" },
+        )
+        runAdminAction(AdminAction.RESET_CODE, bertil, "admins-pw", cb)
+        runAdminAction(AdminAction.REMOVE, bertil, "admins-pw", cb)
+        runAdminAction(AdminAction.SUSPEND, bertil, "admins-pw", cb)
+        runAdminAction(AdminAction.MAKE_ADMIN, bertil, "admins-pw", cb)
+        assertEquals(listOf("reset:u2:admins-pw", "remove:u2:admins-pw", "suspend:u2", "admin:u2:true"), seen)
+    }
+
+    @Test fun `the password field hides what is typed and reports it`() {
+        var typed by mutableStateOf("")
+        content { AdminPasswordForm(typed, onPassword = { typed = it }) }
+        compose.onNodeWithText("Bekräfta med ditt eget lösenord", substring = true).assertIsDisplayed()
+        compose.onNodeWithText("Ditt lösenord").performTextInput("admins-pw")
+        assertEquals("admins-pw", typed)
+        compose.onNodeWithText("Ditt lösenord").assert(
+            androidx.compose.ui.test.SemanticsMatcher("shown as dots only") {
+                it.config[androidx.compose.ui.semantics.SemanticsProperties.EditableText].text.let { shown -> shown.isNotEmpty() && shown.all { c -> c == '\u2022' } }
+            },
+        )
+    }
+
     @Test fun `the devices show the push health and a device can be revoked after a confirmation`() {
         val seen = ArrayList<String>()
         content { AdminContent(state(), AdminCallbacks(onRevokeDevice = { u, d -> seen += "$u/$d" })) }
@@ -612,16 +652,10 @@ class AdminUiTest : BatchEightUiBase() {
         assertEquals(listOf("u2/dev2"), seen)
     }
 
-    @Test fun `a reset code is created after a confirmation and shown once with copy and expiry`() {
-        val asked = ArrayList<String>()
+    @Test fun `a reset code is shown once with copy and expiry`() {
         val copied = ArrayList<String>()
-        var s by mutableStateOf(state())
-        content { AdminContent(s, AdminCallbacks(onResetCode = { asked += it.id; s = s.copy(resetCode = ResetCodeUi(it.displayName, "RESET-AB12CD34", NOW + 86_400_000)) }, onCopy = { copied += it }, onDismissResetCode = { s = s.copy(resetCode = null) })) }
-        compose.onNodeWithContentDescription("Åtgärder för Bertil Ek").performClick()
-        compose.onNodeWithText("Skapa återställningskod").performClick()
-        compose.onNodeWithText("Koden visas bara en gång", substring = true).assertIsDisplayed()
-        compose.onNodeWithText("Skapa kod").performClick()
-        assertEquals(listOf("u2"), asked)
+        var s by mutableStateOf(state().copy(resetCode = ResetCodeUi("Bertil Ek", "RESET-AB12CD34", NOW + 86_400_000)))
+        content { AdminContent(s, AdminCallbacks(onCopy = { copied += it }, onDismissResetCode = { s = s.copy(resetCode = null) })) }
         compose.onNodeWithText("RESET-AB12CD34").assertIsDisplayed()
         compose.onNodeWithText("Gäller en gång, till", substring = true).assertIsDisplayed()
         compose.onNodeWithText("Koden visas bara nu", substring = true).assertIsDisplayed()

@@ -254,6 +254,10 @@ data class DeviceRenameRequest(val name: String)
 @Serializable
 data class DeleteAccountRequest(val password: String)
 
+/** Body of `POST /admin/users/{id}/password-reset` and `DELETE /admin/users/{id}`: the calling administrator's own password. */
+@Serializable
+data class AdminConfirmRequest(val password: String)
+
 /** `POST /devices/me/push/test` answers `202 {"status":"queued"}`. */
 @Serializable
 data class PushTestQueued(val status: String = "queued")

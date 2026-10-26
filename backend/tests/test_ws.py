@@ -70,7 +70,7 @@ def test_revoked_session_cannot_connect(client, alice):
 def test_removed_user_is_disconnected(factory, client, admin, bob):
     with connect(client, bob) as ws:
         ws.receive_json()
-        assert admin.delete(f"/admin/users/{bob.id}").status_code == 204
+        assert admin.delete(f"/admin/users/{bob.id}", json={"password": admin.password}).status_code == 204
         with pytest.raises(WebSocketDisconnect) as exc:
             ws.receive_json()
         assert exc.value.code == 4401

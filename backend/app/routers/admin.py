@@ -12,14 +12,16 @@ from app.deps import (
     get_alerts,
     get_db,
     get_ip,
+    get_limiter,
     get_read_db,
     get_settings_dep,
     require_admin,
     require_admin_write,
 )
-from app.errors import conflict, error_responses, invalid, not_found
+from app.errors import ApiError, conflict, error_responses, invalid, not_found
 from app.migrate import code_head, db_revision
 from app.models import Attachment, Device, Invitation, User
+from app.ratelimit import RateLimiter
 from app.schemas import (
     AdminStats,
     AdminUserOut,
@@ -29,9 +31,10 @@ from app.schemas import (
     InvitationCreated,
     InvitationOut,
     PasswordResetCreated,
+    SelfDelete,
 )
-from app.security import hash_invite_code, new_invite_code
-from app.services import accounts, audit, dbmaint, password_reset, stats
+from app.security import hash_invite_code, new_invite_code, verify_password
+from app.services import accounts, audit, dbmaint, lockout, password_reset, stats
 from app.services.alerts import AdminAlerts
 
 router = APIRouter(prefix="/admin", tags=["admin"], responses=error_responses(401, 403))
@@ -143,13 +146,50 @@ def revoke_invitation(
     return Response(status_code=204)
 
 
-@router.delete("/users/{user_id}", status_code=204, summary="Remove a user", responses=error_responses(404, 409))
+def confirm_admin_password(
+    p: Principal,
+    password: str,
+    action: str,
+    target_user: str,
+    settings: Settings,
+    limiter: RateLimiter,
+    alerts: AdminAlerts,
+    ip: str,
+    rdb: Session,
+    db: Session,
+) -> None:
+    """Re-authenticate the calling administrator (same checks as DELETE /users/me): an administrator's session alone
+    must not be enough to take over or remove an account."""
+    limiter.check(f"admin-confirm:{p.user_id}", 20)
+    lockout.ensure_not_locked(limiter, settings, p.username)
+    current = rdb.scalar(select(User.password_hash).where(User.id == p.user_id))
+    rdb.rollback()  # no transaction while Argon2 runs
+    if current is None or not verify_password(settings, current, password):
+        if lockout.record_failure(db, limiter, settings, p.username):
+            alerts.send("login_lockout")
+        audit.record(db, action, actor=p.user_id, target_user=target_user, ip=ip)
+        db.commit()
+        raise ApiError(403, "invalid_credentials", "password is wrong")
+
+
+@router.delete(
+    "/users/{user_id}",
+    status_code=204,
+    summary="Remove a user (needs the administrator's own password)",
+    responses=error_responses(403, 404, 409, 413, 422, 429),
+)
 def remove_user(
     user_id: str,
+    body: SelfDelete,
     p: Principal = Depends(require_admin_write),
+    settings: Settings = Depends(get_settings_dep),
+    limiter: RateLimiter = Depends(get_limiter),
+    alerts: AdminAlerts = Depends(get_alerts),
     ip: str = Depends(get_ip),
+    rdb: Session = Depends(get_read_db),
     db: Session = Depends(get_db),
 ):
+    confirm_admin_password(p, body.password, "user_remove_failed", user_id, settings, limiter, alerts, ip, rdb, db)
     if user_id == p.user_id:
         raise conflict("administrators cannot remove themselves")
     user = db.get(User, user_id)
@@ -165,15 +205,23 @@ def remove_user(
     "/users/{user_id}/password-reset",
     status_code=201,
     response_model=PasswordResetCreated,
-    summary="Issue a password reset code for a user",
-    responses=error_responses(404),
+    summary="Issue a password reset code for a user (needs the administrator's own password)",
+    responses=error_responses(403, 404, 409, 413, 422, 429),
 )
 def issue_password_reset(
     user_id: str,
+    body: SelfDelete,
     p: Principal = Depends(require_admin_write),
+    settings: Settings = Depends(get_settings_dep),
+    limiter: RateLimiter = Depends(get_limiter),
+    alerts: AdminAlerts = Depends(get_alerts),
     ip: str = Depends(get_ip),
+    rdb: Session = Depends(get_read_db),
     db: Session = Depends(get_db),
 ):
+    confirm_admin_password(p, body.password, "password_reset_denied", user_id, settings, limiter, alerts, ip, rdb, db)
+    if user_id == p.user_id:
+        raise conflict("administrators cannot issue a reset code for themselves; change the password instead")
     user = db.get(User, user_id)
     if user is None or user.disabled_at is not None:
         raise not_found("user not found")

@@ -932,6 +932,9 @@
     <string name="admin_remove_title">Ta bort %1$s?</string>
     <string name="admin_remove_text">Kontot stängs, alla enheter och sessioner tas bort och användaren lämnar alla chattar. Det går inte att ångra.</string>
     <string name="admin_remove_type">Skriv användarnamnet %1$s för att bekräfta.</string>
+    <string name="shortcut_disabled">Den här chatten finns inte längre</string>
+    <string name="admin_your_password">Ditt lösenord</string>
+    <string name="admin_confirm_password">Bekräfta med ditt eget lösenord. Annars räcker det inte att din session är inloggad.</string>
     <string name="admin_revoke_device_title">Ta bort %1$s för %2$s?</string>
     <string name="admin_revoke_device_text">Enheten loggas ut direkt och dess nycklar och köade meddelanden raderas. Använd det om telefonen är borttappad.</string>
     <string name="admin_push_none">Push: ingen adress registrerad</string>

@@ -87,7 +87,7 @@ def test_admin_users_lists_everyone_with_usage(factory, app, admin, alice, bob):
                 content_type="application/octet-stream", size=size, sha256="0" * 64, storage_path="x", created_at=1,
             ))  # fmt: skip
         db.commit()
-    assert admin.delete(f"/admin/users/{bob.id}").status_code == 204
+    assert admin.delete(f"/admin/users/{bob.id}", json={"password": admin.password}).status_code == 204
     r = admin.get("/admin/users")
     assert r.status_code == 200
     users = {u["username"]: u for u in r.json()}
@@ -132,7 +132,7 @@ def test_admin_stats(factory, app, admin, alice, bob):
     assert 0 <= s["uptime_seconds"] < 300
     bob.ack(bob.sync()["next_cursor"])
     assert admin.get("/admin/stats").json()["undelivered_envelopes"] == 0
-    admin.delete(f"/admin/users/{bob.id}")
+    admin.delete(f"/admin/users/{bob.id}", json={"password": admin.password})
     after = admin.get("/admin/stats").json()
     assert (after["users"], after["active_devices"]) == (2, 2)
 
@@ -215,7 +215,7 @@ def test_audit_records_the_security_events_without_secrets(factory, app, client,
         == 204
     )
     assert good.delete(f"/devices/{good.device_id}").status_code == 401  # revoked by the password change
-    assert admin.delete(f"/admin/users/{bob.id}").status_code == 204
+    assert admin.delete(f"/admin/users/{bob.id}", json={"password": admin.password}).status_code == 204
     # refresh token reuse
     stolen = alice.refresh
     first = client.post("/api/v1/auth/refresh", json={"refresh_token": stolen})

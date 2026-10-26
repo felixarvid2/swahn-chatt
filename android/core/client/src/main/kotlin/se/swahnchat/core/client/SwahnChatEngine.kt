@@ -24,6 +24,7 @@ import se.swahnchat.core.model.AdminUser
 import se.swahnchat.core.model.AuditEvent
 import se.swahnchat.core.model.DeleteAccountRequest
 import se.swahnchat.core.model.Invitation
+import se.swahnchat.core.model.AdminConfirmRequest
 import se.swahnchat.core.model.PasswordResetCreated
 import se.swahnchat.core.model.PasswordResetRequest
 import se.swahnchat.core.model.AttachmentPurpose
@@ -503,10 +504,15 @@ class SwahnChatEngine(
     /** `409 last_admin` ([ApiException.Conflict]) when it would leave no active administrator. */
     suspend fun setUserAdmin(userId: String, admin: Boolean): AdminUser = ctx.api.setUserAdmin(userId, admin)
 
-    /** The code is returned once and never stored by the engine. */
-    suspend fun issuePasswordReset(userId: String): PasswordResetCreated = ctx.api.issuePasswordReset(userId)
+    /**
+     * The code is returned once and never stored by the engine. [adminPassword] is the calling administrator's own
+     * password ([ApiException.Forbidden] when wrong); it is sent once and not kept.
+     */
+    suspend fun issuePasswordReset(userId: String, adminPassword: String): PasswordResetCreated =
+        ctx.api.issuePasswordReset(userId, AdminConfirmRequest(adminPassword))
     suspend fun revokeUserDevice(userId: String, deviceId: String) = ctx.api.revokeUserDevice(userId, deviceId)
-    suspend fun removeUser(userId: String) = ctx.api.deleteUser(userId)
+    /** [adminPassword]: the calling administrator's own password, as for [issuePasswordReset]. */
+    suspend fun removeUser(userId: String, adminPassword: String) = ctx.api.deleteUser(userId, AdminConfirmRequest(adminPassword))
     suspend fun invitations(): List<Invitation> = ctx.api.listInvitations()
     suspend fun revokeInvitation(id: String) = ctx.api.deleteInvitation(id)
     suspend fun adminStats(): AdminStats = ctx.api.adminStats()
