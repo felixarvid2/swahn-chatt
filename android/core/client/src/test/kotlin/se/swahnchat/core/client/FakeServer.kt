@@ -115,6 +115,9 @@ class FakeServer {
     @Volatile var loseSendResponses = 0 // next N sends are stored, then the response is "lost"
     @Volatile var failAcks = 0
     @Volatile var onAck: ((deviceId: String, cursor: Long) -> Unit)? = null
+
+    /** Runs after a message is stored and before the sender gets the response (to let receipts overtake the response). */
+    @Volatile var beforeSendResponse: (suspend () -> Unit)? = null
     @Volatile var corruptAttachments = false
     @Volatile var alwaysMismatch = false
     @Volatile var patchFails = 0
@@ -326,11 +329,17 @@ class FakeServer {
         override suspend fun createInvitation(request: CreateInvitationRequest) = CreatedInvitation(UUID.randomUUID().toString(), "CODE", null)
         override suspend fun listInvitations() = emptyList<Invitation>()
         override suspend fun deleteInvitation(id: String) = Unit
-        override suspend fun deleteUser(userId: String) = synchronized(lock) {
+        override suspend fun deleteUser(userId: String, request: AdminConfirmRequest) = synchronized(lock) {
+            confirmAdmin(request)
             val u = users[userId] ?: throw ApiException.NotFound("not_found", "no such user")
             if (userId == me.userId) throw ApiException.Conflict("cannot_remove_self", "yourself")
             removeAccount(u)
             addAudit("user_removed", me.userId, userId)
+        }
+
+        /** The calling administrator's own password, as the server asks for it. */
+        private fun confirmAdmin(request: AdminConfirmRequest) {
+            if (users.getValue(me.userId).password != request.password) throw ApiException.Forbidden("invalid_credentials", "wrong password")
         }
 
         private fun requireAdmin() {
@@ -364,8 +373,10 @@ class FakeServer {
             adminUserDto(u)
         }
 
-        override suspend fun issuePasswordReset(userId: String): PasswordResetCreated = synchronized(lock) {
+        override suspend fun issuePasswordReset(userId: String, request: AdminConfirmRequest): PasswordResetCreated = synchronized(lock) {
             requireAdmin()
+            confirmAdmin(request)
+            if (userId == me.userId) throw ApiException.Conflict("conflict", "not for yourself")
             val u = users[userId]?.takeIf { !it.removed } ?: throw ApiException.NotFound("not_found", "no such user")
             resetCodes.entries.removeAll { it.value == userId } // a new code cancels the older ones
             val code = "RESET-" + UUID.randomUUID().toString().take(8).uppercase()
@@ -584,6 +595,7 @@ class FakeServer {
         override suspend fun sendMessage(request: SendMessageRequest): SendMessageResponse {
             if (failSends > 0) { failSends--; throw IOException("simulated network failure") }
             val response = synchronized(lock) { doSend(request) }
+            beforeSendResponse?.invoke()
             if (loseSendResponses > 0) { loseSendResponses--; throw IOException("simulated lost response") }
             return response
         }

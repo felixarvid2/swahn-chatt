@@ -599,12 +599,21 @@ internal class SendPipeline(private val ctx: EngineContext, private val director
     private suspend fun markSent(entry: OutboxEntry, seq: Long, serverTs: Long) {
         ctx.store.transaction {
             if (entry.kind == MessageKind.MESSAGE) {
+                val conversation = ctx.store.getConversation(entry.conversationId)
+                val me = ctx.requireAccount().userId
+                val others = conversation?.members?.map { it.userId }?.filter { it != me }.orEmpty()
                 ctx.store.updateMessage(entry.messageId) {
-                    // Receipts may already have advanced the status; never move it backwards.
-                    val status = if (it.status == MessageStatus.DELIVERED || it.status == MessageStatus.READ) it.status else MessageStatus.SENT
+                    // Receipts can arrive before the send response (they were recorded while the message was still pending):
+                    // count them now, and never move the status backwards.
+                    val fromReceipts = receiptStatus(it, others)
+                    val status = if (it.status == MessageStatus.DELIVERED || it.status == MessageStatus.READ) {
+                        maxOf(it.status, fromReceipts)
+                    } else {
+                        fromReceipts
+                    }
                     it.copy(status = status, seq = seq, serverTs = serverTs, failureReason = null)
                 }
-                ctx.store.getConversation(entry.conversationId)?.let { c ->
+                conversation?.let { c ->
                     if (seq > (c.lastMessageSeq ?: 0)) {
                         ctx.store.upsertConversation(c.copy(lastMessageSeq = seq, lastMessageAt = serverTs))
                     }

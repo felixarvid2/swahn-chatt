@@ -90,3 +90,18 @@ fun forgedMessage(
 /** The bundle the server would give [asDevice] for [target]'s device (consumes a one-time key). */
 suspend fun FakeServer.bundleFor(asDevice: String, target: TestClient) =
     connect(asDevice).api.getKeys(target.userId(), target.deviceIdOnServer()).devices.single()
+
+/**
+ * Runs [block] and, when the real server answers 429, waits as long as it asks and tries again (at most [attempts] times).
+ * The e2e suites sign many accounts up from one address faster than a family would; the limit itself stays on.
+ */
+suspend fun <T> honouringRateLimit(attempts: Int = 4, block: suspend () -> T): T {
+    repeat(attempts - 1) {
+        try {
+            return block()
+        } catch (e: se.swahnchat.core.network.ApiException.RateLimited) {
+            kotlinx.coroutines.delay(((e.retryAfterSeconds ?: 5L).coerceIn(1L, 60L)) * 1000L)
+        }
+    }
+    return block()
+}

@@ -8,6 +8,7 @@ import android.os.Bundle
 import androidx.core.app.RemoteInput
 import androidx.core.app.NotificationCompat
 import androidx.test.core.app.ApplicationProvider
+import se.swahnchat.app.R
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.runBlocking
@@ -513,5 +514,55 @@ class NotifierTest {
         assertEquals(setOf("c1", "c2"), shortcuts.knownIds())
         shortcuts.remove("c1")
         assertEquals(setOf("c2"), shortcuts.knownIds())
+    }
+
+    // --- shortcuts the user pinned to the launcher -------------------------------------------------------------------------------
+
+    private fun pin(id: String, name: String) {
+        val info = android.content.pm.ShortcutInfo.Builder(context, id).setShortLabel(name).setLongLabel(name)
+            .setIntent(Intent(Intent.ACTION_VIEW)).build()
+        assertTrue(context.getSystemService(android.content.pm.ShortcutManager::class.java).requestPinShortcut(info, null))
+    }
+
+    /** All pinned shortcuts, disabled ones too (the compat flag filter cannot tell a pinned shortcut that was updated). */
+    private fun pinned() = context.getSystemService(android.content.pm.ShortcutManager::class.java).pinnedShortcuts
+
+    @Test fun `pinned shortcuts count as known ones`() {
+        pin("p1", "Bertil")
+        assertEquals(setOf("p1"), shortcuts.knownIds())
+    }
+
+    private fun assertNeutral(id: String) {
+        val shortcut = pinned().single { it.id == id }
+        assertEquals(context.getString(R.string.shortcut_disabled), shortcut.shortLabel.toString())
+        assertEquals(context.getString(R.string.shortcut_disabled), shortcut.longLabel.toString())
+    }
+
+    @Test fun `removing everything leaves the pinned shortcuts without the chat name`() {
+        shortcuts.publish(listOf(ConversationShortcuts.Chat("c1", "Bertil")), existing = setOf("c1"))
+        pin("c1", "Bertil")
+        shortcuts.removeAll()
+        assertNeutral("c1")
+    }
+
+    @Test fun `a removed chat neutralises its pinned shortcut only`() {
+        pin("c1", "Bertil"); pin("c2", "Cecilia")
+        shortcuts.remove("c1")
+        assertNeutral("c1")
+        assertEquals("Cecilia", pinned().single { it.id == "c2" }.shortLabel.toString())
+    }
+
+    @Test fun `publishing with hidden names leaves no pinned name behind`() = runBlocking<Unit> {
+        pin("c1", "Bertil")
+        prefs.setNotificationPrivacy(NotificationPrivacy.HIDDEN)
+        shortcuts.publish(listOf(ConversationShortcuts.Chat("c1", "Bertil")), existing = setOf("c1"))
+        assertNeutral("c1")
+        assertFalse(shortcuts.ensure("c1", "Bertil"))
+    }
+
+    @Test fun `a pinned shortcut of a chat that is gone is neutralised when the list is published`() {
+        pin("gone", "Bertil")
+        shortcuts.publish(listOf(ConversationShortcuts.Chat("c1", "Cecilia")), existing = setOf("c1"))
+        assertNeutral("gone")
     }
 }

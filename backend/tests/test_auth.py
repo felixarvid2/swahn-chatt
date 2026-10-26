@@ -80,7 +80,7 @@ def test_redeem_validation(factory, client):
 def test_admin_only_invitation_creation(factory, alice, admin, client):
     assert alice.post("/admin/invitations", {}).status_code == 403
     assert alice.get("/admin/invitations").status_code == 403
-    assert alice.delete(f"/admin/users/{admin.id}").status_code == 403
+    assert alice.delete(f"/admin/users/{admin.id}", json={"password": alice.password}).status_code == 403
     assert client.post("/api/v1/admin/invitations", json={}).status_code == 401
     r = admin.post("/admin/invitations", {"note": "for grandma", "expires_in_hours": 24, "is_admin": True})
     assert r.status_code == 201
@@ -252,7 +252,7 @@ def test_client_ip_resolution():
 def test_admin_removes_user_sessions_die_immediately(factory, admin, alice, bob, client):
     conv = factory.group(alice, [bob])
     assert bob.get("/users/me").status_code == 200
-    assert admin.delete(f"/admin/users/{bob.id}").status_code == 204
+    assert admin.delete(f"/admin/users/{bob.id}", json={"password": admin.password}).status_code == 204
     assert bob.get("/users/me").status_code == 401
     assert client.post("/api/v1/auth/refresh", json={"refresh_token": bob.refresh}).status_code == 401
     assert (
@@ -266,8 +266,8 @@ def test_admin_removes_user_sessions_die_immediately(factory, admin, alice, bob,
     c = alice.get(f"/conversations/{conv}").json()
     assert [m["user_id"] for m in c["members"]] == [alice.id]
     assert any(e["type"] == "user_removed" and e["data"]["user_id"] == bob.id for e in alice.events())
-    assert admin.delete(f"/admin/users/{bob.id}").status_code == 404
-    assert admin.delete(f"/admin/users/{admin.id}").status_code == 409
+    assert admin.delete(f"/admin/users/{bob.id}", json={"password": admin.password}).status_code == 404
+    assert admin.delete(f"/admin/users/{admin.id}", json={"password": admin.password}).status_code == 409
 
 
 def test_change_password_revokes_other_sessions(factory, alice, client):

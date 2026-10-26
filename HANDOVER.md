@@ -96,8 +96,7 @@ the list, opens a chat and sends a message), run `generateBaselineProfile` on an
   user avatars are not E2EE.
 - A new device cannot read older messages, because there is no history transfer. A passphrase-protected local
   history export/import is the next feature to build.
-- Safety numbers are per device and manual. There is no QR scanning UI yet; the scannable bytes are computed but
-  not rendered.
+- Safety numbers are per device and manual.
 - Rate limits (including per-username login lockout) live in process memory and reset on restart. Anyone who
   knows a username can block new logins to it for up to an hour.
 - The first device list per user is an unverified baseline; compare safety numbers to rule out a server that

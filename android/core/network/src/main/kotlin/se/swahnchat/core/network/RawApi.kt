@@ -20,12 +20,12 @@ internal interface RawApi {
     @POST("admin/invitations") suspend fun createInvitation(@Body r: CreateInvitationRequest): CreatedInvitation
     @GET("admin/invitations") suspend fun listInvitations(): List<Invitation>
     @DELETE("admin/invitations/{id}") suspend fun deleteInvitation(@Path("id") id: String)
-    @DELETE("admin/users/{id}") suspend fun deleteUser(@Path("id") id: String)
+    @HTTP(method = "DELETE", path = "admin/users/{id}", hasBody = true) suspend fun deleteUser(@Path("id") id: String, @Body r: AdminConfirmRequest)
     @GET("admin/users") suspend fun adminUsers(): List<AdminUser>
     @POST("admin/users/{id}/suspend") suspend fun suspendUser(@Path("id") id: String)
     @POST("admin/users/{id}/unsuspend") suspend fun unsuspendUser(@Path("id") id: String)
     @PATCH("admin/users/{id}") suspend fun setAdmin(@Path("id") id: String, @Body r: SetAdminRequest): AdminUser
-    @POST("admin/users/{id}/password-reset") suspend fun issuePasswordReset(@Path("id") id: String): PasswordResetCreated
+    @POST("admin/users/{id}/password-reset") suspend fun issuePasswordReset(@Path("id") id: String, @Body r: AdminConfirmRequest): PasswordResetCreated
     @DELETE("admin/users/{id}/devices/{deviceId}") suspend fun revokeUserDevice(@Path("id") id: String, @Path("deviceId") deviceId: String)
     @GET("admin/stats") suspend fun adminStats(): AdminStats
     @GET("admin/audit") suspend fun adminAudit(@Query("before_id") beforeId: Long?, @Query("limit") limit: Int): List<AuditEvent>

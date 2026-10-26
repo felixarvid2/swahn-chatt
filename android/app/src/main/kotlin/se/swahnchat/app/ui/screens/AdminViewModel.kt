@@ -160,11 +160,12 @@ class AdminViewModel @Inject constructor(private val engine: SwahnChatEngine) : 
     /** `409 last_admin` shows as [UiError.LAST_ADMIN]. */
     fun setAdmin(userId: String, admin: Boolean) = act { engine.setUserAdmin(userId, admin) }
     fun revokeDevice(userId: String, deviceId: String) = act { engine.revokeUserDevice(userId, deviceId) }
-    fun removeUser(userId: String) = act { engine.removeUser(userId) }
+    /** [adminPassword] is the administrator's own password, sent once and not kept. */
+    fun removeUser(userId: String, adminPassword: String) = act { engine.removeUser(userId, adminPassword) }
 
     /** Asks the server for a reset code and keeps it for the dialog only. */
-    fun createResetCode(user: AdminUser) = act(after = {}) {
-        val created = engine.issuePasswordReset(user.id)
+    fun createResetCode(user: AdminUser, adminPassword: String) = act(after = {}) {
+        val created = engine.issuePasswordReset(user.id, adminPassword)
         _state.update { it.copy(resetCode = ResetCodeUi(user.displayName, created.code, created.expiresAt)) }
     }
 

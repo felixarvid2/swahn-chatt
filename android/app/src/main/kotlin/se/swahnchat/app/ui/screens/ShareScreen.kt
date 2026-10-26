@@ -148,6 +148,13 @@ class ShareViewModel @Inject constructor(
     }
 }
 
+/**
+ * The chat to mark in the picker for [target] (the `EXTRA_SHORTCUT_ID` of the intent): only one of this account's own
+ * conversations. The extra comes from outside, and any app can send it, so it never opens a chat by itself.
+ */
+internal fun shareHighlight(target: String?, items: List<ConversationItemUi>?): String? =
+    target?.takeIf { id -> items?.any { it.id == id } == true }
+
 /** The share picker: what is being shared, then the conversations (recent first, searchable). */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -156,6 +163,8 @@ fun ShareScreen(
     items: List<ConversationItemUi>?,
     onChoose: (String) -> Unit,
     onClose: () -> Unit,
+    /** The chat the share sheet's direct-share target named: only marked in the list, never chosen on its own. */
+    highlighted: String? = null,
 ) {
     var query by rememberSaveable { mutableStateOf("") }
     Scaffold(
@@ -185,7 +194,8 @@ fun ShareScreen(
                     if (items == null) {
                         Box(Modifier.fillMaxSize()) { CircularProgressIndicator(Modifier.align(Alignment.Center)) }
                     } else {
-                        ConversationPicker(items, selected = emptySet(), query = query, multiple = false, onQuery = { query = it }, onToggle = onChoose)
+                        ConversationPicker(items, selected = emptySet(), query = query, multiple = false, onQuery = { query = it }, onToggle = onChoose,
+                            highlighted = shareHighlight(highlighted, items))
                     }
                 }
             }

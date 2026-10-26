@@ -47,12 +47,12 @@ internal class RetrofitSwahnChatApi(
     override suspend fun createInvitation(request: CreateInvitationRequest) = call { raw.createInvitation(request) }
     override suspend fun listInvitations() = call { raw.listInvitations() }
     override suspend fun deleteInvitation(id: String) = call { raw.deleteInvitation(id) }
-    override suspend fun deleteUser(userId: String) = call { raw.deleteUser(userId) }
+    override suspend fun deleteUser(userId: String, request: AdminConfirmRequest) = call { raw.deleteUser(userId, request) }
     override suspend fun adminUsers() = call { raw.adminUsers() }
     override suspend fun suspendUser(userId: String) = call { raw.suspendUser(userId) }
     override suspend fun unsuspendUser(userId: String) = call { raw.unsuspendUser(userId) }
     override suspend fun setUserAdmin(userId: String, admin: Boolean) = call { raw.setAdmin(userId, SetAdminRequest(admin)) }
-    override suspend fun issuePasswordReset(userId: String) = call { raw.issuePasswordReset(userId) }
+    override suspend fun issuePasswordReset(userId: String, request: AdminConfirmRequest) = call { raw.issuePasswordReset(userId, request) }
     override suspend fun revokeUserDevice(userId: String, deviceId: String) = call { raw.revokeUserDevice(userId, deviceId) }
     override suspend fun adminStats() = call { raw.adminStats() }
     override suspend fun adminAudit(beforeId: Long?, limit: Int) = call { raw.adminAudit(beforeId, limit) }

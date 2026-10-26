@@ -14,7 +14,7 @@ HOUR = 3_600_000
 
 
 def issue(admin, user) -> dict:
-    r = admin.post(f"/admin/users/{user.id}/password-reset")
+    r = admin.post(f"/admin/users/{user.id}/password-reset", {"password": admin.password})
     assert r.status_code == 201, r.text
     return r.json()
 
@@ -42,10 +42,15 @@ def test_issue_returns_code_and_24h_expiry(admin, alice, app):
 
 
 def test_only_admins_may_issue_and_unknown_or_removed_users_are_404(admin, alice, bob, factory):
-    assert alice.post(f"/admin/users/{bob.id}/password-reset").status_code == 403
-    assert admin.post("/admin/users/00000000-0000-4000-8000-000000000000/password-reset").status_code == 404
-    assert admin.delete(f"/admin/users/{bob.id}").status_code == 204
-    assert admin.post(f"/admin/users/{bob.id}/password-reset").status_code == 404
+    assert alice.post(f"/admin/users/{bob.id}/password-reset", {"password": alice.password}).status_code == 403
+    assert (
+        admin.post(
+            "/admin/users/00000000-0000-4000-8000-000000000000/password-reset", {"password": admin.password}
+        ).status_code
+        == 404
+    )
+    assert admin.delete(f"/admin/users/{bob.id}", json={"password": admin.password}).status_code == 204
+    assert admin.post(f"/admin/users/{bob.id}/password-reset", {"password": admin.password}).status_code == 404
 
 
 def test_reset_sets_the_password_and_returns_a_fresh_session(admin, alice, client):
@@ -106,7 +111,7 @@ def test_an_invitation_code_is_not_a_reset_code_and_vice_versa(admin, alice, cli
 
 def test_removed_account_cannot_be_reset(admin, alice, client):
     code = issue(admin, alice)["code"]
-    assert admin.delete(f"/admin/users/{alice.id}").status_code == 204
+    assert admin.delete(f"/admin/users/{alice.id}", json={"password": admin.password}).status_code == 204
     assert reset(client, code).status_code == 404
 
 
@@ -172,3 +177,64 @@ def test_audit_rows_exist_and_never_hold_the_code(admin, alice, client, app):
             blob = f"{ev.action} {ev.target_id} {ev.ip} {ev.details}"
             assert plain not in blob and squashed not in blob and NEW_PASSWORD not in blob
     assert plain not in str(rows) and NEW_PASSWORD not in str(rows)
+
+
+# ---------------------------------------------------------------- the administrator confirms with their own password
+def test_issue_needs_the_admins_own_password(admin, alice, app):
+    url = f"/admin/users/{alice.id}/password-reset"
+    assert admin.post(url, {"password": "not the password"}).status_code == 403
+    assert admin.post(url).status_code == 422  # no body at all
+    assert admin.post(url, {}).status_code == 422
+    with app.state.session_factory() as db:
+        assert db.scalars(select(PasswordReset)).all() == []  # nothing was issued
+        failed = db.scalars(select(AuditEvent).where(AuditEvent.action == "password_reset_denied")).all()
+        assert len(failed) == 1 and failed[0].actor_user_id == admin.id
+    assert admin.post(url, {"password": admin.password}).status_code == 201
+
+
+def test_issue_for_yourself_is_refused(admin):
+    r = admin.post(f"/admin/users/{admin.id}/password-reset", {"password": admin.password})
+    assert r.status_code == 409
+
+
+def test_remove_user_needs_the_admins_own_password(admin, bob):
+    url = f"/admin/users/{bob.id}"
+    r = admin.delete(url, json={"password": "not the password"})
+    assert r.status_code == 403 and r.json()["code"] == "invalid_credentials"
+    assert admin.delete(url).status_code == 422
+    assert bob.get("/users/me").status_code == 200  # still there
+    assert admin.delete(url, json={"password": admin.password}).status_code == 204
+
+
+def test_stolen_admin_session_cannot_take_over_the_account(admin, client, app):
+    """Regression: an administrator's session alone used to be enough to reset the admin's own password and then
+    delete the account with the attacker-chosen one."""
+    r = admin.post(f"/admin/users/{admin.id}/password-reset")
+    assert r.status_code == 422
+    r = admin.post(f"/admin/users/{admin.id}/password-reset", {"password": "guess"})
+    assert r.status_code == 403
+    r = admin.post(f"/admin/users/{admin.id}/password-reset", {"password": admin.password})
+    assert r.status_code == 409  # not even with the password: use the change-password route
+    with_pw = client.post(
+        "/api/v1/auth/password/reset",
+        json={"code": "AAAAA-AAAAA-AAAAA-AAAAA", "new_password": "x" * 12, "device_name": "x"},
+    )
+    assert with_pw.status_code == 404
+
+
+def test_redeem_rechecks_suspension_in_its_own_transaction(admin, alice, app):
+    """A suspension that lands between find_usable() and redeem() must still stop the redemption."""
+    from app.services import password_reset
+
+    code = issue(admin, alice)["code"]
+    with app.state.session_factory() as db:
+        reset_id, user_id = password_reset.find_usable(db, code)
+    assert admin.post(f"/admin/users/{alice.id}/suspend").status_code == 204
+    with app.state.session_factory() as db:
+        try:
+            password_reset.redeem(db, app.state.settings, reset_id, user_id, "x", "phone", "127.0.0.1")
+            raise AssertionError("redeem must refuse a suspended account")
+        except Exception as e:
+            assert getattr(e, "code", None) == "invalid_reset_code"
+        row = db.get(PasswordReset, reset_id)
+        assert row.used_at is None

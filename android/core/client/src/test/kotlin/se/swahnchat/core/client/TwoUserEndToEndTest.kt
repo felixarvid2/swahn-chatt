@@ -103,15 +103,15 @@ class TwoUserEndToEndTest {
             Assume.assumeTrue("SWAHNCHAT_TEST_URL / SWAHNCHAT_TEST_ADMIN_INVITE not set: skipping", url.isNotBlank() && adminInvite.isNotBlank())
             runBlocking {
                 admin = phone("admin")
-                admin.engine.redeemInvite(url, adminInvite, "admin_$run", "admin-password-1", "Admin")
+                honouringRateLimit { admin.engine.redeemInvite(url, adminInvite, "admin_$run", "admin-password-1", "Admin") }
                 // the admin hands out invitations through the API
                 fun codeFor(who: String): String = runBlocking { admin.engine.createInvitation(note = "e2e $who").code }
                 alice = phone("alice")
-                alice.engine.redeemInvite(url, codeFor("alice"), "alice_$run", "alice-password-1", "Alice")
+                honouringRateLimit { alice.engine.redeemInvite(url, codeFor("alice"), "alice_$run", "alice-password-1", "Alice") }
                 bob = phone("bob")
-                bob.engine.redeemInvite(url, codeFor("bob"), "bob_$run", "bob-password-1", "Bob")
+                honouringRateLimit { bob.engine.redeemInvite(url, codeFor("bob"), "bob_$run", "bob-password-1", "Bob") }
                 carol = phone("carol")
-                carol.engine.redeemInvite(url, codeFor("carol"), "carol_$run", "carol-password-1", "Carol")
+                honouringRateLimit { carol.engine.redeemInvite(url, codeFor("carol"), "carol_$run", "carol-password-1", "Carol") }
                 listOf(alice, bob, carol).forEach { it.engine.refreshDirectory() }
             }
         }
@@ -567,8 +567,10 @@ class TwoUserEndToEndTest {
     /** A new account made through an admin invitation, for the tests that end or change an account. */
     private suspend fun newPhone(label: String, password: String): Phone {
         val p = phone(label)
-        p.engine.redeemInvite(url, admin.engine.createInvitation(note = "e2e $label").code, "${label}_$run", password,
-            label.replaceFirstChar { it.uppercase() })
+        honouringRateLimit {
+            p.engine.redeemInvite(url, admin.engine.createInvitation(note = "e2e $label").code, "${label}_$run", password,
+                label.replaceFirstChar { it.uppercase() })
+        }
         return p
     }
 
@@ -576,7 +578,11 @@ class TwoUserEndToEndTest {
     fun anAdministratorsResetCodeSignsTheUserInOnANewDeviceAndEndsTheOldOnes() = runBlocking<Unit> {
         val dave = newPhone("dave", "dave-password-1")
         val oldDevice = dave.deviceId
-        val created = admin.engine.issuePasswordReset(dave.userId)
+        // the administrator's session alone is not enough: the server asks for their own password
+        assertFailsWith<ApiException.Forbidden> { admin.engine.issuePasswordReset(dave.userId, "not-the-password") }
+        assertFailsWith<ApiException.Forbidden> { admin.engine.removeUser(dave.userId, "not-the-password") }
+        assertFailsWith<ApiException.Conflict> { admin.engine.issuePasswordReset(admin.userId, "admin-password-1") }
+        val created = admin.engine.issuePasswordReset(dave.userId, "admin-password-1")
         assertTrue(created.code.isNotBlank() && created.expiresAt > System.currentTimeMillis())
 
         val daveNew = phone("dave2")
@@ -605,7 +611,7 @@ class TwoUserEndToEndTest {
     @Test
     fun aWeakPasswordOrAnUnknownCodeSignsNobodyIn() = runBlocking<Unit> {
         val erik = newPhone("erik", "erik-password-1")
-        val code = admin.engine.issuePasswordReset(erik.userId).code
+        val code = admin.engine.issuePasswordReset(erik.userId, "admin-password-1").code
         val other = phone("erik2")
         assertFailsWith<ApiException.Invalid> { other.engine.resetPassword(url, code, "short", "Phone") }
         assertNull(other.engine.account.value)
@@ -654,7 +660,7 @@ class TwoUserEndToEndTest {
         assertFailsWith<ApiException.Forbidden> { phone("frida2").engine.login(url, "frida_$run", "frida-password-1") }
         admin.engine.unsuspendUser(frida.userId)
         phone("frida3").engine.login(url, "frida_$run", "frida-password-1")
-        admin.engine.issuePasswordReset(frida.userId)
+        admin.engine.issuePasswordReset(frida.userId, "admin-password-1")
         admin.engine.revokeUserDevice(frida.userId, frida.deviceId)
         assertFailsWith<ApiException> { frida.engine.myDevices() }
 

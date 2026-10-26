@@ -148,7 +148,7 @@ fun LoginContent(state: LoginUiState, callbacks: LoginCallbacks, modifier: Modif
             }
 
             if (state.mode == AuthMode.REDEEM) {
-                Field(state.code, callbacks.onCode, R.string.invitation_code, KeyboardType.Ascii, error = FieldError.CODE in state.fieldErrors,
+                Field(state.code, callbacks.onCode, R.string.invitation_code, KeyboardType.Password, error = FieldError.CODE in state.fieldErrors,
                     errorRes = R.string.field_error_required, capitalization = KeyboardCapitalization.None)
                 Field(state.displayName, callbacks.onDisplayName, R.string.display_name, KeyboardType.Text,
                     error = FieldError.DISPLAY_NAME in state.fieldErrors, errorRes = R.string.field_error_display_name,

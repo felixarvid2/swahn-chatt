@@ -932,6 +932,9 @@
     <string name="admin_remove_title">Remove %1$s?</string>
     <string name="admin_remove_text">The account is closed, all devices and sessions are removed and the user leaves all chats. This cannot be undone.</string>
     <string name="admin_remove_type">Type the username %1$s to confirm.</string>
+    <string name="shortcut_disabled">This chat is no longer available</string>
+    <string name="admin_your_password">Your password</string>
+    <string name="admin_confirm_password">Confirm with your own password. A signed-in session alone is not enough.</string>
     <string name="admin_revoke_device_title">Remove %1$s of %2$s?</string>
     <string name="admin_revoke_device_text">The device is signed out at once and its keys and queued messages are deleted. Use it if the phone is lost.</string>
     <string name="admin_push_none">Push: no address registered</string>

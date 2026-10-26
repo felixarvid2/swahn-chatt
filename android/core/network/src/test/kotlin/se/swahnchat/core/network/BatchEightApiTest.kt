@@ -124,9 +124,18 @@ class BatchEightApiTest {
         server.takeRequest()
 
         server.enqueue(reply(201, """{"code":"RESET-1","expires_at":123}"""))
-        val reset = a.issuePasswordReset("u1")
+        val reset = a.issuePasswordReset("u1", AdminConfirmRequest("admin-pw"))
         assertEquals("RESET-1", reset.code)
-        assertEquals("POST /api/v1/admin/users/u1/password-reset", server.takeRequest().let { "${it.method} ${it.path}" })
+        server.takeRequest().let {
+            assertEquals("POST /api/v1/admin/users/u1/password-reset", "${it.method} ${it.path}")
+            assertEquals("""{"password":"admin-pw"}""", it.body.readUtf8())
+        }
+
+        server.enqueue(reply(204)); a.deleteUser("u1", AdminConfirmRequest("admin-pw"))
+        server.takeRequest().let {
+            assertEquals("DELETE /api/v1/admin/users/u1", "${it.method} ${it.path}")
+            assertEquals("""{"password":"admin-pw"}""", it.body.readUtf8())
+        }
 
         server.enqueue(reply(204)); a.revokeUserDevice("u1", "d1")
         assertEquals("DELETE /api/v1/admin/users/u1/devices/d1", server.takeRequest().let { "${it.method} ${it.path}" })

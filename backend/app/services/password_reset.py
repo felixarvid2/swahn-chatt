@@ -77,7 +77,7 @@ def redeem(
         db.rollback()
         raise invalid_code()
     user = db.get(User, user_id)
-    if user is None or user.disabled_at is not None:
+    if user is None or user.disabled_at is not None or user.suspended_at is not None:
         db.rollback()
         raise invalid_code()
     user.password_hash = password_hash
