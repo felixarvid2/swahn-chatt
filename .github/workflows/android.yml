@@ -174,7 +174,7 @@ jobs:
       - name: Build, unit tests, lint
         run: ./gradlew build --stacktrace
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
