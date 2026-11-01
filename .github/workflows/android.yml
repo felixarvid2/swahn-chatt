@@ -38,7 +38,7 @@ jobs:
         with:
           packages: "platform-tools platforms;android-37.0 build-tools;36.0.0"
 
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
 
       - name: Make gradlew executable
         run: chmod +x gradlew
@@ -87,7 +87,7 @@ jobs:
         with:
           packages: "platform-tools platforms;android-37.0 build-tools;36.0.0 ndk;27.0.12077973"
 
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
 
       - name: Make gradlew executable
         run: chmod +x gradlew
@@ -166,7 +166,7 @@ jobs:
         with:
           packages: "platform-tools platforms;android-37.0 build-tools;36.0.0 ndk;27.0.12077973"
 
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
 
       - name: Make gradlew executable
         run: chmod +x gradlew scripts/run-e2e.sh
