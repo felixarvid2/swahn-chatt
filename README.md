@@ -1,84 +1,99 @@
-# Swahn Chat
+<h1 align="center">Swahn Chat</h1>
 
-> Formerly FamilyChat; renamed to Swahn Chat in v0.5.0.
+<p align="center">
+  <strong>A private messenger for the people you trust.</strong><br>
+  Self-hosted, end-to-end encrypted and built for a family – not for advertisers.
+</p>
 
-A private, self-hosted messenger for a family (5–15 people). The server is a Raspberry Pi; the client is an Android
-app. Messages, edits and attachments are **end-to-end encrypted on the phones with the Signal protocol (libsignal)**.
-The Pi stores accounts, public keys, metadata and ciphertext. It cannot read message contents.
+<p align="center">
+  <a href="https://github.com/felixarvid2/swahn-chatt/releases/latest"><img src="https://img.shields.io/github/v/release/felixarvid2/swahn-chatt?label=release&color=orange" alt="Latest release"></a>
+  <img src="https://img.shields.io/badge/platform-Android-3ddc84" alt="Android">
+  <img src="https://img.shields.io/badge/license-AGPL--3.0-7048e8" alt="AGPL-3.0">
+</p>
 
-Status: **feature complete, not yet production-ready.** Every automated test passes, but nothing has been tested on
-a real phone or on a Raspberry Pi yet. See [HANDOVER.md](HANDOVER.md) for exactly what is verified and what is not.
+Swahn Chat is a private messenger for a family or other small group (about 5–15 people). The server runs on a Raspberry Pi and the app runs on Android. Messages, edits and attachments are encrypted on the phones, so the server only stores accounts, public keys, metadata and ciphertext – never the content itself.
 
-```
-swahn-chatt/
-├── android/      Kotlin app: :app (Compose UI) + :core:{model,network,crypto,client}
-├── backend/      FastAPI server, Alembic migrations, pytest suite, Dockerfile
-├── deployment/   docker-compose.yml (+ Caddy and ntfy profiles), .env.example, backup/restore scripts
-└── docs/         ARCHITECTURE, API, SECURITY, ANDROID_SETUP, RASPBERRY_PI_SETUP, ANVANDARGUIDE, DRIFTHANDBOK (Swedish)
-```
+The project was formerly called FamilyChat and was renamed to Swahn Chat in v0.5.0.
 
-## How it fits together
+| Conversations | Group chat |
+|---|---|
+| <img src="android/app/screenshots/1_conversations_dark.png" width="300" alt="Conversation list in dark theme"> | <img src="android/app/screenshots/2_conversation_group_light.png" width="300" alt="Group conversation in light theme"> |
 
-- The phone encrypts every message separately for each device of each member (libsignal PQXDH + Double Ratchet)
-  and posts the ciphertexts to `POST /api/v1/messages`.
-- The server checks membership and the device set, stores the envelopes and writes one event per recipient
-  device into that device's queue.
-- Phones pull their queue with `GET /api/v1/sync` and acknowledge it, so delivery survives restarts and long
-  offline periods. A WebSocket (app open) or UnifiedPush/ntfy (app closed) only says "sync now". Pushes carry
-  no content.
-- Attachments are encrypted on the phone (Tink streaming AES-GCM) before upload. Their keys travel inside the
-  encrypted message.
+## What you get
 
-Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/SECURITY.md](docs/SECURITY.md),
-[docs/API.md](docs/API.md) (the running server also serves OpenAPI at `/api/v1/openapi.json`).
+- One-to-one and group conversations, with edits and message info.
+- Encrypted attachments, including photos, audio and files.
+- Search, pins, mute and archive.
+- Safety numbers and a QR code for verifying contacts.
+- Offline delivery: messages are queued per device and survive restarts.
+- Push notifications that only say "sync now" – never the message content.
+- Invitation-only accounts, with no open signup.
+- Backups, restore scripts and a documented server setup.
 
-## Quick start (development)
+## Download
 
-```bash
-# Backend: Python 3.12
-cd backend
-python3.12 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
-scripts/dev-server.sh                      # migrations + server on http://0.0.0.0:8000
-SWAHNCHAT_ENV=development SWAHNCHAT_DATA_DIR=data-dev .venv/bin/python -m app.cli create-invite --admin
-SWAHNCHAT_ENV=development SWAHNCHAT_DATA_DIR=data-dev .venv/bin/python -m app.cli seed-dev   # alice, bob, carol
-.venv/bin/python -m pytest                 # backend tests
+Install the latest APK from [Releases](https://github.com/felixarvid2/swahn-chatt/releases/latest). You will need your family's server address and an invitation code from the administrator.
 
-# Android: JDK 17+, Android SDK 35 (+ NDK for stripped release builds)
-cd ../android
-./gradlew assembleDebug                    # app/build/outputs/apk/debug/app-debug.apk
-./gradlew build                            # all unit, Robolectric and screenshot tests + lint + release build
-./scripts/run-e2e.sh                       # starts a real backend; two users exchange E2EE messages
-```
+> **Status:** feature complete, but not yet production-tested on a real phone or Raspberry Pi. Every automated test passes, and [HANDOVER.md](HANDOVER.md) lists exactly what has been verified and what has not.
 
-`make help` lists shortcuts for all of this (`make dev`, `make test-backend`, `make lint`, `make e2e`, `make apk`, `make up`,
-`make backup`, `make invite`, ...). CI runs in `.github/workflows/*.yml`.
+## Run your own server
 
-A debug build may talk plain `http://` to a LAN or localhost address. It then shows a red "Osäker anslutning
-(endast utveckling)" banner. Release builds accept HTTPS only.
+<details>
+<summary>Raspberry Pi with Docker</summary>
 
-## Production on a Raspberry Pi
+The recommended setup is a Raspberry Pi running 64-bit Raspberry Pi OS. The full guide covers backups, upgrades, HTTPS and push notifications: [docs/RASPBERRY_PI_SETUP.md](docs/RASPBERRY_PI_SETUP.md).
 
 ```bash
 cd deployment
-cp .env.example .env        # set SWAHNCHAT_SECRET_KEY=$(openssl rand -base64 48)
+cp .env.example .env        # set SWAHNCHAT_SECRET_KEY to a long random value
 docker compose up -d --build
-docker compose exec backend python -m app.cli create-invite --admin   # first account
+docker compose exec backend python -m app.cli create-invite --admin
 ```
 
-On a fresh Raspberry Pi OS 64-bit, `deployment/install-pi.sh` does these steps interactively (checks, `.env` with a generated
-secret, build, start, first admin invitation).
+Reach the server through Tailscale or Caddy. Do not expose port 8000 directly.
 
-Reach the server through Tailscale (`tailscale serve`, or the `tailscale` compose profile; recommended) or Caddy with a public domain. Never expose
-port 8000 directly. The full guide, including backups, upgrades and push, is in
-[docs/RASPBERRY_PI_SETUP.md](docs/RASPBERRY_PI_SETUP.md).
+</details>
 
-## Family accounts
+## Privacy in plain words
 
-There is no open signup. An admin creates single-use invitation codes, either in the app (Inställningar → Skapa inbjudan)
-or with `docker compose exec backend python -m app.cli create-invite`. The family member installs the APK,
-enters the server address and redeems the code with their own username and password. See
-[docs/ANDROID_SETUP.md](docs/ANDROID_SETUP.md).
+- **Keys stay on the phones.** Each device has its own Signal-protocol keys.
+- **The server stores ciphertext.** It can route messages, but it cannot read them.
+- **Pushes carry no content.** A notification only tells the app to fetch new messages.
+- **No open signup.** An administrator creates single-use invitation codes.
+
+The security model, threat model and limitations are described in [docs/SECURITY.md](docs/SECURITY.md).
+
+## Documentation
+
+- [User guide](docs/ANVANDARGUIDE.md) (Swedish)
+- [Android setup](docs/ANDROID_SETUP.md)
+- [Server setup on Raspberry Pi](docs/RASPBERRY_PI_SETUP.md)
+- [Operations handbook](docs/DRIFTHANDBOK.md) (Swedish)
+- [Architecture](docs/ARCHITECTURE.md), [API](docs/API.md) and [security](docs/SECURITY.md)
+
+## Development
+
+<details>
+<summary>Build the backend and app</summary>
+
+Backend: Python 3.12. Android: JDK 17+ and Android SDK 35.
+
+```bash
+# Backend
+cd backend
+python3.12 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
+scripts/dev-server.sh
+.venv/bin/python -m pytest
+
+# Android
+cd ../android
+./gradlew assembleDebug
+```
+
+`make help` lists the common shortcuts, and CI runs the full test suite.
+
+</details>
 
 ## License
 
-AGPL-3.0, because libsignal is AGPL-3.0 (see [docs/SECURITY.md](docs/SECURITY.md)).
+Swahn Chat is licensed under AGPL-3.0, because libsignal is AGPL-3.0. See [docs/SECURITY.md](docs/SECURITY.md) for details.
