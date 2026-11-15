@@ -2,7 +2,7 @@
 # Swahn Chat backend. Multi-arch (linux/amd64, linux/arm64): every dependency ships a manylinux wheel,
 # so no compiler is needed and none ends up in the final image.
 
-FROM python:3.12-slim AS builder
+FROM python:3.15-slim AS builder
 ENV PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 RUN python -m venv /opt/venv
 COPY requirements.txt /tmp/requirements.txt
@@ -11,7 +11,7 @@ RUN --mount=type=secret,id=ca,required=false \
     if [ -s /run/secrets/ca ]; then export PIP_CERT=/run/secrets/ca; fi; \
     /opt/venv/bin/pip install --only-binary=:all: -r /tmp/requirements.txt
 
-FROM python:3.12-slim
+FROM python:3.15-slim
 ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
