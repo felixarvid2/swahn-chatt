@@ -43,7 +43,7 @@ services:
 
   caddy:
     profiles: ["caddy"]
-    image: caddy:2.11.7   # pinned; bump deliberately (check the release notes), then `docker compose pull`
+    image: caddy:2.11.9   # pinned; bump deliberately (check the release notes), then `docker compose pull`
     restart: unless-stopped
     depends_on:
       backend:
@@ -74,7 +74,7 @@ services:
 
   ntfy:
     profiles: ["ntfy"]
-    image: binwiederhier/ntfy:v2.33.1   # pinned; bump deliberately, then `docker compose pull`
+    image: binwiederhier/ntfy:v2.38.1   # pinned; bump deliberately, then `docker compose pull`
     command: ["serve"]
     restart: unless-stopped
     environment:
@@ -110,7 +110,7 @@ services:
   # `tailscale serve` on the host for the same ports.
   tailscale:
     profiles: ["tailscale"]
-    image: tailscale/tailscale:v1.104.2   # pinned; bump deliberately, then `docker compose pull`
+    image: tailscale/tailscale:v1.104.7   # pinned; bump deliberately, then `docker compose pull`
     hostname: ${TS_HOSTNAME:-swahnchat}
     restart: unless-stopped
     depends_on:
@@ -140,7 +140,7 @@ services:
   # network_mode: host; open them in the host firewall or router only for a public setup.
   turn:
     profiles: ["turn"]
-    image: coturn/coturn:4.18.0   # pinned; bump deliberately (release notes), then `docker compose pull`
+    image: coturn/coturn:4.19.1   # pinned; bump deliberately (release notes), then `docker compose pull`
     network_mode: host
     restart: unless-stopped
     entrypoint: ["/bin/bash", "/etc/coturn/turn-start.sh"]
